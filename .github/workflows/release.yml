@@ -82,8 +82,6 @@ jobs:
 
   deploy:
     name: 🚀 Build and push
-    permissions:
-      packages: write
     needs: [release]
     runs-on: ubuntu-latest
     steps:
@@ -95,7 +93,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/falcondev-it/github-actions-cache-server
+          images: ghcr.io/falcondev-it/github-actions-cache-server/github-actions-cache-server
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
