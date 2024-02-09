@@ -12,7 +12,7 @@ concurrency:
 jobs:
   lint:
     name: 💅 Lint
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: pnpm install
         uses: falcondev-it/.github/actions/pnpm-install@master
@@ -29,7 +29,7 @@ jobs:
 
   type-check:
     name: 🛃 Type Check
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: pnpm install
         uses: falcondev-it/.github/actions/pnpm-install@master

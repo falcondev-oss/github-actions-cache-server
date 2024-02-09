@@ -1,0 +1,116 @@
+name: 🔖 Release
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Bump version
+        type: choice
+        required: true
+        options: [⚙️ patch (v1.0.1), 🧩 minor (v1.1.0), ⭐️ major (v2.0.0)]
+  push:
+    tags:
+      - 'v*'
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Bump {0}', startsWith(inputs.version, '⚙️') && 'patch ⚙️' || startsWith(inputs.version, '🧩') && 'minor 🧩' || 'major ⭐️') || github.ref_name }}
+
+env:
+  ⚙️ patch (v1.0.1): patch
+  🧩 minor (v1.1.0): minor
+  ⭐️ major (v2.0.0): major
+
+jobs:
+  release:
+    name: 🔖 Release
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      RELEASE_REF: ${{ steps.bump-version.outputs.RELEASE_REF }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: 🛤️ Version tag must be on dev branch
+        if: github.event_name == 'push'
+        run: git branch --contains ${{ github.ref }} | grep dev
+
+      - name: ⬆️ Bump version
+        if: github.event_name == 'workflow_dispatch'
+        id: bump-version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          npx bumpp ${{ env[inputs.version] }} -y -r --commit "chore(release): v%s"
+
+          echo "RELEASE_REF=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 📥 Create release PR
+        id: create-release-pr
+        run: |
+          TAG_NAME=$(git describe --tags --abbrev=0)
+          RELEASE_BRANCH="release/$TAG_NAME"
+          echo "RELEASE_BRANCH=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+
+          git branch $RELEASE_BRANCH dev
+          git push origin $RELEASE_BRANCH
+
+          gh pr create --title "$TAG_NAME" \
+            --base master --head $RELEASE_BRANCH \
+            --body "Automated pull request for tag $TAG_NAME"
+
+      - name: 📢 Release
+        run: |
+          TAG=$(git describe --tags --abbrev=0)
+          RELEASE_BRANCH=${{ steps.create-release-pr.outputs.RELEASE_BRANCH }}
+          PR_NUMBER=$(gh pr view $RELEASE_BRANCH --json number --template "{{.number}}")
+
+          gh pr merge $RELEASE_BRANCH --merge -t "$TAG (#$PR_NUMBER)" --body "" --delete-branch
+
+          npx changelogithub
+
+  deploy:
+    name: 🚀 Build and push
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/falcondev-it/github-actions-cache-server
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            latest
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
