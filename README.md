@@ -13,13 +13,13 @@ This repository contains the code for a self-hosted GitHub Actions cache server 
 ### 🐳 Using Docker
 
 ```yaml
-version: "3.9"
+version: '3.9'
 
 services:
   cache-server:
     image: ghcr.io/falcondev-it/github-actions-cache-server:latest
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       ACTIONS_RUNTIME_TOKEN: long_random_token
       BASE_URL: http://localhost:3000
@@ -37,7 +37,7 @@ services:
   minio:
     image: quay.io/minio/minio
     ports:
-      - "9000:9000"
+      - '9000:9000'
     environment:
       MINIO_ROOT_USER: access_key
       MINIO_ROOT_PASSWORD: secret_key
