@@ -12,9 +12,6 @@ on:
         type: choice
         required: true
         options: [⚙️ patch (v1.0.1), 🧩 minor (v1.1.0), ⭐️ major (v2.0.0)]
-  push:
-    tags:
-      - 'v*'
 
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('Bump {0}', startsWith(inputs.version, '⚙️') && 'patch ⚙️' || startsWith(inputs.version, '🧩') && 'minor 🧩' || 'major ⭐️') || github.ref_name }}
 
@@ -31,6 +28,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     outputs:
       RELEASE_REF: ${{ steps.bump-version.outputs.RELEASE_REF }}
+      RELEASE_TAG: ${{ steps.create-release-pr.outputs.RELEASE_TAG }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,6 +58,7 @@ jobs:
         id: create-release-pr
         run: |
           TAG_NAME=$(git describe --tags --abbrev=0)
+          echo "RELEASE_TAG=$TAG_NAME" >> "$GITHUB_OUTPUT"
           RELEASE_BRANCH="release/$TAG_NAME"
           echo "RELEASE_BRANCH=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
 
@@ -96,11 +95,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/falcondev-it/github-actions-cache-server/github-actions-cache-server
+          images: ghcr.io/falcondev-it/github-actions-cache-server
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ needs.release.outputs.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release.outputs.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ needs.release.outputs.RELEASE_TAG }}
             latest
 
       - name: Login to GitHub Container Registry
