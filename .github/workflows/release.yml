@@ -75,7 +75,7 @@ jobs:
           RELEASE_BRANCH=${{ steps.create-release-pr.outputs.RELEASE_BRANCH }}
           PR_NUMBER=$(gh pr view $RELEASE_BRANCH --json number --template "{{.number}}")
 
-          gh pr merge $RELEASE_BRANCH --merge -t "$TAG (#$PR_NUMBER)" --body "" --delete-branch
+          gh pr merge $RELEASE_BRANCH --merge -t "$TAG (#$PR_NUMBER)" --body "" --delete-branch --admin
 
           npx changelogithub
 
