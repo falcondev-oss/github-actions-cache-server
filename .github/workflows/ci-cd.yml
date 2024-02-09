@@ -1,0 +1,37 @@
+name: 🚥 CI/CD
+
+on:
+  workflow_dispatch:
+  push:
+    branches: '**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: 💅 Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: pnpm install
+        uses: falcondev-it/.github/actions/pnpm-install@master
+
+      - name: Cache ESLint & Prettier
+        uses: actions/cache@v3
+        with:
+          path: |
+            .eslintcache
+            node_modules/.cache/prettier/.prettier-cache
+          key: eslint-prettier-cache-${{ runner.os }}
+
+      - run: pnpm run lint:ci
+
+  type-check:
+    name: 🛃 Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: pnpm install
+        uses: falcondev-it/.github/actions/pnpm-install@master
+
+      - run: pnpm run type-check

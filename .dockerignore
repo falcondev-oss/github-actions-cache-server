@@ -1,0 +1,10 @@
+node_modules/
+.husky/
+.github/
+.nitro/
+.output/
+.vscode/
+data/
+.env*
+.eslintcache
+test/
