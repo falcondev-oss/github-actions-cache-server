@@ -82,6 +82,8 @@ jobs:
 
   deploy:
     name: 🚀 Build and push
+    permissions:
+      packages: write
     needs: [release]
     runs-on: ubuntu-latest
     steps:
