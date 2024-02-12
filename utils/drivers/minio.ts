@@ -21,8 +21,10 @@ export async function createMinioDriver(
     },
     async commitCache(cacheId) {
       const buffer = uploadBuffers.get(cacheId)
-      if (!buffer)
-        throw new Error(`[minio-driver] No buffer found for cacheId ${cacheId} on commit`)
+      if (!buffer) {
+        // this should only happen if multiple actions are trying to commit the same cache at the same time
+        return
+      }
 
       await minio.putObject(opts.bucketName, `${basePath}/${cacheId}`, buffer)
       uploadBuffers.delete(cacheId)
@@ -33,8 +35,10 @@ export async function createMinioDriver(
     },
     async uploadChunk(cacheId, chunkStream, chunkStart) {
       const buffer = uploadBuffers.get(cacheId)
-      if (!buffer)
-        throw new Error(`[minio-driver] No buffer found for cacheId ${cacheId} on chunk upload`)
+      if (!buffer) {
+        // this should only happen if multiple actions are trying to commit the same cache at the same time
+        return
+      }
 
       let currentChunk = 0
       const bufferWriteStream = new WritableStream<Buffer>({
