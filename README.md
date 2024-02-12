@@ -15,7 +15,7 @@ version: '3.9'
 
 services:
   cache-server:
-    image: louishaftmann/github-actions-cache-server:latest
+    image: ghcr.io/falcondev-it/github-actions-cache-server:latest
     ports:
       - '3000:3000'
     environment:
