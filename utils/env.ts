@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 const envSchema = z.object({
-  ACTIONS_RUNTIME_TOKEN: z.string().min(1),
+  CACHE_SERVER_TOKEN: z.string().min(1),
   BASE_URL: z.string().min(1),
   SECRET: z.string().min(1),
   MINIO_BUCKET: z.string().min(1),

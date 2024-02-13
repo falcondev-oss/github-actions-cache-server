@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { z } from 'zod'
 
-import { useStorageDriver } from '../../../plugins/storage'
+import { useStorageDriver } from '@/plugins/storage'
 
 const pathParamsSchema = z.object({
   cacheId: z.coerce.number(),

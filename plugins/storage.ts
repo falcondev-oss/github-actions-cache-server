@@ -1,9 +1,10 @@
 import { createHash, randomInt } from 'node:crypto'
 
 import { cacheIdFromKeyAndVersion, saveCacheId } from '../utils/db'
-import { createMinioDriver } from '../utils/storage'
 
-import type { StorageAdapter } from '../utils/types'
+import type { StorageAdapter } from '@/utils/types'
+
+import { createMinioDriver } from '@/utils/storage'
 
 let storageAdapter: StorageAdapter
 
