@@ -28,9 +28,9 @@ export default defineNitroPlugin(async () => {
         await saveCacheId(key, version, cacheId)
       }
 
-      await driver.reserveCache(cacheId, cacheSize)
+      const didReserve = await driver.reserveCache(cacheId, cacheSize)
       return {
-        cacheId,
+        cacheId: didReserve ? cacheId : null,
       }
     },
     async getCacheEntry(keys, version) {

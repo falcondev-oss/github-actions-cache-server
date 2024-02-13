@@ -21,9 +21,10 @@ export async function createMinioDriver(
     reserveCache(cacheId, cacheSize) {
       if (uploadBuffers.has(cacheId)) {
         consola.info(`[minio/reserve] Cache for key ${cacheId} already reserved. Ignoring...`)
-        return
+        return false
       }
       uploadBuffers.set(cacheId, Buffer.alloc(cacheSize))
+      return true
     },
     async commitCache(cacheId) {
       if (commitLocks.has(cacheId)) {

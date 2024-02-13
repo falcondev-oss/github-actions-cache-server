@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer'
 
 export interface StorageDriver {
-  reserveCache: (cacheId: number, cacheSize: number) => Promise<void> | void
+  reserveCache: (cacheId: number, cacheSize: number) => Promise<boolean> | boolean
   commitCache: (cacheId: number) => Promise<void> | void
   download: (cacheId: number) => Promise<ReadableStream> | ReadableStream
   uploadChunk: (
@@ -31,5 +31,5 @@ export interface ArtifactCacheEntry {
 }
 
 export interface ReserveCacheResponse {
-  cacheId: number
+  cacheId: number | null
 }
