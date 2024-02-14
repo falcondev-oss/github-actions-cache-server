@@ -12,6 +12,9 @@ on:
         type: choice
         required: true
         options: [⚙️ patch (v1.0.1), 🧩 minor (v1.1.0), ⭐️ major (v2.0.0)]
+  push:
+    tags:
+      - 'v*'
 
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('Bump {0}', startsWith(inputs.version, '⚙️') && 'patch ⚙️' || startsWith(inputs.version, '🧩') && 'minor 🧩' || 'major ⭐️') || github.ref_name }}
 
