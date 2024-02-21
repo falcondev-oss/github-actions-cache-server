@@ -1,0 +1,13 @@
+{
+  "version": "5",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1708532175522,
+      "tag": "0000_broken_fenris",
+      "breakpoints": true
+    }
+  ]
+}
