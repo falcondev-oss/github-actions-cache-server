@@ -14,9 +14,11 @@
     "lint:ci": "eslint --cache --cache-strategy content . && prettier --check --cache --cache-strategy content .",
     "lint:fix": "eslint --fix --cache . && prettier --write --cache .",
     "type-check": "tsc -p tsconfig.json --noEmit",
-    "action": "act --env ACTIONS_CACHE_URL=http://host.docker.internal:3000/ --container-architecture linux/amd64 -W test",
-    "db:migrate": "drizzle-kit generate:sqlite",
-    "db:push": "tsx db/migrate.ts"
+    "action": "act --env ACTIONS_CACHE_URL=http://host.docker.internal:3000/test_token/ --container-architecture linux/amd64 -W tests",
+    "test:watch": "vitest --watch",
+    "test": "start-server-and-test dev 3000 test:unit",
+    "test:unit": "vitest run",
+    "db:migrate": "drizzle-kit generate:sqlite"
   },
   "changelogithub": {
     "extends": "gh:falcondev-it/configs/changelogithub"
@@ -44,8 +46,10 @@
     "drizzle-kit": "^0.20.14",
     "eslint": "^8.56.0",
     "husky": "^9.0.10",
+    "ky": "^1.2.0",
     "lint-staged": "^15.2.2",
     "prettier": "^3.2.5",
-    "tsx": "^4.7.1"
+    "start-server-and-test": "^2.0.3",
+    "vitest": "^1.3.0"
   }
 }

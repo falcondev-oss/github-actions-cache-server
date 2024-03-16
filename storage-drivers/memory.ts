@@ -1,0 +1,21 @@
+import { Buffer } from 'node:buffer'
+import { Readable } from 'node:stream'
+
+import { z } from 'zod'
+
+import { defineStorageDriver } from '@/utils/storage'
+
+export const filesystemDriver = defineStorageDriver({
+  envSchema: z.object({}),
+  async setup() {
+    const storage = new Map<string, Buffer>()
+    return {
+      upload(buffer, objectName) {
+        storage.set(objectName, buffer)
+      },
+      async download(objectName) {
+        return Readable.from(storage.get(objectName) ?? Buffer.from(''))
+      },
+    }
+  },
+})
