@@ -23,7 +23,7 @@ export default defineAppConfig({
     links: [
       {
         'icon': 'i-simple-icons-github',
-        'to': 'https://github.com/falcondev-it/github-actions-cache-server',
+        'to': 'https://github.com/falcondev-oss/github-actions-cache-server',
         'target': '_blank',
         'aria-label': 'Github Actions Cache Server on GitHub',
       },
@@ -35,7 +35,7 @@ export default defineAppConfig({
     links: [
       {
         'icon': 'i-simple-icons-github',
-        'to': 'https://github.com/falcondev-it/github-actions-cache-server',
+        'to': 'https://github.com/falcondev-oss/github-actions-cache-server',
         'target': '_blank',
         'aria-label': 'Github Actions Cache Server on GitHub',
       },
@@ -50,7 +50,7 @@ export default defineAppConfig({
         {
           icon: 'i-heroicons-star',
           label: 'Star on GitHub',
-          to: 'https://github.com/falcondev-it/github-actions-cache-server',
+          to: 'https://github.com/falcondev-oss/github-actions-cache-server',
           target: '_blank',
         },
       ],
