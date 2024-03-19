@@ -39,6 +39,7 @@ export default defineNuxtConfig({
         'bash',
         'md',
         'mdc',
+        'yml',
         'yaml',
         'dockerfile',
         'csharp',
