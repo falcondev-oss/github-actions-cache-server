@@ -1,5 +1,7 @@
 <script setup lang="ts">
-const { data: page } = await useAsyncData('index', () => queryContent('/').findOne())
+const { data } = await useAsyncData('index', () => queryContent('/').findOne())
+
+const page = computed(() => data.value!)
 
 useSeoMeta({
   titleTemplate: '',
