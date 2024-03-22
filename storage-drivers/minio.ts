@@ -33,6 +33,14 @@ export const minioDriver = defineStorageDriver({
         const stream = await minio.getObject(options.MINIO_BUCKET, `${basePath}/${objectName}`)
         return stream
       },
+      async prune() {
+        const objectStream = minio.listObjects(options.MINIO_BUCKET, basePath, true)
+        for await (const obj of objectStream) {
+          const item = obj as Minio.BucketItem
+          if (!item.name) continue
+          await minio.removeObject(options.MINIO_BUCKET, item.name)
+        }
+      },
     }
   },
 })

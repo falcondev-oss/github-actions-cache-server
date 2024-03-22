@@ -16,6 +16,9 @@ export const filesystemDriver = defineStorageDriver({
       async download(objectName) {
         return Readable.from(storage.get(objectName) ?? Buffer.from(''))
       },
+      async prune() {
+        storage.clear()
+      },
     }
   },
 })

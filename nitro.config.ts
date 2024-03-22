@@ -32,7 +32,7 @@ export default defineNitroConfig({
           '@/*': ['../../*'],
         },
       },
-      exclude: ['../../docs/**'],
+      exclude: ['../../docs'],
     },
   },
 })

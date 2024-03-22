@@ -149,6 +149,11 @@ async function initializeStorageDriver() {
         await chunkStream.pipeTo(bufferWriteStream)
         logger.debug('Upload: Chunks uploaded for id', uploadId)
       },
+      async pruneCaches() {
+        logger.debug('Prune: Trying to prune caches')
+        await driver.prune()
+        logger.debug('Prune: Caches pruned')
+      },
     }
   } catch (e) {
     consola.error('Failed to initialize storage driver:', e)
