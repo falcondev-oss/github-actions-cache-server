@@ -5,9 +5,7 @@
   "private": true,
   "scripts": {
     "prepare": "nitropack prepare && husky",
-    "dev": "concurrently -n dev: 'npm:dev:*' -s all --kill-others-on-fail -p '{name}' -c '#F76672,#2363ED'",
-    "dev:api": "nitropack dev",
-    "dev:docker": "docker compose up",
+    "dev": "nitropack dev",
     "build": "nitropack build",
     "preview": "node .output/server/index.mjs",
     "lint": "eslint --cache . && prettier --check --cache .",
