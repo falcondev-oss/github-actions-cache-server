@@ -4,15 +4,25 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { and, desc, eq, like } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
+import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 
 import { CacheKeys } from '@/db/schema'
+import { ENV } from '@/lib/env'
+import { logger } from '@/lib/logger'
 
 await fs.mkdir(path.join(`${ENV.DATA_DIR}/db`), {
   recursive: true,
 })
 
-export const sqlite = new Database(path.join(`${ENV.DATA_DIR}/db/sqlite.db`))
+const isTesting = process.env.NODE_ENV === 'test'
+export const sqlite = new Database(
+  path.join(`${ENV.DATA_DIR}/db/${isTesting ? 'test-' : ''}sqlite.db`),
+)
 export const db = drizzle(sqlite)
+
+logger.info('Migrating database...')
+migrate(db, { migrationsFolder: './db/migrations' })
+logger.success('Database migration complete')
 
 /**
  * @see https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#matching-a-cache-key
@@ -78,4 +88,8 @@ export async function touchKey(key: string, version: string) {
 export async function createKey(key: string, version: string) {
   const now = new Date().toISOString()
   await db.insert(CacheKeys).values({ key, version, updatedAt: now })
+}
+
+export async function pruneKeys() {
+  await db.delete(CacheKeys)
 }

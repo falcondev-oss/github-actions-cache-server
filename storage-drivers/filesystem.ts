@@ -3,7 +3,8 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { defineStorageDriver } from '@/utils/storage'
+import { ENV } from '@/lib/env'
+import { defineStorageDriver } from '@/lib/storage-driver'
 
 export const filesystemDriver = defineStorageDriver({
   envSchema: z.object({}),

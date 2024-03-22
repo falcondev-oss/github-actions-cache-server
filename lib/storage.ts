@@ -3,18 +3,17 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
-import type { StorageAdapter } from '@/utils/types'
+import type { StorageAdapter } from '@/lib/types'
 
-import { findKeyMatch, touchKey } from '@/db/client'
+import { findKeyMatch, touchKey } from '@/lib/db'
+import { ENV } from '@/lib/env'
+import { logger } from '@/lib/logger'
+import { encodeCacheKey } from '@/lib/storage-driver'
 import { getStorageDriver } from '@/storage-drivers'
-import { logger } from '@/utils/logger'
-import { encodeCacheKey } from '@/utils/storage'
-
-let storageAdapter: StorageAdapter
 
 export const DOWNLOAD_SECRET_KEY = randomBytes(32).toString('hex')
 
-export default defineNitroPlugin(async () => {
+async function initializeStorageDriver() {
   try {
     const driverName = (process.env.STORAGE_DRIVER || 'filesystem').toLowerCase()
     const driverSetup = getStorageDriver(driverName)
@@ -30,7 +29,7 @@ export default defineNitroPlugin(async () => {
     const cacheKeyByUploadId = new Map<number, { key: string; version: string }>()
     const commitLocks = new Set<number>()
 
-    storageAdapter = {
+    return <StorageAdapter>{
       async reserveCache(key, version, cacheSize) {
         logger.debug('Reserve: Trying to reserve cache for', key, version, cacheSize)
         const bufferKey = `${key}:${version}`
@@ -155,8 +154,6 @@ export default defineNitroPlugin(async () => {
     consola.error('Failed to initialize storage driver:', e)
     process.exit(1)
   }
-})
-
-export function useStorageDriver() {
-  return storageAdapter
 }
+
+export const storageAdapter = await initializeStorageDriver()

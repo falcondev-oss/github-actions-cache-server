@@ -1,3 +1,5 @@
+import { ENV } from '@/lib/env'
+
 export const auth = defineEventHandler((event) => {
   // /download handles authentication differently
   if (event.path.startsWith('/download')) return

@@ -1,4 +1,4 @@
-import type { defineStorageDriver } from '@/utils/storage'
+import type { defineStorageDriver } from '@/lib/storage-driver'
 
 import { filesystemDriver } from '@/storage-drivers/filesystem'
 import { minioDriver } from '@/storage-drivers/minio'

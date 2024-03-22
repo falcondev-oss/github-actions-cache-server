@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { z } from 'zod'
 
-import { DOWNLOAD_SECRET_KEY, useStorageDriver } from '@/plugins/storage'
+import { DOWNLOAD_SECRET_KEY, storageAdapter } from '@/lib/storage'
 
 const pathParamsSchema = z.object({
   objectName: z.string(),
@@ -20,8 +20,7 @@ export default defineEventHandler(async (event) => {
     .digest('base64url')
   if (hashedCacheId !== hash) throw createError({ statusCode: 403 })
 
-  const storage = useStorageDriver()
-  const stream = await storage.download(objectName)
+  const stream = await storageAdapter.download(objectName)
 
   return sendStream(event, stream)
 })
