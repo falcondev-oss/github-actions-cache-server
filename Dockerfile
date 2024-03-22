@@ -22,5 +22,6 @@ FROM node:20-alpine as runner
 WORKDIR /app
 
 COPY --from=builder /app/.output ./
+COPY ./db/migrations ./db/migrations
 
 CMD node /app/server/index.mjs
