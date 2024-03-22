@@ -8,5 +8,6 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('.', import.meta.url)),
     },
+    globalSetup: './tests/setup.ts',
   },
 })

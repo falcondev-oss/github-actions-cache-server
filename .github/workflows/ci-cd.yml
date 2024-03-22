@@ -35,3 +35,12 @@ jobs:
         uses: falcondev-it/.github/actions/pnpm-install@master
 
       - run: pnpm run type-check
+
+  test-unit:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: pnpm install
+        uses: falcondev-it/.github/actions/pnpm-install@master
+
+      - run: pnpm run test:run

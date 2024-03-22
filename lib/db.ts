@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import { and, desc, eq, like } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
+import { isTest } from 'std-env'
 
 import { CacheKeys } from '@/db/schema'
 import { ENV } from '@/lib/env'
@@ -14,9 +15,8 @@ await fs.mkdir(path.join(`${ENV.DATA_DIR}/db`), {
   recursive: true,
 })
 
-const isTesting = process.env.NODE_ENV === 'test'
 export const sqlite = new Database(
-  path.join(`${ENV.DATA_DIR}/db/${isTesting ? 'test-' : ''}sqlite.db`),
+  path.join(`${ENV.DATA_DIR}/db/${isTest ? 'test-' : ''}sqlite.db`),
 )
 export const db = drizzle(sqlite)
 
