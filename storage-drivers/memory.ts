@@ -5,7 +5,7 @@ import { z } from 'zod'
 
 import { defineStorageDriver } from '@/lib/storage-driver'
 
-export const filesystemDriver = defineStorageDriver({
+export const memoryDriver = defineStorageDriver({
   envSchema: z.object({}),
   async setup() {
     const storage = new Map<string, Buffer>()
