@@ -46,16 +46,18 @@ export const s3Driver = defineStorageDriver({
         return response.Body as Readable
       },
       async prune() {
-        let nextMarker: string | null = null
+        let nextMarker: string | undefined
 
-        while (nextMarker) {
+        do {
           const response: ListObjectsCommandOutput = await s3.listObjects({
             Bucket: options.S3_BUCKET,
             Prefix: basePath,
             Marker: nextMarker,
           })
 
-          for (const obj of response.Contents!) {
+          if (!response.Contents) return
+
+          for (const obj of response.Contents) {
             if (!obj.Key) continue
 
             await s3.deleteObject({
@@ -64,8 +66,8 @@ export const s3Driver = defineStorageDriver({
             })
           }
 
-          nextMarker = response.IsTruncated ? response.Contents!.slice(-1)[0].Key! : null
-        }
+          nextMarker = response.IsTruncated ? response.Contents.slice(-1)[0].Key! : undefined
+        } while (nextMarker)
       },
     }
   },
