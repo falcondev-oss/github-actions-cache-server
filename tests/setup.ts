@@ -15,6 +15,7 @@ export async function setup() {
   })
   const server = createDevServer(nitro)
   await server.listen(3000, {
+    hostname: '0.0.0.0',
     autoClose: true,
   })
   await prepare(nitro)
