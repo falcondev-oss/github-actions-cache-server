@@ -3,7 +3,7 @@ title: MinIO
 description:
 ---
 
-Driver: `memory`
+Driver: `minio`
 
 The memory storage driver stores the cache in memory. This is useful for testing and development purposes but should not be used in production.
 
