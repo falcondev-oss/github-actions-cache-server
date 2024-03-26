@@ -6,13 +6,10 @@ import { defineStorageDriver } from '@/lib/storage-driver'
 export const s3Driver = defineStorageDriver({
   envSchema: z.object({
     S3_BUCKET: z.string().min(1),
-    S3_ENDPOINT: z.string().min(1).default('s3.amazonaws.com'),
+    S3_ENDPOINT: z.string().min(1),
     S3_REGION: z.string().min(1).default(Minio.DEFAULT_REGION),
-    S3_PORT: z.coerce.number().positive().default(443),
-    S3_USE_SSL: z
-      .string()
-      .transform((v) => v === 'true')
-      .default('true'),
+    S3_PORT: z.coerce.number().positive(),
+    S3_USE_SSL: z.string().transform((v) => v === 'true'),
     S3_ACCESS_KEY: z.string().min(1),
     S3_SECRET_KEY: z.string().min(1),
   }),
