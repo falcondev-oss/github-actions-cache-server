@@ -24,4 +24,6 @@ WORKDIR /app
 COPY --from=builder /app/.output ./
 COPY ./db/migrations ./db/migrations
 
+ENV DATA_DIR=/data
+
 CMD node /app/server/index.mjs
