@@ -15,6 +15,13 @@ export default defineNitroConfig({
   },
   alias: {
     '@': fileURLToPath(new URL('.', import.meta.url)),
+    // https://github.com/unjs/consola/issues/276
+    'consola': 'consola',
+  },
+  esbuild: {
+    options: {
+      target: 'esnext',
+    },
   },
   typescript: {
     strict: true,
@@ -25,6 +32,7 @@ export default defineNitroConfig({
           '@/*': ['../../*'],
         },
       },
+      exclude: ['../../docs'],
     },
   },
 })

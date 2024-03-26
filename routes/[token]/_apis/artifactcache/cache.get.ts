@@ -1,9 +1,9 @@
 import { z } from 'zod'
 
-import type { ArtifactCacheEntry } from '@/utils/types'
+import type { ArtifactCacheEntry } from '@/lib/types'
 
-import { useStorageDriver } from '@/plugins/storage'
-import { auth } from '@/utils/auth'
+import { auth } from '@/lib/auth'
+import { storageAdapter } from '@/lib/storage'
 
 const queryParamSchema = z.object({
   keys: z
@@ -24,9 +24,7 @@ export default defineEventHandler({
 
     const { keys, version } = parsedQuery.data
 
-    const storage = useStorageDriver()
-
-    const storageEntry = await storage.getCacheEntry(keys, version)
+    const storageEntry = await storageAdapter.getCacheEntry(keys, version)
 
     if (!storageEntry) throw createError({ statusCode: 204 })
 

@@ -1,0 +1,47 @@
+title: GitHub Actions Cache Server
+description: Easily deploy your own GitHub actions cache without needing to change any workflow files!
+navigation: false
+hero:
+  title: Self-Hosted Cache Server for GitHub Actions
+  description: Easily deploy your own GitHub actions cache without needing to change any workflow files!
+  orientation: horizontal
+  links:
+    - label: Get started
+      icon: i-heroicons-arrow-right-20-solid
+      trailing: true
+      to: /getting-started
+      size: lg
+  code: |
+    ```yaml [docker-compose.yml]
+    version: '3.9'
+
+    services:
+      cache-server:
+        image: ghcr.io/falcondev-oss/github-actions-cache-server:latest
+        ports:
+          - '3000:3000'
+        environment:
+          BASE_URL: http://localhost:3000
+        volumes:
+          - cache-data:/data
+
+    volumes:
+      cache-data:
+    ```
+features:
+  items:
+    - title: Storage Drivers
+      description: Support for multiple storage drivers like S3, file system, and more.
+      icon: i-ph-database-fill
+      to: /
+      target: _blank
+    - title: No Workflow Changes
+      description: No need to change any workflow files, just deploy and start using.
+      icon: i-simple-icons-githubactions
+      to: /
+      target: _blank
+    - title: Self-Hosted
+      description: Host your own cache server to keep your data private and increase caching speed.
+      icon: i-ph-lock-fill
+      to: /
+      target: _blank

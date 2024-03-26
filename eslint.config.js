@@ -16,6 +16,7 @@ const ignores = {
     '.nuxt/',
     '.output/',
     '.temp/',
+    'docs/',
   ],
 }
 

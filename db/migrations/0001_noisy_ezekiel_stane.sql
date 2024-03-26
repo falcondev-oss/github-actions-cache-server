@@ -1,0 +1,1 @@
+ALTER TABLE cache_keys ADD `updated_at` text NOT NULL;

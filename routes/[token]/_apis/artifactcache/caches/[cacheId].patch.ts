@@ -2,8 +2,8 @@ import { z } from 'zod'
 
 import type { Buffer } from 'node:buffer'
 
-import { useStorageDriver } from '@/plugins/storage'
-import { auth } from '@/utils/auth'
+import { auth } from '@/lib/auth'
+import { storageAdapter } from '@/lib/storage'
 
 const pathParamsSchema = z.object({
   cacheId: z.coerce.number(),
@@ -25,8 +25,7 @@ export default defineEventHandler({
 
     const { start, end } = parseContentRangeHeader(contentRangeHeader)
 
-    const storage = useStorageDriver()
-    await storage.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
+    await storageAdapter.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
   },
 })
 
