@@ -23,7 +23,7 @@ hero:
         environment:
           BASE_URL: http://localhost:3000
         volumes:
-          - cache-data:/app/data
+          - cache-data:/data
 
     volumes:
       cache-data:
