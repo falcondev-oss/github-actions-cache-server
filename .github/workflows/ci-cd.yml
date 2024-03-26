@@ -18,7 +18,7 @@ jobs:
         uses: falcondev-it/.github/actions/pnpm-install@master
 
       - name: Cache ESLint & Prettier
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             .eslintcache
