@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { logger } from '@/lib/logger'
 
 const envSchema = z.object({
-  CACHE_SERVER_TOKEN: z.string().min(1),
+  URL_ACCESS_TOKEN: z.string().min(1),
   BASE_URL: z.string().min(1),
   DATA_DIR: z.string().min(1),
 })

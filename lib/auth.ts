@@ -5,6 +5,6 @@ export const auth = defineEventHandler((event) => {
   if (event.path.startsWith('/download')) return
 
   const token = event.context.params?.token
-  if (typeof token !== 'string' || token !== ENV.CACHE_SERVER_TOKEN)
+  if (typeof token !== 'string' || token !== ENV.URL_ACCESS_TOKEN)
     throw createError({ statusCode: 401 })
 })

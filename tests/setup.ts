@@ -4,7 +4,7 @@ import type { Nitro, NitroDevServer } from 'nitropack'
 
 process.env.BASE_URL = 'http://localhost:3000'
 process.env.DATA_DIR = '.data'
-process.env.CACHE_SERVER_TOKEN = 'test_token'
+process.env.URL_ACCESS_TOKEN = 'test_token'
 
 let nitro: Nitro
 let server: Awaited<ReturnType<NitroDevServer['listen']>>
