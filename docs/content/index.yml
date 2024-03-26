@@ -31,7 +31,7 @@ hero:
 features:
   items:
     - title: Storage Drivers
-      description: Support for multiple storage drivers like S3, file system, and more.
+      description: Support for multiple storage drivers like MinIO, S3, file system, and more.
       icon: i-ph-database-fill
       to: /
       target: _blank
