@@ -8,3 +8,4 @@ dist
 data/
 .eslintcache
 .data
+.idea
