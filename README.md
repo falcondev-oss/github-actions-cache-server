@@ -22,12 +22,13 @@ services:
       CACHE_SERVER_TOKEN: random_token
       BASE_URL: http://localhost:3000
       SECRET: long_random_secret
-      MINIO_BUCKET: gh-actions-cache
-      MINIO_ACCESS_KEY: access_key
-      MINIO_SECRET_KEY: secret_key
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: '9000'
-      MINIO_USE_SSL: 'false'
+      STORAGE_DRIVER: s3
+      S3_BUCKET: gh-actions-cache
+      S3_ACCESS_KEY: access_key
+      S3_SECRET_KEY: secret_key
+      S3_ENDPOINT: minio
+      S3_PORT: '9000'
+      S3_USE_SSL: 'false'
       NITRO_PORT: '3000'
     volumes:
       - cache-data:/app/data
@@ -37,8 +38,8 @@ services:
     ports:
       - '9000:9000'
     environment:
-      MINIO_ROOT_USER: access_key
-      MINIO_ROOT_PASSWORD: secret_key
+      S3_ROOT_USER: access_key
+      S3_ROOT_PASSWORD: secret_key
 
 volumes:
   cache-data:
@@ -49,12 +50,12 @@ To run this server, you'll need to set up the following environment variables:
 - `CACHE_SERVER_TOKEN`: A token for authenticating runtime requests. Example: `random_token`
 - `BASE_URL`: The base URL of your cache server. Example: `http://localhost:3000`
 - `SECRET`: A secret key for the server. Example: `long_random_secret`
-- `MINIO_BUCKET`: The name of the MinIO bucket used for storage. Example: `gh-actions-cache`
-- `MINIO_ACCESS_KEY`: The access key for MinIO. Example: `access_key`
-- `MINIO_SECRET_KEY`: The secret key for MinIO. Example: `secret_key`
-- `MINIO_ENDPOINT`: The endpoint URL for MinIO. Example: `minio`
-- `MINIO_PORT`: The port MinIO is running on. Example: `9000`
-- `MINIO_USE_SSL`: Whether to use SSL for MinIO connections. Example: `false`
+- `S3_BUCKET`: The name of the MinIO bucket used for storage. Example: `gh-actions-cache`
+- `S3_ACCESS_KEY`: The access key for MinIO. Example: `access_key`
+- `S3_SECRET_KEY`: The secret key for MinIO. Example: `secret_key`
+- `S3_ENDPOINT`: The endpoint URL for MinIO. Example: `minio`
+- `S3_PORT`: The port MinIO is running on. Example: `9000`
+- `S3_USE_SSL`: Whether to use SSL for MinIO connections. Example: `false`
 - `NITRO_PORT`: The port the server should listen on. Example: `3000`
 
 ## 🔥 Using with Self-Hosted Runners
