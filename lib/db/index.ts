@@ -12,7 +12,7 @@ export interface Database {
 export interface CacheKeysTable {
   key: string
   version: string
-  updated_at: Date
+  updated_at: string
 }
 
 async function initializeDatabase() {
@@ -79,7 +79,7 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
     const exactMatch = await db
       .selectFrom('cache_keys')
       .where('version', '==', opts.version)
-      .where('key', '==', opts.key)
+      .where('key', '==', key)
       .orderBy('cache_keys.updated_at desc')
       .selectAll()
       .executeTakeFirst()
@@ -109,7 +109,7 @@ export async function touchKey(key: string, version: string) {
   const now = new Date()
   const updatedKey = await db
     .updateTable('cache_keys')
-    .set('updated_at', now)
+    .set('updated_at', now.toISOString())
     .where('key', '==', key)
     .where('version', '==', version)
     .returningAll()
@@ -126,7 +126,7 @@ export async function createKey(key: string, version: string) {
     .values({
       key,
       version,
-      updated_at: now,
+      updated_at: now.toISOString(),
     })
     .execute()
 }
