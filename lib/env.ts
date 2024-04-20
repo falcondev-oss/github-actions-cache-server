@@ -6,6 +6,7 @@ const envSchema = z.object({
   URL_ACCESS_TOKEN: z.string().min(1),
   BASE_URL: z.string().min(1),
   DATA_DIR: z.string().min(1),
+  CLEANUP_OLDER_THAN_DAYS: z.coerce.number().int().min(1).default(90),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)

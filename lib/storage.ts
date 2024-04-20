@@ -31,7 +31,7 @@ async function initializeStorageDriver() {
 
     return <StorageAdapter>{
       async reserveCache(key, version, cacheSize) {
-        logger.debug('Reserve: Trying to reserve cache for', key, version, cacheSize)
+        logger.debug('Reserve: Reserving cache for', key, version, cacheSize)
         const bufferKey = `${key}:${version}`
         const existingBuffer = uploadBuffers.get(bufferKey)
         if (existingBuffer) {
@@ -60,7 +60,7 @@ async function initializeStorageDriver() {
         }
       },
       async getCacheEntry(keys, version) {
-        logger.debug('Get: Trying to get cache entry for', keys, version)
+        logger.debug('Get: Getting cache entry for', keys, version)
         const primaryKey = keys[0]
         const restoreKeys = keys.length > 1 ? keys.slice(1) : undefined
 
@@ -84,7 +84,7 @@ async function initializeStorageDriver() {
         }
       },
       async commitCache(uploadId) {
-        logger.debug('Commit: Trying to commit cache for upload', uploadId)
+        logger.debug('Commit: Committing cache for upload', uploadId)
 
         if (commitLocks.has(uploadId)) {
           logger.debug(`Commit: Commit for upload ${uploadId} already in progress. Ignoring...`)
@@ -119,11 +119,11 @@ async function initializeStorageDriver() {
         }
       },
       async download(objectName) {
-        logger.debug('Download: Trying to download', objectName)
+        logger.debug('Download: Downloading', objectName)
         return driver.download(objectName)
       },
       async uploadChunk(uploadId, chunkStream, chunkStart) {
-        logger.debug('Upload: Trying to upload chunk for upload', uploadId)
+        logger.debug('Upload: Uploading chunk for upload', uploadId)
         const cacheKey = cacheKeyByUploadId.get(uploadId)
         if (!cacheKey) {
           logger.debug(`Upload: No cache key found for upload ${uploadId}. Ignoring...`)
@@ -149,9 +149,11 @@ async function initializeStorageDriver() {
         await chunkStream.pipeTo(bufferWriteStream)
         logger.debug('Upload: Chunks uploaded for id', uploadId)
       },
-      async pruneCaches() {
-        logger.debug('Prune: Trying to prune caches')
-        await driver.prune()
+      async pruneCaches(olderThanDays) {
+        logger.debug('Prune: Pruning caches')
+        await driver.prune(
+          olderThanDays !== undefined && olderThanDays <= 0 ? undefined : olderThanDays,
+        )
         logger.debug('Prune: Caches pruned')
       },
     }

@@ -14,6 +14,9 @@ dependencies:
   consola:
     specifier: ^3.2.3
     version: 3.2.3
+  croner:
+    specifier: ^8.0.2
+    version: 8.0.2
   drizzle-orm:
     specifier: ^0.30.4
     version: 0.30.4(@types/better-sqlite3@7.6.9)(better-sqlite3@9.4.3)
@@ -3129,8 +3132,8 @@ packages:
       readable-stream: 4.5.2
     dev: false
 
-  /croner@8.0.1:
-    resolution: {integrity: sha512-Hq1+lXVgjJjcS/U+uk6+yVmtxami0r0b+xVtlGyABgdz110l/kOnHWvlSI7nVzrTl8GCdZHwZS4pbBFT7hSL/g==}
+  /croner@8.0.2:
+    resolution: {integrity: sha512-HgSdlSUX8mIgDTTiQpWUP4qY4IFRMsduPCYdca34Pelt8MVdxdaDOzreFtCscA6R+cRZd7UbD1CD3uyx6J3X1A==}
     engines: {node: '>=18.0'}
     dev: false
 
@@ -6185,7 +6188,7 @@ packages:
       citty: 0.1.6
       consola: 3.2.3
       cookie-es: 1.0.0
-      croner: 8.0.1
+      croner: 8.0.2
       crossws: 0.2.4
       db0: 0.1.4(better-sqlite3@9.4.3)(drizzle-orm@0.30.4)
       defu: 6.1.4

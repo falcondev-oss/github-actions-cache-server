@@ -9,3 +9,4 @@ data/
 .eslintcache
 .data
 .idea
+.DS_Store

@@ -23,15 +23,41 @@ export const filesystemDriver = defineStorageDriver({
         const stream = createReadStream(path.join(basePath, objectName))
         return stream
       },
-      async prune() {
-        await fs.rm(basePath, {
-          recursive: true,
-          force: true,
-        })
-        await fs.mkdir(basePath, {
-          recursive: true,
-        })
+      async prune(olderThanDays) {
+        if (olderThanDays === undefined) {
+          await fs.rm(basePath, {
+            recursive: true,
+            force: true,
+          })
+          await fs.mkdir(basePath, {
+            recursive: true,
+          })
+          return
+        }
+
+        await recursivePrune(olderThanDays, basePath)
       },
     }
   },
 })
+
+async function recursivePrune(olderThanDays: number, basePath: string) {
+  const now = Date.now()
+
+  for await (const entry of await fs.opendir(basePath)) {
+    const entryPath = path.join(basePath, entry.name)
+    if (entry.isDirectory()) {
+      await recursivePrune(olderThanDays, entryPath)
+      continue
+    }
+    if (!entry.isFile()) continue
+
+    const { mtimeMs } = await fs.stat(entryPath)
+    if (now - mtimeMs > olderThanDays * 24 * 60 * 60 * 1000) {
+      await fs.rm(entryPath, {
+        recursive: true,
+        force: true,
+      })
+    }
+  }
+}
