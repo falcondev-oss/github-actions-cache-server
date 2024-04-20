@@ -3,13 +3,12 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
-import type { StorageAdapter } from '@/lib/types'
-
-import { findKeyMatch, touchKey } from '@/lib/db'
-import { ENV } from '@/lib/env'
-import { logger } from '@/lib/logger'
-import { encodeCacheKey } from '@/lib/storage/driver'
-import { getStorageDriver } from '@/storage-drivers'
+import { findKeyMatch, touchKey } from '~/lib/db'
+import { ENV } from '~/lib/env'
+import { logger } from '~/lib/logger'
+import { encodeCacheKey } from '~/lib/storage/driver'
+import type { StorageAdapter } from '~/lib/types'
+import { getStorageDriver } from '~/storage-drivers'
 
 export const DOWNLOAD_SECRET_KEY = randomBytes(32).toString('hex')
 

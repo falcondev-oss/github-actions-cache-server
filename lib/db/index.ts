@@ -1,9 +1,9 @@
 import { Kysely, Migrator } from 'kysely'
 
-import { getDatabaseDriver } from '@/db-drivers'
-import { migrations } from '@/lib/db/migrations'
-import { ENV } from '@/lib/env'
-import { logger } from '@/lib/logger'
+import { getDatabaseDriver } from '~/db-drivers'
+import { migrations } from '~/lib/db/migrations'
+import { ENV } from '~/lib/env'
+import { logger } from '~/lib/logger'
 
 export interface Database {
   cache_keys: CacheKeysTable

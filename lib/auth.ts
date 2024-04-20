@@ -1,4 +1,4 @@
-import { ENV } from '@/lib/env'
+import { ENV } from '~/lib/env'
 
 export const auth = defineEventHandler((event) => {
   // /download handles authentication differently

@@ -54,16 +54,16 @@ devDependencies:
     version: 3.0.2
   '@louishaftmann/commitlint-config':
     specifier: ^3.2.0
-    version: 3.2.0(@commitlint/cli@19.2.2)
+    version: 3.2.1(@commitlint/cli@19.2.2)
   '@louishaftmann/eslint-config':
     specifier: ^3.2.0
-    version: 3.2.0(@types/eslint@8.56.10)(@typescript-eslint/parser@7.7.0)(@vue/compiler-sfc@3.4.23)(eslint@8.57.0)(typescript@5.4.5)(vitest@1.5.0)(vue@3.4.23)
+    version: 3.2.1(@types/eslint@8.56.10)(@typescript-eslint/parser@7.7.0)(@vue/compiler-sfc@3.4.23)(eslint@8.57.0)(typescript@5.4.5)(vitest@1.5.0)(vue@3.4.23)
   '@louishaftmann/lintstaged-config':
     specifier: ^3.2.0
-    version: 3.2.0(lint-staged@15.2.2)
+    version: 3.2.1(lint-staged@15.2.2)
   '@louishaftmann/prettier-config':
     specifier: ^3.2.0
-    version: 3.2.0(prettier@3.2.5)
+    version: 3.2.1(prettier@3.2.5)
   '@types/eslint':
     specifier: ^8.56.10
     version: 8.56.10
@@ -793,8 +793,8 @@ packages:
       '@jridgewell/sourcemap-codec': 1.4.15
     dev: false
 
-  /@louishaftmann/commitlint-config@3.2.0(@commitlint/cli@19.2.2):
-    resolution: {integrity: sha512-qzVUUA0QRss3X+77mJCkEgTtihqPu0BXTBByM6ox2hRUUssJAa+5s8y9fOz4/MQnjAqSiiwFH4jNLIJfJtXEew==}
+  /@louishaftmann/commitlint-config@3.2.1(@commitlint/cli@19.2.2):
+    resolution: {integrity: sha512-UgGNJk4qW9iOk8pPj8WyUf71xt1sccjfpIymJjp0/h1pjDvMSJn2LXMy0RVx+SI+11H5LVVmxFUmkPzSk8HJjA==}
     peerDependencies:
       '@commitlint/cli': '>=17'
     dependencies:
@@ -802,8 +802,8 @@ packages:
       '@commitlint/config-conventional': 19.2.2
     dev: true
 
-  /@louishaftmann/eslint-config@3.2.0(@types/eslint@8.56.10)(@typescript-eslint/parser@7.7.0)(@vue/compiler-sfc@3.4.23)(eslint@8.57.0)(typescript@5.4.5)(vitest@1.5.0)(vue@3.4.23):
-    resolution: {integrity: sha512-w5mV/J9ecCVM6k5RAq4PAZEuNFkh8AvSFtNAn/0nbrZuzCQpppXmZbobiC9dRI7ZpqyQvGGHxiDyyax7HAMN2Q==}
+  /@louishaftmann/eslint-config@3.2.1(@types/eslint@8.56.10)(@typescript-eslint/parser@7.7.0)(@vue/compiler-sfc@3.4.23)(eslint@8.57.0)(typescript@5.4.5)(vitest@1.5.0)(vue@3.4.23):
+    resolution: {integrity: sha512-6v9WAc3YxE/dQ93GQDmlssdHO0iZLjOWak936J2QGkGjYoJny9IMCHPQs4O1Q24Hw4brvbsQlLD/w9R+CXjfkA==}
     peerDependencies:
       eslint: '>=8'
     dependencies:
@@ -841,16 +841,16 @@ packages:
       - vue
     dev: true
 
-  /@louishaftmann/lintstaged-config@3.2.0(lint-staged@15.2.2):
-    resolution: {integrity: sha512-39PNICEIgBUyX29T8G+Zwlf8z6QWhx0FA1v5u/EGqzyGFeSPKSXKiFUJ4ywpSn84ufy/5Y54925J9DI3ig9etQ==}
+  /@louishaftmann/lintstaged-config@3.2.1(lint-staged@15.2.2):
+    resolution: {integrity: sha512-rj6RjLJBnEnph+tDE3ZY7cJOUe7LzERzSN37iqgjEc6ar+U9vogRR68LYiTucdypZBeg6FQg6HnzI3gvE8v9AQ==}
     peerDependencies:
       lint-staged: '>=14'
     dependencies:
       lint-staged: 15.2.2
     dev: true
 
-  /@louishaftmann/prettier-config@3.2.0(prettier@3.2.5):
-    resolution: {integrity: sha512-pzBPuacg49QgWsyYGNgQ9lCs3b5P0PItyd/m2152T0LNIrKTe6nJyKq2D2Jqhlu8dUsd/G6G3kwiEOZff117kQ==}
+  /@louishaftmann/prettier-config@3.2.1(prettier@3.2.5):
+    resolution: {integrity: sha512-9u3fCluMHQ8BihsswiZukBO2hYpcupTGFTYaAHmas6X6RiAdlfOuUriGLX6ll70ze1K8wl89c162zS9efSaY7Q==}
     peerDependencies:
       prettier: '>=3'
     dependencies:

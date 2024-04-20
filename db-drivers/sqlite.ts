@@ -2,7 +2,7 @@ import SQLite from 'better-sqlite3'
 import { SqliteDialect } from 'kysely'
 import { z } from 'zod'
 
-import { defineDatabaseDriver } from '@/lib/db/driver'
+import { defineDatabaseDriver } from '~/lib/db/driver'
 
 export const sqliteDriver = defineDatabaseDriver({
   envSchema: z.object({

@@ -2,7 +2,7 @@ import { MysqlDialect } from 'kysely'
 import { createPool } from 'mysql2'
 import { z } from 'zod'
 
-import { defineDatabaseDriver } from '@/lib/db/driver'
+import { defineDatabaseDriver } from '~/lib/db/driver'
 
 export const mysqlDriver = defineDatabaseDriver({
   envSchema: z.object({

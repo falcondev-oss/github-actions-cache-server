@@ -1,9 +1,8 @@
 import { z } from 'zod'
 
-import type { ArtifactCacheEntry } from '@/lib/types'
-
-import { auth } from '@/lib/auth'
-import { storageAdapter } from '@/lib/storage'
+import { auth } from '~/lib/auth'
+import { storageAdapter } from '~/lib/storage'
+import type { ArtifactCacheEntry } from '~/lib/types'
 
 const queryParamSchema = z.object({
   keys: z

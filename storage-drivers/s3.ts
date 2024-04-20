@@ -1,7 +1,7 @@
 import * as Minio from 'minio'
 import { z } from 'zod'
 
-import { defineStorageDriver } from '@/lib/storage/driver'
+import { defineStorageDriver } from '~/lib/storage/driver'
 
 export const s3Driver = defineStorageDriver({
   envSchema: z.object({

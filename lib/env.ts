@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { logger } from '@/lib/logger'
+import { logger } from '~/lib/logger'
 
 const envSchema = z.object({
   URL_ACCESS_TOKEN: z.string().min(1),

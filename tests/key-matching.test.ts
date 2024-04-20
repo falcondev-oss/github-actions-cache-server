@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import { findKeyMatch, pruneKeys, touchKey } from '@/lib/db'
-import { sleep } from '@/tests/utils'
+import { findKeyMatch, pruneKeys, touchKey } from '~/lib/db'
+import { sleep } from '~/tests/utils'
 
 describe('key matching', () => {
   beforeEach(() => pruneKeys())
