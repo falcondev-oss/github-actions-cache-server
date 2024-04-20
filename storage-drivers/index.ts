@@ -1,4 +1,4 @@
-import type { defineStorageDriver } from '@/lib/storage-driver'
+import type { defineStorageDriver } from '@/lib/storage/driver'
 
 import { filesystemDriver } from '@/storage-drivers/filesystem'
 import { memoryDriver } from '@/storage-drivers/memory'

@@ -3,9 +3,10 @@ node_modules
 .nitro
 .cache
 .output
-.env
+.env.local
 dist
 data/
 .eslintcache
 .data
 .idea
+.DS_Store

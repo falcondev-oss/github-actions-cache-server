@@ -3,7 +3,7 @@ import { Readable } from 'node:stream'
 
 import { z } from 'zod'
 
-import { defineStorageDriver } from '@/lib/storage-driver'
+import { defineStorageDriver } from '@/lib/storage/driver'
 
 export const memoryDriver = defineStorageDriver({
   envSchema: z.object({}),

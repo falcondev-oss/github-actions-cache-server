@@ -8,14 +8,14 @@ import type { StorageAdapter } from '@/lib/types'
 import { findKeyMatch, touchKey } from '@/lib/db'
 import { ENV } from '@/lib/env'
 import { logger } from '@/lib/logger'
-import { encodeCacheKey } from '@/lib/storage-driver'
+import { encodeCacheKey } from '@/lib/storage/driver'
 import { getStorageDriver } from '@/storage-drivers'
 
 export const DOWNLOAD_SECRET_KEY = randomBytes(32).toString('hex')
 
 async function initializeStorageDriver() {
   try {
-    const driverName = (process.env.STORAGE_DRIVER || 'filesystem').toLowerCase()
+    const driverName = ENV.STORAGE_DRIVER
     const driverSetup = getStorageDriver(driverName)
     if (!driverSetup) {
       consola.error(`No storage driver found for ${driverName}`)
