@@ -6,9 +6,11 @@ import { z } from 'zod'
 import { defineStorageDriver } from '@/lib/storage/driver'
 
 export const filesystemDriver = defineStorageDriver({
-  envSchema: z.object({}),
-  async setup() {
-    const basePath = path.join(ENV.DATA_DIR, 'filesystem-driver-storage')
+  envSchema: z.object({
+    STORAGE_FILESYSTEM_PATH: z.string().default('.data/storage/filesystem'),
+  }),
+  async setup({ STORAGE_FILESYSTEM_PATH }) {
+    const basePath = STORAGE_FILESYSTEM_PATH
 
     await fs.mkdir(basePath, {
       recursive: true,
