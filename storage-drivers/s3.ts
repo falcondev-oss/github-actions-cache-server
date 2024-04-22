@@ -35,7 +35,7 @@ export const s3Driver = defineStorageDriver({
         const stream = await minio.getObject(options.STORAGE_S3_BUCKET, `${basePath}/${objectName}`)
         return stream
       },
-      async prune(objectNames) {
+      async delete(objectNames) {
         for (const name of objectNames) {
           await minio.removeObject(options.STORAGE_S3_BUCKET, `${basePath}/${name}`)
         }

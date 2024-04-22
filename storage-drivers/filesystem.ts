@@ -24,7 +24,7 @@ export const filesystemDriver = defineStorageDriver({
         const stream = createReadStream(path.join(basePath, objectName))
         return stream
       },
-      async prune(objectNames) {
+      async delete(objectNames) {
         for (const name of objectNames) {
           await fs.rm(path.join(basePath, name), {
             recursive: true,
