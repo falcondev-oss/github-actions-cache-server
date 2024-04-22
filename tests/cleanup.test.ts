@@ -8,7 +8,6 @@ describe('setting last accessed date', () => {
   const version = '0577ec58bee6d5415625'
   test('`updateOrCreateKey` sets accessed_at', async () => {
     const date = new Date('2024-01-01T00:00:00Z')
-    console.log('date', date)
     await updateOrCreateKey('cache-a', version, date)
 
     const match = await findKeyMatch({
@@ -56,7 +55,6 @@ describe('getting stale keys', () => {
     await updateOrCreateKey('cache-d', version, new Date('2024-03-20T00:00:00Z'))
 
     const match = await findStaleKeys(30, referenceDate)
-    console.log('match', match)
     expect(match.length).toBe(2)
 
     const matchA = match.find((m) => m.key === 'cache-a')
