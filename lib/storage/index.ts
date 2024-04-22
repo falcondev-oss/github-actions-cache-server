@@ -3,19 +3,18 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
-import type { StorageAdapter } from '@/lib/types'
-
-import { findKeyMatch, touchKey } from '@/lib/db'
-import { ENV } from '@/lib/env'
-import { logger } from '@/lib/logger'
-import { encodeCacheKey } from '@/lib/storage-driver'
-import { getStorageDriver } from '@/storage-drivers'
+import { findKeyMatch, touchKey } from '~/lib/db'
+import { ENV } from '~/lib/env'
+import { logger } from '~/lib/logger'
+import { encodeCacheKey } from '~/lib/storage/driver'
+import type { StorageAdapter } from '~/lib/types'
+import { getStorageDriver } from '~/storage-drivers'
 
 export const DOWNLOAD_SECRET_KEY = randomBytes(32).toString('hex')
 
 async function initializeStorageDriver() {
   try {
-    const driverName = (process.env.STORAGE_DRIVER || 'filesystem').toLowerCase()
+    const driverName = ENV.STORAGE_DRIVER
     const driverSetup = getStorageDriver(driverName)
     if (!driverSetup) {
       consola.error(`No storage driver found for ${driverName}`)
@@ -79,7 +78,7 @@ async function initializeStorageDriver() {
         logger.debug('Get: Cache entry found for', keys, version, 'with id', cacheKey.key)
 
         return {
-          archiveLocation: `${ENV.BASE_URL}/download/${hashedKey}/${cacheFileName}`,
+          archiveLocation: `${ENV.API_BASE_URL}/download/${hashedKey}/${cacheFileName}`,
           cacheKey: cacheKey.key,
         }
       },

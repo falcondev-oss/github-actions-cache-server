@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { z } from 'zod'
 
-import { DOWNLOAD_SECRET_KEY, storageAdapter } from '@/lib/storage'
+import { DOWNLOAD_SECRET_KEY, storageAdapter } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
   objectName: z.string(),
