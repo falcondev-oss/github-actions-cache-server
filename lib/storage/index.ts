@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
-import { findKeyMatch, findStaleKeys, pruneKeys, touchKey } from '~/lib/db'
+import { findKeyMatch, findStaleKeys, pruneKeys, touchKey, updateOrCreateKey } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { encodeCacheKey } from '~/lib/storage/driver'
@@ -70,6 +70,8 @@ async function initializeStorageDriver() {
           return null
         }
 
+        await touchKey(cacheKey.key, cacheKey.version)
+
         const cacheFileName = encodeCacheKey(cacheKey.key, cacheKey.version)
         const hashedKey = createHash('sha256')
           .update(cacheFileName + DOWNLOAD_SECRET_KEY)
@@ -109,7 +111,7 @@ async function initializeStorageDriver() {
         try {
           logger.debug('Commit: Committing cache for id', uploadId)
           await driver.upload(buffer, cacheFileName)
-          await touchKey(cacheKey.key, cacheKey.version)
+          await updateOrCreateKey(cacheKey.key, cacheKey.version)
           logger.debug('Commit: Cache committed for id', uploadId)
         } finally {
           cacheKeyByUploadId.delete(uploadId)
@@ -152,7 +154,7 @@ async function initializeStorageDriver() {
         logger.debug('Prune: Pruning caches')
 
         const keys = await findStaleKeys(olderThanDays)
-        await driver.prune(keys.map((key) => encodeCacheKey(key.key, key.version)))
+        await driver.delete(keys.map((key) => encodeCacheKey(key.key, key.version)))
         await pruneKeys(keys)
 
         logger.debug('Prune: Caches pruned')

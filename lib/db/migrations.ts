@@ -13,6 +13,7 @@ export const migrations = (dbType: DatabaseDriverName) =>
             col.notNull(),
           )
           .addColumn('updated_at', 'text', (col) => col.notNull())
+          .addColumn('accessed_at', 'text', (col) => col.notNull())
           .addPrimaryKeyConstraint('pk', ['key', 'version'])
 
         if (dbType === 'mysql') query = query.modifyEnd(sql`engine=InnoDB CHARSET=latin1`)
