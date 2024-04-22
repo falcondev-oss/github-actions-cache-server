@@ -78,7 +78,7 @@ async function initializeStorageDriver() {
         logger.debug('Get: Cache entry found for', keys, version, 'with id', cacheKey.key)
 
         return {
-          archiveLocation: `${ENV.BASE_URL}/download/${hashedKey}/${cacheFileName}`,
+          archiveLocation: `${ENV.API_BASE_URL}/download/${hashedKey}/${cacheFileName}`,
           cacheKey: cacheKey.key,
         }
       },

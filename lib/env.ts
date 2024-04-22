@@ -4,7 +4,7 @@ import { logger } from '~/lib/logger'
 
 const envSchema = z.object({
   URL_ACCESS_TOKEN: z.string().min(1),
-  BASE_URL: z.string().min(1),
+  API_BASE_URL: z.string().min(1),
   STORAGE_DRIVER: z.string().toLowerCase().default('filesystem'),
   DB_DRIVER: z.string().toLowerCase().default('sqlite'),
 })
