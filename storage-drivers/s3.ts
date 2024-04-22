@@ -35,19 +35,9 @@ export const s3Driver = defineStorageDriver({
         const stream = await minio.getObject(options.STORAGE_S3_BUCKET, `${basePath}/${objectName}`)
         return stream
       },
-      async prune(olderThanDays) {
-        const now = Date.now()
-
-        const objectStream = minio.listObjects(options.STORAGE_S3_BUCKET, basePath, true)
-        for await (const obj of objectStream) {
-          const item = obj as Minio.BucketItem
-          if (!item.name) continue
-
-          if (
-            olderThanDays === undefined ||
-            now - item.lastModified.getTime() > olderThanDays * 24 * 60 * 60 * 1000
-          )
-            await minio.removeObject(options.STORAGE_S3_BUCKET, item.name)
+      async prune(objectNames) {
+        for (const name of objectNames) {
+          await minio.removeObject(options.STORAGE_S3_BUCKET, `${basePath}/${name}`)
         }
       },
     }

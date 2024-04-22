@@ -6,6 +6,8 @@ import { migrations } from '~/lib/db/migrations'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 
+import type { Selectable } from 'kysely'
+
 export interface Database {
   cache_keys: CacheKeysTable
 }
@@ -119,6 +121,18 @@ export async function touchKey(key: string, version: string) {
   }
 }
 
+export async function findStaleKeys(olderThanDays: number | undefined) {
+  if (olderThanDays === undefined) return db.selectFrom('cache_keys').selectAll().execute()
+
+  const now = new Date()
+  const threshold = new Date(now.getTime() - olderThanDays * 24 * 60 * 60 * 1000)
+  return db
+    .selectFrom('cache_keys')
+    .where('updated_at', '<', threshold.toISOString())
+    .selectAll()
+    .execute()
+}
+
 export async function createKey(key: string, version: string) {
   const now = new Date()
   await db
@@ -131,6 +145,16 @@ export async function createKey(key: string, version: string) {
     .execute()
 }
 
-export async function pruneKeys() {
-  await db.deleteFrom('cache_keys').execute()
+export async function pruneKeys(keys?: Selectable<CacheKeysTable>[]) {
+  if (!keys) await db.deleteFrom('cache_keys').execute()
+  else
+    await db.transaction().execute(async (tx) => {
+      for (const { key, version } of keys) {
+        await tx
+          .deleteFrom('cache_keys')
+          .where('key', '=', key)
+          .where('version', '=', version)
+          .execute()
+      }
+    })
 }

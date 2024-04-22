@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
-import { findKeyMatch, touchKey } from '~/lib/db'
+import { findKeyMatch, findStaleKeys, pruneKeys, touchKey } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { encodeCacheKey } from '~/lib/storage/driver'
@@ -150,9 +150,11 @@ async function initializeStorageDriver() {
       },
       async pruneCaches(olderThanDays) {
         logger.debug('Prune: Pruning caches')
-        await driver.prune(
-          olderThanDays !== undefined && olderThanDays <= 0 ? undefined : olderThanDays,
-        )
+
+        const keys = await findStaleKeys(olderThanDays)
+        await driver.prune(keys.map((key) => encodeCacheKey(key.key, key.version)))
+        await pruneKeys(keys)
+
         logger.debug('Prune: Caches pruned')
       },
     }

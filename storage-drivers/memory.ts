@@ -16,8 +16,8 @@ export const memoryDriver = defineStorageDriver({
       async download(objectName) {
         return Readable.from(storage.get(objectName) ?? Buffer.from(''))
       },
-      async prune() {
-        storage.clear()
+      async prune(names) {
+        for (const name of names) storage.delete(name)
       },
     }
   },
