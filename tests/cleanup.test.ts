@@ -5,8 +5,8 @@ import { findKeyMatch, findStaleKeys, pruneKeys, touchKey, updateOrCreateKey } f
 describe('setting last accessed date', () => {
   beforeEach(() => pruneKeys())
 
+  const version = '0577ec58bee6d5415625'
   test('`updateOrCreateKey` sets accessed_at', async () => {
-    const version = 'version-a'
     const date = new Date('2024-01-01T00:00:00Z')
     console.log('date', date)
     await updateOrCreateKey('cache-a', version, date)
@@ -20,7 +20,6 @@ describe('setting last accessed date', () => {
   })
 
   test('`touchKey` updates accessed_at', async () => {
-    const version = 'version-b'
     const date = new Date('2024-01-01T00:00:00Z')
     await updateOrCreateKey('cache-a', version, date)
 
@@ -48,8 +47,8 @@ describe('setting last accessed date', () => {
 describe('getting stale keys', () => {
   beforeEach(() => pruneKeys())
 
+  const version = '0577ec58bee6d5415625'
   test('returns stale keys if threshold is passed', async () => {
-    const version = 'version-a'
     const referenceDate = new Date('2024-04-01T00:00:00Z')
     await updateOrCreateKey('cache-a', version, new Date('2024-01-01T00:00:00Z'))
     await updateOrCreateKey('cache-b', version, new Date('2024-02-01T00:00:00Z'))
@@ -70,7 +69,6 @@ describe('getting stale keys', () => {
   })
 
   test('returns all keys if threshold is not passed', async () => {
-    const version = 'version-b'
     const referenceDate = new Date('2024-04-01T00:00:00Z')
     await updateOrCreateKey('cache-a', version, new Date('2024-01-01T00:00:00Z'))
     await updateOrCreateKey('cache-b', version, new Date('2024-02-01T00:00:00Z'))
