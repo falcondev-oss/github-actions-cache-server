@@ -17,3 +17,10 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: mysql
+
+  minio:
+    image: quay.io/minio/minio:latest
+    entrypoint: sh
+    command: -c 'mkdir -p /data/test && /usr/bin/minio server /data'
+    ports:
+      - 9000:9000
