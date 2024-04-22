@@ -1,5 +1,6 @@
 import { Kysely, Migrator } from 'kysely'
 
+import type { DatabaseDriverName } from '~/db-drivers'
 import { getDatabaseDriver } from '~/db-drivers'
 import { migrations } from '~/lib/db/migrations'
 import { ENV } from '~/lib/env'
@@ -35,7 +36,7 @@ async function initializeDatabase() {
     db,
     provider: {
       async getMigrations() {
-        return migrations(driverName as 'sqlite' | 'postgres' | 'mysql')
+        return migrations(driverName as DatabaseDriverName)
       },
     },
   })
@@ -59,8 +60,8 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
   logger.debug('Finding key match', opts)
   const exactPrimaryMatch = await db
     .selectFrom('cache_keys')
-    .where('key', '==', opts.key)
-    .where('version', '==', opts.version)
+    .where('key', '=', opts.key)
+    .where('version', '=', opts.version)
     .selectAll()
     .executeTakeFirst()
   if (exactPrimaryMatch) {
@@ -78,8 +79,8 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
   for (const key of opts.restoreKeys) {
     const exactMatch = await db
       .selectFrom('cache_keys')
-      .where('version', '==', opts.version)
-      .where('key', '==', key)
+      .where('version', '=', opts.version)
+      .where('key', '=', key)
       .orderBy('cache_keys.updated_at desc')
       .selectAll()
       .executeTakeFirst()
@@ -91,7 +92,7 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
 
     const prefixedMatch = await db
       .selectFrom('cache_keys')
-      .where('version', '==', opts.version)
+      .where('version', '=', opts.version)
       .where('key', 'like', `${key}%`)
       .orderBy('cache_keys.updated_at desc')
       .selectAll()
@@ -107,14 +108,13 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
 
 export async function touchKey(key: string, version: string) {
   const now = new Date()
-  const updatedKey = await db
+  const updateResult = await db
     .updateTable('cache_keys')
     .set('updated_at', now.toISOString())
-    .where('key', '==', key)
-    .where('version', '==', version)
-    .returningAll()
+    .where('key', '=', key)
+    .where('version', '=', version)
     .executeTakeFirst()
-  if (!updatedKey) {
+  if (Number(updateResult.numUpdatedRows) === 0) {
     await createKey(key, version)
   }
 }
