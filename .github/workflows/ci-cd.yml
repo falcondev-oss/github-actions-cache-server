@@ -39,8 +39,12 @@ jobs:
   test-unit:
     name: 🧪 Unit Tests
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        storage-driver: [filesystem, memory, s3]
+        db-driver: [postgres, mysql, sqlite]
     steps:
       - name: pnpm install
         uses: falcondev-it/.github/actions/pnpm-install@master
 
-      - run: pnpm run test:run
+      - run: VITEST_DB_DRIVER=${{ matrix.db-driver }} VITEST_STORAGE_DRIVER=${{ matrix.storage-driver }} pnpm run test:run

@@ -1,9 +1,9 @@
 import { z } from 'zod'
 
-import type { Buffer } from 'node:buffer'
+import { auth } from '~/lib/auth'
+import { storageAdapter } from '~/lib/storage'
 
-import { auth } from '@/lib/auth'
-import { storageAdapter } from '@/lib/storage'
+import type { Buffer } from 'node:buffer'
 
 const pathParamsSchema = z.object({
   cacheId: z.coerce.number(),

@@ -28,9 +28,6 @@ export default defineNitroConfig({
     tsConfig: {
       compilerOptions: {
         skipLibCheck: true,
-        paths: {
-          '@/*': ['../../*'],
-        },
       },
       exclude: ['../../docs'],
     },

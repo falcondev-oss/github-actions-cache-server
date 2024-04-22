@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     dir: 'tests',
     alias: {
-      '@': import.meta.dirname,
+      '~': import.meta.dirname,
     },
     globalSetup: './tests/setup.ts',
   },
