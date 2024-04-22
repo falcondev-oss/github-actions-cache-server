@@ -1,10 +1,12 @@
 import { type Migration, sql } from 'kysely'
 
-export const migrations = (dbType: 'postgres' | 'sqlite' | 'mysql') =>
+import type { DatabaseDriverName } from '~/db-drivers'
+
+export const migrations = (dbType: DatabaseDriverName) =>
   ({
     '2024-04-20T11:18:44': {
       async up(db) {
-        const query = db.schema
+        let query = db.schema
           .createTable('cache_keys')
           .addColumn('key', dbType === 'mysql' ? 'varchar(512)' : 'text', (col) => col.notNull())
           .addColumn('version', dbType === 'mysql' ? 'varchar(512)' : 'text', (col) =>
@@ -13,7 +15,7 @@ export const migrations = (dbType: 'postgres' | 'sqlite' | 'mysql') =>
           .addColumn('updated_at', 'text', (col) => col.notNull())
           .addPrimaryKeyConstraint('pk', ['key', 'version'])
 
-        if (dbType === 'mysql') query.modifyEnd(sql`engine=InnoDB CHARSET=latin1`)
+        if (dbType === 'mysql') query = query.modifyEnd(sql`engine=InnoDB CHARSET=latin1`)
 
         await query.ifNotExists().execute()
       },
