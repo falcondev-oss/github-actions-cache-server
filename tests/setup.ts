@@ -1,10 +1,9 @@
+import { configDotenv } from 'dotenv'
 import { build, createDevServer, createNitro, prepare } from 'nitropack'
 
 import type { Nitro, NitroDevServer } from 'nitropack'
 
-process.env.BASE_URL = 'http://localhost:3000'
-process.env.DATA_DIR = '.data'
-process.env.URL_ACCESS_TOKEN = 'test_token'
+configDotenv()
 
 let nitro: Nitro
 let server: Awaited<ReturnType<NitroDevServer['listen']>>
