@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
-import { findKeyMatch, touchKey } from '~/lib/db'
+import { findKeyMatch, findStaleKeys, pruneKeys, touchKey, updateOrCreateKey } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { encodeCacheKey } from '~/lib/storage/driver'
@@ -30,7 +30,7 @@ async function initializeStorageDriver() {
 
     return <StorageAdapter>{
       async reserveCache(key, version, cacheSize) {
-        logger.debug('Reserve: Trying to reserve cache for', key, version, cacheSize)
+        logger.debug('Reserve: Reserving cache for', key, version, cacheSize)
         const bufferKey = `${key}:${version}`
         const existingBuffer = uploadBuffers.get(bufferKey)
         if (existingBuffer) {
@@ -59,7 +59,7 @@ async function initializeStorageDriver() {
         }
       },
       async getCacheEntry(keys, version) {
-        logger.debug('Get: Trying to get cache entry for', keys, version)
+        logger.debug('Get: Getting cache entry for', keys, version)
         const primaryKey = keys[0]
         const restoreKeys = keys.length > 1 ? keys.slice(1) : undefined
 
@@ -69,6 +69,8 @@ async function initializeStorageDriver() {
           logger.debug('Get: No cache entry found for', keys, version)
           return null
         }
+
+        await touchKey(cacheKey.key, cacheKey.version)
 
         const cacheFileName = encodeCacheKey(cacheKey.key, cacheKey.version)
         const hashedKey = createHash('sha256')
@@ -83,7 +85,7 @@ async function initializeStorageDriver() {
         }
       },
       async commitCache(uploadId) {
-        logger.debug('Commit: Trying to commit cache for upload', uploadId)
+        logger.debug('Commit: Committing cache for upload', uploadId)
 
         if (commitLocks.has(uploadId)) {
           logger.debug(`Commit: Commit for upload ${uploadId} already in progress. Ignoring...`)
@@ -109,7 +111,7 @@ async function initializeStorageDriver() {
         try {
           logger.debug('Commit: Committing cache for id', uploadId)
           await driver.upload(buffer, cacheFileName)
-          await touchKey(cacheKey.key, cacheKey.version)
+          await updateOrCreateKey(cacheKey.key, cacheKey.version)
           logger.debug('Commit: Cache committed for id', uploadId)
         } finally {
           cacheKeyByUploadId.delete(uploadId)
@@ -118,11 +120,11 @@ async function initializeStorageDriver() {
         }
       },
       async download(objectName) {
-        logger.debug('Download: Trying to download', objectName)
+        logger.debug('Download: Downloading', objectName)
         return driver.download(objectName)
       },
       async uploadChunk(uploadId, chunkStream, chunkStart) {
-        logger.debug('Upload: Trying to upload chunk for upload', uploadId)
+        logger.debug('Upload: Uploading chunk for upload', uploadId)
         const cacheKey = cacheKeyByUploadId.get(uploadId)
         if (!cacheKey) {
           logger.debug(`Upload: No cache key found for upload ${uploadId}. Ignoring...`)
@@ -148,9 +150,13 @@ async function initializeStorageDriver() {
         await chunkStream.pipeTo(bufferWriteStream)
         logger.debug('Upload: Chunks uploaded for id', uploadId)
       },
-      async pruneCaches() {
-        logger.debug('Prune: Trying to prune caches')
-        await driver.prune()
+      async pruneCaches(olderThanDays) {
+        logger.debug('Prune: Pruning caches')
+
+        const keys = await findStaleKeys(olderThanDays)
+        await driver.delete(keys.map((key) => encodeCacheKey(key.key, key.version)))
+        await pruneKeys(keys)
+
         logger.debug('Prune: Caches pruned')
       },
     }

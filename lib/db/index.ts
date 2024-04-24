@@ -6,6 +6,8 @@ import { migrations } from '~/lib/db/migrations'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 
+import type { Selectable } from 'kysely'
+
 export interface Database {
   cache_keys: CacheKeysTable
 }
@@ -14,6 +16,7 @@ export interface CacheKeysTable {
   key: string
   version: string
   updated_at: string
+  accessed_at: string
 }
 
 async function initializeDatabase() {
@@ -106,31 +109,65 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
   }
 }
 
-export async function touchKey(key: string, version: string) {
-  const now = new Date()
+export async function updateOrCreateKey(key: string, version: string, date?: Date) {
+  const now = date ?? new Date()
   const updateResult = await db
     .updateTable('cache_keys')
     .set('updated_at', now.toISOString())
+    .set('accessed_at', now.toISOString())
     .where('key', '=', key)
     .where('version', '=', version)
     .executeTakeFirst()
   if (Number(updateResult.numUpdatedRows) === 0) {
-    await createKey(key, version)
+    await createKey(key, version, date)
   }
 }
 
-export async function createKey(key: string, version: string) {
-  const now = new Date()
+export async function touchKey(key: string, version: string, date?: Date) {
+  const now = date ?? new Date()
+  await db
+    .updateTable('cache_keys')
+    .set('accessed_at', now.toISOString())
+    .where('key', '=', key)
+    .where('version', '=', version)
+    .execute()
+}
+
+export async function findStaleKeys(olderThanDays: number | undefined, date?: Date) {
+  if (olderThanDays === undefined) return db.selectFrom('cache_keys').selectAll().execute()
+
+  const now = date ?? new Date()
+  const threshold = new Date(now.getTime() - olderThanDays * 24 * 60 * 60 * 1000)
+  return db
+    .selectFrom('cache_keys')
+    .where('accessed_at', '<', threshold.toISOString())
+    .selectAll()
+    .execute()
+}
+
+export async function createKey(key: string, version: string, date?: Date) {
+  const now = date ?? new Date()
   await db
     .insertInto('cache_keys')
     .values({
       key,
       version,
       updated_at: now.toISOString(),
+      accessed_at: now.toISOString(),
     })
     .execute()
 }
 
-export async function pruneKeys() {
-  await db.deleteFrom('cache_keys').execute()
+export async function pruneKeys(keys?: Selectable<CacheKeysTable>[]) {
+  if (!keys) await db.deleteFrom('cache_keys').execute()
+  else
+    await db.transaction().execute(async (tx) => {
+      for (const { key, version } of keys) {
+        await tx
+          .deleteFrom('cache_keys')
+          .where('key', '=', key)
+          .where('version', '=', version)
+          .execute()
+      }
+    })
 }

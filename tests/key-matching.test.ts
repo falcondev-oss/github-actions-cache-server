@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import { findKeyMatch, pruneKeys, touchKey } from '~/lib/db'
+import { findKeyMatch, pruneKeys, updateOrCreateKey } from '~/lib/db'
 import { sleep } from '~/tests/utils'
 
 describe('key matching', () => {
@@ -8,7 +8,7 @@ describe('key matching', () => {
 
   const version = '0577ec58bee6d5415625'
   test('exact primary match', async () => {
-    await touchKey('cache-a', version)
+    await updateOrCreateKey('cache-a', version)
 
     const match = await findKeyMatch({
       key: 'cache-a',
@@ -19,7 +19,7 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('exact restore key match', async () => {
-    await touchKey('cache-a', version)
+    await updateOrCreateKey('cache-a', version)
 
     const match = await findKeyMatch({
       key: 'cache-b',
@@ -31,7 +31,7 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('prefixed restore key match', async () => {
-    await touchKey('prefixed-cache-a', version)
+    await updateOrCreateKey('prefixed-cache-a', version)
 
     const match = await findKeyMatch({
       key: 'prefixed-cache-b',
@@ -43,8 +43,8 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('restore key match with multiple keys', async () => {
-    await touchKey('cache-a', version)
-    await touchKey('cache-b', version)
+    await updateOrCreateKey('cache-a', version)
+    await updateOrCreateKey('cache-b', version)
 
     const match = await findKeyMatch({
       key: 'cache-c',
@@ -56,9 +56,9 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('prefixed restore key match with multiple keys returns newest key', async () => {
-    await touchKey('prefixed-cache-a', version)
+    await updateOrCreateKey('prefixed-cache-a', version)
     await sleep(10)
-    await touchKey('prefixed-cache-b', version)
+    await updateOrCreateKey('prefixed-cache-b', version)
 
     const match = await findKeyMatch({
       key: 'prefixed-cache-c',
@@ -70,9 +70,9 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('restore key prefers exact match over prefixed match', async () => {
-    await touchKey('prefixed-cache', version)
+    await updateOrCreateKey('prefixed-cache', version)
     await sleep(10)
-    await touchKey('prefixed-cache-a', version)
+    await updateOrCreateKey('prefixed-cache-a', version)
 
     const match = await findKeyMatch({
       key: 'prefixed-cache-b',
