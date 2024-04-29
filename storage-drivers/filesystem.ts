@@ -3,13 +3,14 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { ENV } from '@/lib/env'
-import { defineStorageDriver } from '@/lib/storage-driver'
+import { defineStorageDriver } from '~/lib/storage/driver'
 
 export const filesystemDriver = defineStorageDriver({
-  envSchema: z.object({}),
-  async setup() {
-    const basePath = path.join(ENV.DATA_DIR, 'filesystem-driver-storage')
+  envSchema: z.object({
+    STORAGE_FILESYSTEM_PATH: z.string().default('.data/storage/filesystem'),
+  }),
+  async setup({ STORAGE_FILESYSTEM_PATH }) {
+    const basePath = STORAGE_FILESYSTEM_PATH
 
     await fs.mkdir(basePath, {
       recursive: true,
@@ -23,14 +24,13 @@ export const filesystemDriver = defineStorageDriver({
         const stream = createReadStream(path.join(basePath, objectName))
         return stream
       },
-      async prune() {
-        await fs.rm(basePath, {
-          recursive: true,
-          force: true,
-        })
-        await fs.mkdir(basePath, {
-          recursive: true,
-        })
+      async delete(objectNames) {
+        for (const name of objectNames) {
+          await fs.rm(path.join(basePath, name), {
+            recursive: true,
+            force: true,
+          })
+        }
       },
     }
   },

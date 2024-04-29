@@ -1,10 +1,9 @@
 import ky from 'ky'
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import type { ArtifactCacheEntry, ReserveCacheResponse } from '@/lib/types'
-
-import { storageAdapter } from '@/lib/storage'
-import { cacheApi } from '@/tests/utils'
+import { storageAdapter } from '~/lib/storage'
+import type { ArtifactCacheEntry, ReserveCacheResponse } from '~/lib/types'
+import { cacheApi } from '~/tests/utils'
 
 describe('api routes', () => {
   beforeEach(() => storageAdapter.pruneCaches())

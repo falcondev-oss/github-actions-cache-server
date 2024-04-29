@@ -3,7 +3,7 @@ import { Readable } from 'node:stream'
 
 import { z } from 'zod'
 
-import { defineStorageDriver } from '@/lib/storage-driver'
+import { defineStorageDriver } from '~/lib/storage/driver'
 
 export const memoryDriver = defineStorageDriver({
   envSchema: z.object({}),
@@ -16,8 +16,8 @@ export const memoryDriver = defineStorageDriver({
       async download(objectName) {
         return Readable.from(storage.get(objectName) ?? Buffer.from(''))
       },
-      async prune() {
-        storage.clear()
+      async delete(names) {
+        for (const name of names) storage.delete(name)
       },
     }
   },

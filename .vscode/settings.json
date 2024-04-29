@@ -19,6 +19,5 @@
     "jsonc",
     "yaml"
   ],
-  "eslint.workingDirectories": [{ "mode": "auto" }],
   "tailwindCSS.classAttributes": ["class", "className", "ngClass", "classes"]
 }

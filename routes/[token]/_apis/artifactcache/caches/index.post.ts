@@ -1,9 +1,8 @@
 import { z } from 'zod'
 
-import type { ReserveCacheResponse } from '@/lib/types'
-
-import { auth } from '@/lib/auth'
-import { storageAdapter } from '@/lib/storage'
+import { auth } from '~/lib/auth'
+import { storageAdapter } from '~/lib/storage'
+import type { ReserveCacheResponse } from '~/lib/types'
 
 const bodySchema = z.object({
   key: z.string().min(1),
