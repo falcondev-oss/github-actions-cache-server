@@ -1,8 +1,9 @@
 import type { Buffer } from 'node:buffer'
+import type { ReadStream } from 'node:fs'
 import type { Readable } from 'node:stream'
 
 export interface StorageDriver {
-  upload: (buffer: Buffer, objectName: string) => Promise<void> | void
+  upload: (stream: ReadStream, objectName: string) => Promise<void> | void
   download: (objectName: string) => Promise<Readable> | Readable
   delete: (objectNames: string[]) => Promise<void> | void
 }

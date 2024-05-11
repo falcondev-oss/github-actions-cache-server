@@ -34,6 +34,7 @@ export async function setup() {
     recursive: true,
   })
 
+  // eslint-disable-next-line no-console
   console.log('Starting test containers for', dbDriver, storageDriver)
 
   // containers

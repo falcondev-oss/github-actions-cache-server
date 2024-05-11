@@ -8,6 +8,7 @@ const envSchema = z.object({
   API_BASE_URL: z.string().min(1),
   STORAGE_DRIVER: z.string().toLowerCase().default('filesystem'),
   DB_DRIVER: z.string().toLowerCase().default('sqlite'),
+  TEMP_DIR: z.string().min(1).default('/tmp'),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)

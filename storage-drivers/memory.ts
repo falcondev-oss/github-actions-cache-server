@@ -10,7 +10,17 @@ export const memoryDriver = defineStorageDriver({
   async setup() {
     const storage = new Map<string, Buffer>()
     return {
-      upload(buffer, objectName) {
+      async upload(stream, objectName) {
+        const buffer = await new Promise<Buffer>((resolve, reject) => {
+          const byteArray: any[] = []
+          stream.on('data', (chunk) => {
+            byteArray.push(chunk)
+          })
+          stream.on('end', () => {
+            resolve(Buffer.concat(byteArray))
+          })
+          stream.on('error', reject)
+        })
         storage.set(objectName, buffer)
       },
       async download(objectName) {
