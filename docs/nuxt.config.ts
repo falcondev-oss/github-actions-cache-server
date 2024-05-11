@@ -14,6 +14,17 @@ export default defineNuxtConfig({
       }
     },
   },
+  app: {
+    head: {
+      link: [
+        {
+          rel: 'icon',
+          type: 'image/svg+xml',
+          href: '/rocket.svg',
+        },
+      ],
+    },
+  },
   nitro: {
     preset: 'cloudflare-pages',
     prerender: {

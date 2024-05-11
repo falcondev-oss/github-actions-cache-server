@@ -28,8 +28,8 @@ export const s3Driver = defineStorageDriver({
     const basePath = 'gh-actions-cache'
 
     return {
-      async upload(buffer, objectName) {
-        await minio.putObject(options.STORAGE_S3_BUCKET, `${basePath}/${objectName}`, buffer)
+      async upload(stream, objectName) {
+        await minio.putObject(options.STORAGE_S3_BUCKET, `${basePath}/${objectName}`, stream)
       },
       async download(objectName) {
         const stream = await minio.getObject(options.STORAGE_S3_BUCKET, `${basePath}/${objectName}`)

@@ -1,5 +1,7 @@
-import { Buffer } from 'node:buffer'
 import { createHash, randomBytes, randomInt } from 'node:crypto'
+import { createReadStream } from 'node:fs'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 
 import consola from 'consola'
 
@@ -10,7 +12,13 @@ import { encodeCacheKey } from '~/lib/storage/driver'
 import type { StorageAdapter } from '~/lib/types'
 import { getStorageDriver } from '~/storage-drivers'
 
+import type { Buffer } from 'node:buffer'
+
 export const DOWNLOAD_SECRET_KEY = randomBytes(32).toString('hex')
+export const bufferDir = path.join(ENV.TEMP_DIR, 'github-actions-cache-server/upload-buffers')
+await fs.mkdir(bufferDir, {
+  recursive: true,
+})
 
 async function initializeStorageDriver() {
   try {
@@ -24,7 +32,7 @@ async function initializeStorageDriver() {
 
     const driver = await driverSetup()
 
-    const uploadBuffers = new Map<string, Buffer>()
+    const uploadFileBuffers = new Map<string, string>()
     const cacheKeyByUploadId = new Map<number, { key: string; version: string }>()
     const commitLocks = new Set<number>()
 
@@ -32,17 +40,21 @@ async function initializeStorageDriver() {
       async reserveCache(key, version, cacheSize) {
         logger.debug('Reserve: Reserving cache for', key, version, cacheSize)
         const bufferKey = `${key}:${version}`
-        const existingBuffer = uploadBuffers.get(bufferKey)
-        if (existingBuffer) {
+        if (uploadFileBuffers.has(bufferKey)) {
           logger.debug(`Reserve: Cache for key ${bufferKey} already reserved. Ignoring...`)
           return {
             cacheId: null,
           }
         }
 
-        uploadBuffers.set(bufferKey, Buffer.alloc(cacheSize))
-
         const uploadId = randomInt(1000000000, 9999999999)
+
+        const bufferPath = path.join(bufferDir, uploadId.toString())
+        uploadFileBuffers.set(bufferKey, bufferPath)
+        await fs.writeFile(bufferPath, '', {
+          flag: 'w',
+        })
+
         cacheKeyByUploadId.set(uploadId, { key, version })
 
         logger.debug(
@@ -99,8 +111,8 @@ async function initializeStorageDriver() {
         }
 
         const bufferKey = `${cacheKey.key}:${cacheKey.version}`
-        const buffer = uploadBuffers.get(bufferKey)
-        if (!buffer) {
+        const bufferPath = uploadFileBuffers.get(bufferKey)
+        if (!bufferPath) {
           logger.debug(`Commit: No buffer found for upload ${uploadId}. Ignoring...`)
           return
         }
@@ -110,12 +122,16 @@ async function initializeStorageDriver() {
 
         try {
           logger.debug('Commit: Committing cache for id', uploadId)
-          await driver.upload(buffer, cacheFileName)
+          const stream = createReadStream(bufferPath)
+          await driver.upload(stream, cacheFileName)
           await updateOrCreateKey(cacheKey.key, cacheKey.version)
           logger.debug('Commit: Cache committed for id', uploadId)
+        } catch (err) {
+          logger.error('Commit: Failed to commit cache for id', uploadId, err)
         } finally {
           cacheKeyByUploadId.delete(uploadId)
-          uploadBuffers.delete(bufferKey)
+          uploadFileBuffers.delete(bufferKey)
+          await fs.rm(bufferPath)
           commitLocks.delete(uploadId)
         }
       },
@@ -132,22 +148,24 @@ async function initializeStorageDriver() {
         }
 
         const bufferKey = `${cacheKey.key}:${cacheKey.version}`
-        const buffer = uploadBuffers.get(bufferKey)
-        if (!buffer) {
+        const bufferPath = uploadFileBuffers.get(bufferKey)
+        if (!bufferPath) {
           logger.debug(`Upload: No buffer found for key ${bufferKey}. Ignoring...`)
           return
         }
 
-        logger.debug('Upload: Uploading chunks for upload', uploadId)
+        const file = await fs.open(bufferPath, 'w+')
+
         let currentChunk = 0
         const bufferWriteStream = new WritableStream<Buffer>({
-          write(chunk) {
+          async write(chunk) {
             const start = chunkStart + currentChunk
             currentChunk += chunk.length
-            chunk.copy(buffer, start, 0, chunk.length)
+            await file.write(chunk, 0, chunk.length, start)
           },
         })
         await chunkStream.pipeTo(bufferWriteStream)
+        await file.close()
         logger.debug('Upload: Chunks uploaded for id', uploadId)
       },
       async pruneCaches(olderThanDays) {

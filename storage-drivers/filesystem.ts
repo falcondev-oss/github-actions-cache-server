@@ -17,8 +17,8 @@ export const filesystemDriver = defineStorageDriver({
     })
 
     return {
-      async upload(buffer, objectName) {
-        await fs.writeFile(path.join(basePath, objectName), buffer)
+      async upload(stream, objectName) {
+        await fs.writeFile(path.join(basePath, objectName), stream)
       },
       async download(objectName) {
         const stream = createReadStream(path.join(basePath, objectName))

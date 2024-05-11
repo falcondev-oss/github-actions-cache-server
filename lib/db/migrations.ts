@@ -2,8 +2,8 @@ import { type Migration, sql } from 'kysely'
 
 import type { DatabaseDriverName } from '~/db-drivers'
 
-export const migrations = (dbType: DatabaseDriverName) =>
-  ({
+export function migrations(dbType: DatabaseDriverName) {
+  return {
     '2024-04-20T11:18:44': {
       async up(db) {
         let query = db.schema
@@ -24,4 +24,5 @@ export const migrations = (dbType: DatabaseDriverName) =>
         await db.schema.dropTable('cache_keys').ifExists().execute()
       },
     },
-  }) satisfies Record<string, Migration>
+  } satisfies Record<string, Migration>
+}
