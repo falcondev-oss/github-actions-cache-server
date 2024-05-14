@@ -6,8 +6,9 @@ import { logger } from '@/lib/logger'
 import { storageAdapter } from '@/lib/storage'
 
 export default defineNitroPlugin(() => {
-  // daily
-  const job = Cron('0 0 * * *')
+  if (ENV.CLEANUP_OLDER_THAN_DAYS === 0) return
+
+  const job = Cron('0 0 * * *') // daily
   const nextRun = job.nextRun()
   logger.info(
     `Cleaning up cache entries older than ${colorize('blue', `${ENV.CLEANUP_OLDER_THAN_DAYS}d`)} with schedule ${colorize('blue', job.getPattern() ?? '')}${nextRun ? ` (next run: ${nextRun.toLocaleString()})` : ''}`,

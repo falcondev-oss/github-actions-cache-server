@@ -7,4 +7,8 @@ Driver: `filesystem`
 
 ## Configuration
 
-The file system storage driver does not require any configuration.
+#### `DB_SQLITE_PATH`
+
+- Default: `.data/storage/filesystem`
+
+The path to the filesystem storage location. The folder will be created if it does not exist.
