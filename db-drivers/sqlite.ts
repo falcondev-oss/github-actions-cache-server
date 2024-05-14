@@ -9,7 +9,7 @@ import { defineDatabaseDriver } from '~/lib/db/driver'
 
 export const sqliteDriver = defineDatabaseDriver({
   envSchema: z.object({
-    DB_SQLITE_PATH: z.string(),
+    DB_SQLITE_PATH: z.string().default('.data/sqlite.db'),
   }),
   async setup({ DB_SQLITE_PATH }) {
     await fs.mkdir(path.dirname(DB_SQLITE_PATH), { recursive: true })
