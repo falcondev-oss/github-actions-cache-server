@@ -21,7 +21,7 @@ services:
       URL_ACCESS_TOKEN: random_token
       API_BASE_URL: http://localhost:3000
     volumes:
-      - cache-data:/data
+      - cache-data:/app/.data
 
 volumes:
   cache-data:

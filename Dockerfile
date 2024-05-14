@@ -23,6 +23,4 @@ WORKDIR /app
 
 COPY --from=builder /app/.output ./
 
-ENV DATA_DIR=/data
-
 CMD node /app/server/index.mjs
