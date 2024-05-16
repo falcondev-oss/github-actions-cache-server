@@ -7,7 +7,7 @@ Driver: `filesystem`
 
 ## Configuration
 
-#### `DB_SQLITE_PATH`
+#### `STORAGE_FILESYSTEM_PATH`
 
 - Default: `.data/storage/filesystem`
 

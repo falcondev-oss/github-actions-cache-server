@@ -29,7 +29,7 @@ export async function setup() {
   })
   if (result.error) throw result.error
 
-  await fs.rm('.test-data', {
+  await fs.rm('tests/temp', {
     force: true,
     recursive: true,
   })
@@ -107,6 +107,7 @@ export async function setup() {
 }
 
 export async function teardown() {
+  await fs.rm('tests/temp', { recursive: true })
   await server?.close()
   await nitro?.close()
   await Promise.all(testContainers.map((container) => container?.stop()))
