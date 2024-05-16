@@ -35,6 +35,7 @@ async function initializeStorageDriver() {
     const uploadFileBuffers = new Map<string, string>()
     const cacheKeyByUploadId = new Map<number, { key: string; version: string }>()
     const commitLocks = new Set<number>()
+    const uploadChunkLocks = new Map<string, Promise<any>>()
 
     return <StorageAdapter>{
       async reserveCache(key, version, cacheSize) {
@@ -154,18 +155,30 @@ async function initializeStorageDriver() {
           return
         }
 
-        const file = await fs.open(bufferPath, 'w+')
+        const uploadChunkLock = uploadChunkLocks.get(bufferKey)
+        if (uploadChunkLock) await uploadChunkLock
 
-        let currentChunk = 0
-        const bufferWriteStream = new WritableStream<Buffer>({
-          async write(chunk) {
-            const start = chunkStart + currentChunk
-            currentChunk += chunk.length
-            await file.write(chunk, 0, chunk.length, start)
-          },
-        })
-        await chunkStream.pipeTo(bufferWriteStream)
-        await file.close()
+        uploadChunkLocks.set(
+          bufferKey,
+          (async () => {
+            const file = await fs.open(bufferPath, 'r+')
+
+            let currentChunk = 0
+            const bufferWriteStream = new WritableStream<Buffer>({
+              async write(chunk) {
+                const start = chunkStart + currentChunk
+                currentChunk += chunk.length
+                await file.write(chunk, 0, chunk.length, start)
+              },
+            })
+            await chunkStream.pipeTo(bufferWriteStream)
+            await file.close()
+          })(),
+        )
+
+        await uploadChunkLocks.get(bufferKey)
+        uploadChunkLocks.delete(bufferKey)
+
         logger.debug('Upload: Chunks uploaded for id', uploadId)
       },
       async pruneCaches(olderThanDays) {
