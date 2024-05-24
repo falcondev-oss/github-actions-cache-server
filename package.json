@@ -26,7 +26,7 @@
   "dependencies": {
     "@types/better-sqlite3": "^7.6.10",
     "@types/pg": "^8.11.6",
-    "better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^10.0.0",
     "consola": "^3.2.3",
     "croner": "^8.0.2",
     "kysely": "^0.27.3",
@@ -41,7 +41,7 @@
   "devDependencies": {
     "@actions/cache": "^3.2.4",
     "@commitlint/cli": "^19.3.0",
-    "@eslint/eslintrc": "^3.0.2",
+    "@eslint/eslintrc": "^3.1.0",
     "@louishaftmann/commitlint-config": "^3.4.2",
     "@louishaftmann/eslint-config": "^3.4.2",
     "@louishaftmann/lintstaged-config": "^3.4.2",
@@ -57,11 +57,11 @@
     "eslint": "^8",
     "husky": "^9.0.11",
     "ky": "^1.2.4",
-    "lint-staged": "^15.2.2",
+    "lint-staged": "^15.2.4",
     "prettier": "^3.2.5",
     "start-server-and-test": "^2.0.3",
     "testcontainers": "^10.9.0",
-    "ts-pattern": "^5.1.1",
+    "ts-pattern": "^5.1.2",
     "vitest": "^1.6.0",
     "wait-on": "^7.2.0"
   }
