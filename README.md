@@ -1,6 +1,6 @@
 # 🚀 GitHub Actions Cache Server
 
-This repository contains the code for a self-hosted GitHub Actions cache server implementation. It allows for caching dependencies and other reusable data between GitHub Actions runs, aiming to speed up your CI/CD workflows. The cache server supports multiple storage solutions, with MinIO as a primary example.
+This is a drop-in replacement for the official GitHub hosted cache server. It is compatible with the official `actions/cache` action, so there is no need to change your workflow files and it even works with packages that internally use `actions/cache`.
 
 ## Features
 
