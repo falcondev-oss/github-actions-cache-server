@@ -13,8 +13,10 @@ export default defineNitroPlugin(async (nitro) => {
     }
 
     logger.error(
-      `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}`,
+      `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}\n`,
       error,
+      '\n',
+      readBody(event),
     )
   })
 
