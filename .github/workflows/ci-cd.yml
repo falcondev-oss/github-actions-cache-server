@@ -48,3 +48,38 @@ jobs:
         uses: falcondev-it/.github/actions/pnpm-install@master
 
       - run: VITEST_DB_DRIVER=${{ matrix.db-driver }} VITEST_STORAGE_DRIVER=${{ matrix.storage-driver }} pnpm run test:run
+
+  deploy:
+    name: 🚀 Build and push
+    permissions:
+      packages: write
+      contents: read
+    needs: [lint, type-check, test-unit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/falcondev-oss/github-actions-cache-server
+          tags: |
+            dev
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
