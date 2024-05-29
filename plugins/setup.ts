@@ -13,7 +13,8 @@ export default defineNitroPlugin(async (nitro) => {
     }
 
     logger.error(
-      `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${event.node.res.statusCode}`,
+      `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}`,
+      error,
     )
   })
 
@@ -23,7 +24,7 @@ export default defineNitroPlugin(async (nitro) => {
     })
     nitro.hooks.hook('beforeResponse', (event) => {
       logger.debug(
-        `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${event.node.res.statusCode}`,
+        `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}`,
       )
     })
   }
