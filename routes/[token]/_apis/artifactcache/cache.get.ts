@@ -19,13 +19,17 @@ export default defineEventHandler({
     if (!parsedQuery.success)
       throw createError({
         statusCode: 400,
+        statusMessage: `Invalid query parameters: ${parsedQuery.error.message}`,
       })
 
     const { keys, version } = parsedQuery.data
 
     const storageEntry = await storageAdapter.getCacheEntry(keys, version)
 
-    if (!storageEntry) throw createError({ statusCode: 204 })
+    if (!storageEntry) {
+      setResponseStatus(event, 204)
+      return
+    }
 
     return storageEntry satisfies ArtifactCacheEntry
   },

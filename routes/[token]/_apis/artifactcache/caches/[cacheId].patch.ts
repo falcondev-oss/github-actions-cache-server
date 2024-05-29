@@ -14,26 +14,30 @@ export default defineEventHandler({
   onRequest: [auth],
   handler: async (event) => {
     const parsedPathParams = pathParamsSchema.safeParse(event.context.params)
-    if (!parsedPathParams.success) throw createError({ statusCode: 400 })
+    if (!parsedPathParams.success)
+      throw createError({
+        statusCode: 400,
+        statusMessage: `Invalid path parameters: ${parsedPathParams.error.message}`,
+      })
 
     const { cacheId } = parsedPathParams.data
 
     const stream = getRequestWebStream(event)
     if (!stream) {
       logger.debug('Upload: Request body is not a stream')
-      throw createError({ statusCode: 400 })
+      throw createError({ statusCode: 400, statusMessage: 'Request body must be a stream' })
     }
 
     const contentRangeHeader = getHeader(event, 'content-range')
     if (!contentRangeHeader) {
       logger.debug("Upload: 'content-range' header not found")
-      throw createError({ statusCode: 400 })
+      throw createError({ statusCode: 400, statusMessage: "'content-range' header is required" })
     }
 
     const { start, end } = parseContentRangeHeader(contentRangeHeader)
     if (Number.isNaN(start) || Number.isNaN(end)) {
       logger.debug(`Upload: Invalid 'content-range' header (${contentRangeHeader})`)
-      throw createError({ statusCode: 400 })
+      throw createError({ statusCode: 400, statusMessage: 'Invalid content-range header' })
     }
 
     await storageAdapter.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)

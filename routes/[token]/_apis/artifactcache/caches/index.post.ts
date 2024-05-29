@@ -7,7 +7,7 @@ import type { ReserveCacheResponse } from '~/lib/types'
 const bodySchema = z.object({
   key: z.string().min(1),
   version: z.string(),
-  cacheSize: z.number().positive(),
+  cacheSize: z.number().positive().optional().nullable(),
 })
 
 export default defineEventHandler({
@@ -18,11 +18,12 @@ export default defineEventHandler({
     if (!parsedBody.success)
       throw createError({
         statusCode: 400,
+        statusMessage: `Invalid body: ${parsedBody.error.message}`,
       })
 
     const { cacheSize, key, version } = parsedBody.data
 
-    const response = await storageAdapter.reserveCache(key, version, cacheSize)
+    const response = await storageAdapter.reserveCache(key, version, cacheSize ?? undefined)
 
     return response satisfies ReserveCacheResponse
   },

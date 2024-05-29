@@ -1,3 +1,5 @@
+import { H3Error } from 'h3'
+
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 
@@ -13,10 +15,8 @@ export default defineNitroPlugin(async (nitro) => {
     }
 
     logger.error(
-      `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}\n`,
+      `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${error instanceof H3Error ? error.statusCode : '[no status code]'}\n`,
       error,
-      '\n',
-      readBody(event),
     )
   })
 
@@ -24,7 +24,7 @@ export default defineNitroPlugin(async (nitro) => {
     nitro.hooks.hook('request', (event) => {
       logger.debug(`Request: ${event.method} ${obfuscateTokenFromPath(event.path)}`)
     })
-    nitro.hooks.hook('beforeResponse', (event) => {
+    nitro.hooks.hook('afterResponse', (event) => {
       logger.debug(
         `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}`,
       )
