@@ -1,6 +1,12 @@
 import { fileURLToPath } from 'node:url'
+
+import { version } from './package.json'
+
 export default defineNitroConfig({
   preset: 'node-server',
+  runtimeConfig: {
+    version: `v${version}${process.env.BUILD_HASH ? ` [${process.env.BUILD_HASH}]` : ''}`,
+  },
   storage: {
     db: {
       driver: 'fs',

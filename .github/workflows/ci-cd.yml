@@ -61,6 +61,10 @@ jobs:
         with:
           ref: dev
 
+      - name: Get build hash
+        id: build_hash
+        run: echo "COMMIT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
@@ -83,3 +87,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_HASH=${{ steps.build_hash.outputs.COMMIT_SHA }}
