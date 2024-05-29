@@ -6,11 +6,15 @@ export default defineNitroPlugin(async (nitro) => {
   await import('~/lib/env')
   await import('~/lib/db')
 
+  nitro.hooks.hook('error', (error) => {
+    logger.error(error)
+  })
+
   if (ENV.DEBUG) {
     nitro.hooks.hook('request', (event) => {
       logger.debug(`Request: ${event.method} ${obfuscateTokenFromPath(event.path)}`)
     })
-    nitro.hooks.hook('afterResponse', (event) => {
+    nitro.hooks.hook('beforeResponse', (event) => {
       logger.debug(
         `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${event.node.res.statusCode}`,
       )
