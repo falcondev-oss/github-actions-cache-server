@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { auth } from '~/lib/auth'
+import { logger } from '~/lib/logger'
 import { storageAdapter } from '~/lib/storage'
 
 import type { Buffer } from 'node:buffer'
@@ -18,12 +19,22 @@ export default defineEventHandler({
     const { cacheId } = parsedPathParams.data
 
     const stream = getRequestWebStream(event)
-    if (!stream) throw createError({ statusCode: 400 })
+    if (!stream) {
+      logger.debug('Upload: Request body is not a stream')
+      throw createError({ statusCode: 400 })
+    }
 
     const contentRangeHeader = getHeader(event, 'content-range')
-    if (!contentRangeHeader) throw createError({ statusCode: 400 })
+    if (!contentRangeHeader) {
+      logger.debug("Upload: 'content-range' header not found")
+      throw createError({ statusCode: 400 })
+    }
 
     const { start, end } = parseContentRangeHeader(contentRangeHeader)
+    if (Number.isNaN(start) || Number.isNaN(end)) {
+      logger.debug(`Upload: Invalid 'content-range' header (${contentRangeHeader})`)
+      throw createError({ statusCode: 400 })
+    }
 
     await storageAdapter.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
   },
