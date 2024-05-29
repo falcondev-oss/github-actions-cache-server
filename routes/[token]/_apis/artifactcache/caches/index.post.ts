@@ -7,7 +7,7 @@ import type { ReserveCacheResponse } from '~/lib/types'
 const bodySchema = z.object({
   key: z.string().min(1),
   version: z.string(),
-  cacheSize: z.number().positive().optional().nullable(),
+  cacheSize: z.number().positive().nullish(),
 })
 
 export default defineEventHandler({

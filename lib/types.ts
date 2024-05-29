@@ -18,7 +18,7 @@ export interface StorageAdapter {
     chunkEnd: number,
   ) => Promise<void>
   commitCache: (uploadId: number, size: number) => Promise<void>
-  reserveCache: (key: string, version: string, cacheSize: number) => Promise<ReserveCacheResponse>
+  reserveCache: (key: string, version: string, cacheSize?: number) => Promise<ReserveCacheResponse>
   pruneCaches: (olderThanDays?: number) => Promise<void>
 }
 

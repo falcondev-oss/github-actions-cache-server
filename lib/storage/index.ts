@@ -39,7 +39,7 @@ async function initializeStorageDriver() {
 
     return <StorageAdapter>{
       async reserveCache(key, version, cacheSize) {
-        logger.debug('Reserve: Reserving cache for', key, version, cacheSize)
+        logger.debug('Reserve: Reserving cache for', key, version, cacheSize ?? '[no cache size]')
         const bufferKey = `${key}:${version}`
         if (uploadFileBuffers.has(bufferKey)) {
           logger.debug(`Reserve: Cache for key ${bufferKey} already reserved. Ignoring...`)
@@ -62,7 +62,7 @@ async function initializeStorageDriver() {
           'Reserve: Cache reserved for',
           key,
           version,
-          cacheSize,
+          cacheSize ?? '[no cache size]',
           'with upload',
           uploadId,
         )
