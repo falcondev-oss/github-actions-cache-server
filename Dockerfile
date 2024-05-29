@@ -1,5 +1,8 @@
 FROM node:20-alpine as builder
 
+ARG BUILD_HASH
+ENV BUILD_HASH=${BUILD_HASH}
+
 WORKDIR /app
 
 RUN corepack enable
