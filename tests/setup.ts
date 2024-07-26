@@ -61,10 +61,9 @@ export async function setup() {
           })
           .start(),
       )
+      // eslint-disable-next-line unicorn/no-useless-undefined
       .with('sqlite', () => undefined)
       .exhaustive(),
-  )
-  testContainers.push(
     await match(storageDriver)
       .with('s3', async () => {
         const container = await new GenericContainer('quay.io/minio/minio:latest')
@@ -84,7 +83,9 @@ export async function setup() {
 
         return container
       })
+      // eslint-disable-next-line unicorn/no-useless-undefined
       .with('filesystem', () => undefined)
+      // eslint-disable-next-line unicorn/no-useless-undefined
       .with('memory', () => undefined)
       .exhaustive(),
   )
