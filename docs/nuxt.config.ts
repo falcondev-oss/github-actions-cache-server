@@ -1,4 +1,5 @@
-// https://nuxt.com/docs/api/configuration/nuxt-config
+import wasm from 'vite-plugin-wasm'
+
 export default defineNuxtConfig({
   extends: ['@nuxt/ui-pro'],
   modules: ['@nuxt/content', '@nuxt/ui', '@nuxt/fonts', '@nuxthq/studio'],
@@ -12,6 +13,14 @@ export default defineNuxtConfig({
       for (const c of globals) {
         c.global = true
       }
+    },
+  },
+  vite: {
+    plugins: [wasm()],
+    build: {
+      rollupOptions: {
+        external: ['shiki/onig.wasm'],
+      },
     },
   },
   app: {

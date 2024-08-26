@@ -24,6 +24,7 @@ async function initializeDatabase() {
   const driverSetup = getDatabaseDriver(driverName)
   if (!driverSetup) {
     logger.error(`No database driver found for ${driverName}`)
+    // eslint-disable-next-line unicorn/no-process-exit
     process.exit(1)
   }
   logger.info(`Using database driver: ${driverName}`)
@@ -46,6 +47,7 @@ async function initializeDatabase() {
   const { error, results } = await migrator.migrateToLatest()
   if (error) {
     logger.error('Database migration failed', error)
+    // eslint-disable-next-line unicorn/no-process-exit
     process.exit(1)
   }
   logger.debug('Migration results', results)
@@ -72,6 +74,18 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
   }
 
   logger.debug('No exact primary matches found')
+
+  const prefixedPrimaryMatch = await db
+    .selectFrom('cache_keys')
+    .where('key', 'like', `${opts.key}%`)
+    .where('version', '=', opts.version)
+    .orderBy('cache_keys.updated_at desc')
+    .selectAll()
+    .executeTakeFirst()
+
+  if (prefixedPrimaryMatch) {
+    return prefixedPrimaryMatch
+  }
 
   if (!opts.restoreKeys) {
     logger.debug('No restore keys provided')
@@ -159,8 +173,7 @@ export async function createKey(key: string, version: string, date?: Date) {
 }
 
 export async function pruneKeys(keys?: Selectable<CacheKeysTable>[]) {
-  if (!keys) await db.deleteFrom('cache_keys').execute()
-  else
+  if (keys) {
     await db.transaction().execute(async (tx) => {
       for (const { key, version } of keys) {
         await tx
@@ -170,4 +183,7 @@ export async function pruneKeys(keys?: Selectable<CacheKeysTable>[]) {
           .execute()
       }
     })
+  } else {
+    await db.deleteFrom('cache_keys').execute()
+  }
 }

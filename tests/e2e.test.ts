@@ -13,7 +13,7 @@ const MB = 1024 * 1024
 
 describe('save and restore cache with @actions/cache package', () => {
   for (const size of [5 * MB, 50 * MB, 500 * MB, 1024 * MB])
-    test(`${size} Bytes`, { timeout: 60000 }, async () => {
+    test(`${size} Bytes`, { timeout: 60_000 }, async () => {
       // save
       const expectedContents = crypto.randomBytes(size)
       await fs.writeFile(testFilePath, expectedContents)

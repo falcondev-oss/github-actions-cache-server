@@ -15,10 +15,10 @@ export function defineDatabaseDriver<EnvSchema extends z.ZodTypeAny>(
     const env = options.envSchema.safeParse(process.env)
     if (!env.success) {
       logger.error(`Invalid environment variables:\n${formatZodError(env.error)}`)
+      // eslint-disable-next-line unicorn/no-process-exit
       process.exit(1)
     }
 
-    // eslint-disable-next-line ts/no-unsafe-argument
     const driver = options.setup(env.data)
     return driver instanceof Promise ? driver : Promise.resolve(driver)
   }

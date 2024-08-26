@@ -61,10 +61,9 @@ export async function setup() {
           })
           .start(),
       )
+
       .with('sqlite', () => undefined)
       .exhaustive(),
-  )
-  testContainers.push(
     await match(storageDriver)
       .with('s3', async () => {
         const container = await new GenericContainer('quay.io/minio/minio:latest')
@@ -84,7 +83,9 @@ export async function setup() {
 
         return container
       })
+
       .with('filesystem', () => undefined)
+
       .with('memory', () => undefined)
       .exhaustive(),
   )

@@ -26,6 +26,7 @@ async function initializeStorageDriver() {
     const driverSetup = getStorageDriver(driverName)
     if (!driverSetup) {
       consola.error(`No storage driver found for ${driverName}`)
+      // eslint-disable-next-line unicorn/no-process-exit
       process.exit(1)
     }
     logger.info(`Using storage driver: ${driverName}`)
@@ -48,7 +49,7 @@ async function initializeStorageDriver() {
           }
         }
 
-        const uploadId = randomInt(1000000000, 9999999999)
+        const uploadId = randomInt(1_000_000_000, 9_999_999_999)
 
         const bufferPath = path.join(bufferDir, uploadId.toString())
         uploadFileBuffers.set(bufferKey, bufferPath)
@@ -191,8 +192,9 @@ async function initializeStorageDriver() {
         logger.debug('Prune: Caches pruned')
       },
     }
-  } catch (e) {
-    consola.error('Failed to initialize storage driver:', e)
+  } catch (err) {
+    consola.error('Failed to initialize storage driver:', err)
+    // eslint-disable-next-line unicorn/no-process-exit
     process.exit(1)
   }
 }

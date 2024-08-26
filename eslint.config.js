@@ -1,23 +1,30 @@
 // @ts-check
-import _eslintConfig from '@louishaftmann/eslint-config'
+import eslintConfig from '@louishaftmann/eslint-config'
 
-const eslintConfig = await _eslintConfig({
+export default eslintConfig({
   nuxt: false,
-  tsconfigPath: ['./tsconfig.json'],
+  unicorn: true,
 })
-
-/** @type {import('eslint').Linter.FlatConfig} */
-const ignores = {
-  ignores: [
-    '.prettierrc.cjs',
-    '.lintstagedrc.mjs',
-    'node_modules/',
-    'dist/',
-    '.nuxt/',
-    '.output/',
-    '.temp/',
-    'docs/',
-  ],
-}
-
-export default [...eslintConfig, ignores]
+  .append({
+    files: ['routes/**/*.*'],
+    rules: {
+      'unicorn/filename-case': 'off',
+    },
+  })
+  .append({
+    rules: {
+      'compat/compat': 'off',
+    },
+  })
+  .append({
+    ignores: [
+      '.prettierrc.cjs',
+      '.lintstagedrc.mjs',
+      'node_modules/',
+      'dist/',
+      '.nuxt/',
+      '.output/',
+      '.temp/',
+      'docs/',
+    ],
+  })

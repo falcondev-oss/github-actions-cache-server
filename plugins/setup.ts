@@ -3,8 +3,9 @@ import { H3Error } from 'h3'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 
-// eslint-disable-next-line ts/no-misused-promises
 export default defineNitroPlugin(async (nitro) => {
+  logger.info(`🚀 Starting GitHub Actions Cache Server (${useRuntimeConfig().version})`)
+
   await import('~/lib/env')
   await import('~/lib/db')
 
