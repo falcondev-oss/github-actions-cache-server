@@ -61,7 +61,7 @@ export async function setup() {
           })
           .start(),
       )
-      // eslint-disable-next-line unicorn/no-useless-undefined
+
       .with('sqlite', () => undefined)
       .exhaustive(),
     await match(storageDriver)
@@ -83,9 +83,9 @@ export async function setup() {
 
         return container
       })
-      // eslint-disable-next-line unicorn/no-useless-undefined
+
       .with('filesystem', () => undefined)
-      // eslint-disable-next-line unicorn/no-useless-undefined
+
       .with('memory', () => undefined)
       .exhaustive(),
   )
