@@ -75,6 +75,18 @@ export async function findKeyMatch(opts: { key: string; version: string; restore
 
   logger.debug('No exact primary matches found')
 
+  const prefixedPrimaryMatch = await db
+    .selectFrom('cache_keys')
+    .where('key', 'like', `${opts.key}%`)
+    .where('version', '=', opts.version)
+    .orderBy('cache_keys.updated_at desc')
+    .selectAll()
+    .executeTakeFirst()
+
+  if (prefixedPrimaryMatch) {
+    return prefixedPrimaryMatch
+  }
+
   if (!opts.restoreKeys) {
     logger.debug('No restore keys provided')
     return
