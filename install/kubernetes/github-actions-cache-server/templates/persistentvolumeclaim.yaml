@@ -1,0 +1,6 @@
+{{- if .Values.persistentVolumeClaim.enabled -}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+{{ .Values.persistentVolumeClaim.template | toYaml }}
+{{- end }}
