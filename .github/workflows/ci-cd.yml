@@ -53,6 +53,7 @@ jobs:
       - run: VITEST_DB_DRIVER=${{ matrix.db-driver }} VITEST_STORAGE_DRIVER=${{ matrix.storage-driver }} pnpm run test:run
 
   deploy:
+    if: github.event.ref == 'refs/heads/dev'
     name: 🚀 Build and push
     permissions:
       packages: write
