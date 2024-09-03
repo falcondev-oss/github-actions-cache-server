@@ -87,6 +87,8 @@ export async function setup() {
       .with('filesystem', () => undefined)
 
       .with('memory', () => undefined)
+
+      .with('gcs', () => undefined)
       .exhaustive(),
   )
 

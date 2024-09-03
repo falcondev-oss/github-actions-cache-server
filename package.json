@@ -24,6 +24,7 @@
     "extends": "gh:falcondev-it/configs/changelogithub"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.12.1",
     "@types/better-sqlite3": "^7.6.11",
     "@types/pg": "^8.11.6",
     "better-sqlite3": "^11.1.2",
