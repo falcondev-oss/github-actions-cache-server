@@ -17,10 +17,13 @@ export const gcsDriver = defineStorageDriver({
     const basePath = 'gh-actions-cache'
 
     return {
-      async upload(stream, objectName) {
+      upload(stream, objectName) {
         const file = bucket.file(`${basePath}/${objectName}`)
-        stream.pipe(file.createWriteStream()).on('error', (err) => {
-          throw err
+        return new Promise((resolve, reject) => {
+          stream
+            .pipe(file.createWriteStream({ resumable: false }))
+            .on('error', reject)
+            .on('finish', resolve)
         })
       },
       async download(objectName) {
