@@ -65,5 +65,10 @@
     "ts-pattern": "^5.2.0",
     "vitest": "^2.0.4",
     "wait-on": "^8.0.0"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "nitropack@2.9.7": "patches/nitropack@2.9.7.patch"
+    }
   }
 }

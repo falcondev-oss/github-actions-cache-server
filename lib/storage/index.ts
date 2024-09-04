@@ -20,7 +20,9 @@ await fs.mkdir(bufferDir, {
   recursive: true,
 })
 
-async function initializeStorageDriver() {
+let storageAdapter: StorageAdapter
+
+export async function initializeStorageAdapter() {
   try {
     const driverName = ENV.STORAGE_DRIVER
     const driverSetup = getStorageDriver(driverName)
@@ -38,7 +40,7 @@ async function initializeStorageDriver() {
     const commitLocks = new Set<number>()
     const uploadChunkLocks = new Map<string, Promise<any>>()
 
-    return <StorageAdapter>{
+    storageAdapter = {
       async reserveCache(key, version, cacheSize) {
         logger.debug('Reserve: Reserving cache for', key, version, cacheSize ?? '[no cache size]')
         const bufferKey = `${key}:${version}`
@@ -199,4 +201,6 @@ async function initializeStorageDriver() {
   }
 }
 
-export const storageAdapter = await initializeStorageDriver()
+export function useStorageAdapter() {
+  return storageAdapter
+}
