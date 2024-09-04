@@ -7,9 +7,13 @@ export const gcsDriver = defineStorageDriver({
   envSchema: z.object({
     STORAGE_GCS_BUCKET: z.string().min(1),
     STORAGE_GCS_SERVICEACCOUNT_KEY: z.string().optional(),
+    STORAGE_GCS_ENDPOINT: z.string().optional(),
   }),
   async setup(options) {
-    const gcs = new Storage({ keyFilename: options.STORAGE_GCS_SERVICEACCOUNT_KEY })
+    const gcs = new Storage({
+      keyFilename: options.STORAGE_GCS_SERVICEACCOUNT_KEY,
+      apiEndpoint: options.STORAGE_GCS_ENDPOINT,
+    })
     const bucket = gcs.bucket(options.STORAGE_GCS_BUCKET)
 
     // Try to load metadata

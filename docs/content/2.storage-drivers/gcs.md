@@ -52,3 +52,9 @@ The name of the GCS bucket used for storage.
 Example: `/config/auth/serviceaccount.json`
 
 Path to the service account key used for authentication. If not set, [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) is used.
+
+#### `STORAGE_GCS_ENDPOINT`
+
+Example: `http://localhost:9000`
+
+The API endpoint for GCS.
