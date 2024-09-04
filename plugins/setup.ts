@@ -33,6 +33,8 @@ export default defineNitroPlugin(async (nitro) => {
       )
     })
   }
+
+  if (process.send) process.send('nitro:ready')
 })
 
 function obfuscateTokenFromPath(path: string) {
