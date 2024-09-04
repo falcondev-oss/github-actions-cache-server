@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        storage-driver: [filesystem, memory, s3]
+        storage-driver: [filesystem, memory, s3, gcs]
         db-driver: [postgres, mysql, sqlite]
     steps:
       - name: pnpm install
