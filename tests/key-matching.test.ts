@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import { findKeyMatch, pruneKeys, updateOrCreateKey } from '~/lib/db'
+import { findKeyMatch, initializeDatabase, pruneKeys, updateOrCreateKey } from '~/lib/db'
+import { initializeStorageAdapter } from '~/lib/storage'
 import { sleep } from '~/tests/utils'
 
 describe('key matching', () => {
-  beforeEach(() => pruneKeys())
+  beforeEach(async () => {
+    await initializeStorageAdapter()
+    await initializeDatabase()
+    await pruneKeys()
+  })
 
   const version = '0577ec58bee6d5415625'
   test('exact primary match', async () => {

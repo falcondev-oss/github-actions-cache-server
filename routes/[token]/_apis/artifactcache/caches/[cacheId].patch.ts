@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { auth } from '~/lib/auth'
 import { logger } from '~/lib/logger'
-import { storageAdapter } from '~/lib/storage'
+import { useStorageAdapter } from '~/lib/storage'
 
 import type { Buffer } from 'node:buffer'
 
@@ -40,7 +40,7 @@ export default defineEventHandler({
       throw createError({ statusCode: 400, statusMessage: 'Invalid content-range header' })
     }
 
-    await storageAdapter.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
+    await useStorageAdapter().uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
   },
 })
 

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { auth } from '~/lib/auth'
-import { storageAdapter } from '~/lib/storage'
+import { useStorageAdapter } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
   cacheId: z.coerce.number(),
@@ -33,6 +33,6 @@ export default defineEventHandler({
 
     const { size } = parsedBody.data
 
-    await storageAdapter.commitCache(cacheId, size)
+    await useStorageAdapter().commitCache(cacheId, size)
   },
 })

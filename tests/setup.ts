@@ -3,18 +3,20 @@ import fs from 'node:fs/promises'
 import { MySqlContainer } from '@testcontainers/mysql'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
 import { configDotenv } from 'dotenv'
-import { build, createDevServer, createNitro, prepare } from 'nitropack'
+import { execa } from 'execa'
+import { build, createNitro, prepare } from 'nitropack'
 import { GenericContainer } from 'testcontainers'
 import { match } from 'ts-pattern'
 
 import type { DatabaseDriverName } from '~/db-drivers'
 import type { StorageDriverName } from '~/storage-drivers'
 
-import type { Nitro, NitroDevServer } from 'nitropack'
+import type { ResultPromise } from 'execa'
+import type { Nitro } from 'nitropack'
 import type { StartedTestContainer } from 'testcontainers'
 
 let nitro: Nitro
-let server: Awaited<ReturnType<NitroDevServer['listen']>>
+let server: ResultPromise
 const testContainers: (StartedTestContainer | undefined)[] = []
 export async function setup() {
   // config
@@ -84,32 +86,60 @@ export async function setup() {
         return container
       })
 
+      .with('gcs', async () => {
+        const container = await new GenericContainer('fsouza/fake-gcs-server:latest')
+          .withEntrypoint(['sh'])
+          .withCommand([
+            `-c`,
+            `mkdir -p /data/test && /bin/fake-gcs-server -scheme http -port 9000 -data /data`,
+          ])
+          .withExposedPorts({
+            container: 9000,
+            host: 9000,
+          })
+          .withHealthCheck({
+            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/storage/v1/b'],
+            interval: 1000,
+            retries: 30,
+            startPeriod: 1000,
+          })
+          .start()
+
+        return container
+      })
+
       .with('filesystem', () => undefined)
 
       .with('memory', () => undefined)
+
       .exhaustive(),
   )
 
   // nitro
   nitro = await createNitro({
-    dev: true,
-    preset: 'nitro-dev',
-  })
-  server = await createDevServer(nitro).listen(3000, {
-    hostname: '0.0.0.0',
-    autoClose: true,
+    dev: false,
+    preset: 'node-server',
   })
   await prepare(nitro)
-  const ready = new Promise<void>((resolve) => {
-    nitro.hooks.hook('dev:reload', () => resolve())
-  })
   await build(nitro)
-  await ready
+
+  server = execa({ node: true, stdio: 'inherit' })`.output/server/index.mjs`
+  server.on('exit', (code) => {
+    if (code === 0) return
+    console.error('Nitro server exited with code', code)
+    // eslint-disable-next-line unicorn/no-process-exit
+    process.exit(1)
+  })
+  await new Promise<void>((resolve) => {
+    server.on('message', (message) => {
+      if (message === 'nitro:ready') resolve()
+    })
+  })
 }
 
 export async function teardown() {
   await fs.rm('tests/temp', { recursive: true })
-  await server?.close()
+  await server?.kill()
   await nitro?.close()
   await Promise.all(testContainers.map((container) => container?.stop()))
 }

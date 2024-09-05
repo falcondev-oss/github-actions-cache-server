@@ -9,6 +9,7 @@ RUN corepack enable
 RUN corepack prepare pnpm@latest-9 --activate
 
 COPY package.json pnpm-lock.yaml .npmrc ./
+COPY patches patches
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm fetch --prod
 

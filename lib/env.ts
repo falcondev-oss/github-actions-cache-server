@@ -3,7 +3,7 @@ import { z } from 'zod'
 const envSchema = z.object({
   URL_ACCESS_TOKEN: z.string().min(1),
   CLEANUP_OLDER_THAN_DAYS: z.coerce.number().int().min(0).default(90),
-  API_BASE_URL: z.string().min(1),
+  API_BASE_URL: z.string().url(),
   STORAGE_DRIVER: z.string().toLowerCase().default('filesystem'),
   DB_DRIVER: z.string().toLowerCase().default('sqlite'),
   TEMP_DIR: z.string().min(1).default('/tmp'),

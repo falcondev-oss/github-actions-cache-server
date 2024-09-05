@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: '**'
+  pull_request:
+    branches:
+      - dev
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -41,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        storage-driver: [filesystem, memory, s3]
+        storage-driver: [filesystem, memory, s3, gcs]
         db-driver: [postgres, mysql, sqlite]
     steps:
       - name: pnpm install
@@ -50,6 +53,7 @@ jobs:
       - run: VITEST_DB_DRIVER=${{ matrix.db-driver }} VITEST_STORAGE_DRIVER=${{ matrix.storage-driver }} pnpm run test:run
 
   deploy:
+    if: github.event.ref == 'refs/heads/dev'
     name: 🚀 Build and push
     permissions:
       packages: write
