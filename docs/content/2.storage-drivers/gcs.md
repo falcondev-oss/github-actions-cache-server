@@ -26,7 +26,7 @@ services:
       STORAGE_DRIVER: gcs
       STORAGE_GCS_BUCKET: gh-actions-cache
       # Optional, not required if running in GCP
-      STORAGE_GCS_SERVICEACCOUNT_KEY: /gcp/config/application_default_credentials.json
+      STORAGE_GCS_SERVICE_ACCOUNT_KEY: /gcp/config/application_default_credentials.json
     volumes:
       - cache-data:/app/.data
 
@@ -47,7 +47,7 @@ Example: `gh-actions-cache`
 
 The name of the GCS bucket used for storage.
 
-#### `STORAGE_GCS_SERVICEACCOUNT_KEY`
+#### `STORAGE_GCS_SERVICE_ACCOUNT_KEY`
 
 Example: `/config/auth/serviceaccount.json`
 
