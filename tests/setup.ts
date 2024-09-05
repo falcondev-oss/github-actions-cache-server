@@ -84,9 +84,32 @@ export async function setup() {
         return container
       })
 
+      .with('gcs', async () => {
+        const container = await new GenericContainer('fsouza/fake-gcs-server:latest')
+          .withEntrypoint(['sh'])
+          .withCommand([
+            `-c`,
+            `mkdir -p /data/test && /bin/fake-gcs-server -scheme http -port 9000 -data /data`,
+          ])
+          .withExposedPorts({
+            container: 9000,
+            host: 9000,
+          })
+          .withHealthCheck({
+            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/storage/v1/b'],
+            interval: 1000,
+            retries: 30,
+            startPeriod: 1000,
+          })
+          .start()
+
+        return container
+      })
+
       .with('filesystem', () => undefined)
 
       .with('memory', () => undefined)
+
       .exhaustive(),
   )
 
