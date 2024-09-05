@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   nitropack@2.9.7:
-    hash: 5jzt5xmsj2g5xhzhrvvozuqgla
+    hash: 3rb24ro622kzclnokw2o7a35ey
     path: patches/nitropack@2.9.7.patch
 
 importers:
@@ -45,7 +45,7 @@ importers:
         version: 3.11.0
       nitropack:
         specifier: ^2.9.7
-        version: 2.9.7(patch_hash=5jzt5xmsj2g5xhzhrvvozuqgla)(@azure/storage-blob@12.24.0)(better-sqlite3@11.2.1)
+        version: 2.9.7(patch_hash=3rb24ro622kzclnokw2o7a35ey)(@azure/storage-blob@12.24.0)(better-sqlite3@11.2.1)
       pg:
         specifier: ^8.12.0
         version: 8.12.0
@@ -3608,10 +3608,6 @@ packages:
     resolution: {integrity: sha512-lKwV/1brpG6mBUFHtb7NUmtABCb2WZZmm2wNiOA5hAb8VdCS4B3dtMWyvcoViccwAW/COERjXLt0zP1zXUN26g==}
     engines: {node: '>=10'}
 
-  minimatch@9.0.4:
-    resolution: {integrity: sha512-KqWh+VchfxcMNRAJjj2tnsSJdNbHsVgnkBhTNrW7AjVo6OvLtxw8zfT9oLw1JSohlFzJ8jCoTgaoXvJ+kHt6fw==}
-    engines: {node: '>=16 || 14 >=14.17'}
-
   minimatch@9.0.5:
     resolution: {integrity: sha512-G6T0ZX48xgozx7587koeX9Ys2NYy6Gmv//P89sEte9V9whIapMNF4idKxnW2QtCcLiTWlb/wfCabAtAFWhhBow==}
     engines: {node: '>=16 || 14 >=14.17'}
@@ -6843,7 +6839,7 @@ snapshots:
 
   agent-base@6.0.2:
     dependencies:
-      debug: 4.3.4
+      debug: 4.3.6
     transitivePeerDependencies:
       - supports-color
 
@@ -8555,7 +8551,7 @@ snapshots:
     dependencies:
       foreground-child: 3.1.1
       jackspeak: 2.3.6
-      minimatch: 9.0.4
+      minimatch: 9.0.5
       minipass: 7.1.1
       path-scurry: 1.11.1
 
@@ -8694,7 +8690,7 @@ snapshots:
   https-proxy-agent@5.0.1:
     dependencies:
       agent-base: 6.0.2
-      debug: 4.3.4
+      debug: 4.3.6
     transitivePeerDependencies:
       - supports-color
 
@@ -9278,10 +9274,6 @@ snapshots:
     dependencies:
       brace-expansion: 2.0.1
 
-  minimatch@9.0.4:
-    dependencies:
-      brace-expansion: 2.0.1
-
   minimatch@9.0.5:
     dependencies:
       brace-expansion: 2.0.1
@@ -9373,7 +9365,7 @@ snapshots:
 
   natural-compare@1.4.0: {}
 
-  nitropack@2.9.7(patch_hash=5jzt5xmsj2g5xhzhrvvozuqgla)(@azure/storage-blob@12.24.0)(better-sqlite3@11.2.1):
+  nitropack@2.9.7(patch_hash=3rb24ro622kzclnokw2o7a35ey)(@azure/storage-blob@12.24.0)(better-sqlite3@11.2.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.3.4
       '@netlify/functions': 2.8.1
@@ -10123,7 +10115,7 @@ snapshots:
 
   rxjs@7.8.1:
     dependencies:
-      tslib: 2.6.2
+      tslib: 2.7.0
 
   safe-array-concat@1.1.2:
     dependencies:
