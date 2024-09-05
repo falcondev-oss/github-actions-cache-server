@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { auth } from '~/lib/auth'
-import { storageAdapter } from '~/lib/storage'
+import { useStorageAdapter } from '~/lib/storage'
 import type { ArtifactCacheEntry } from '~/lib/types'
 
 const queryParamSchema = z.object({
@@ -24,7 +24,7 @@ export default defineEventHandler({
 
     const { keys, version } = parsedQuery.data
 
-    const storageEntry = await storageAdapter.getCacheEntry(keys, version)
+    const storageEntry = await useStorageAdapter().getCacheEntry(keys, version)
 
     if (!storageEntry) {
       setResponseStatus(event, 204)

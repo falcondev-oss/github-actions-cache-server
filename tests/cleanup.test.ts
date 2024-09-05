@@ -1,9 +1,21 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import { findKeyMatch, findStaleKeys, pruneKeys, touchKey, updateOrCreateKey } from '~/lib/db'
+import {
+  findKeyMatch,
+  findStaleKeys,
+  initializeDatabase,
+  pruneKeys,
+  touchKey,
+  updateOrCreateKey,
+} from '~/lib/db'
+import { initializeStorageAdapter } from '~/lib/storage'
 
 describe('setting last accessed date', () => {
-  beforeEach(() => pruneKeys())
+  beforeEach(async () => {
+    await initializeStorageAdapter()
+    await initializeDatabase()
+    await pruneKeys()
+  })
 
   const version = '0577ec58bee6d5415625'
   test('`updateOrCreateKey` sets accessed_at', async () => {

@@ -1,0 +1,41 @@
+diff --git a/dist/runtime/app.mjs b/dist/runtime/app.mjs
+index 6e968f59e719851b0fc166bc02a30e41ebbb8e63..10d19fed1cf71f82d912be1210dc9ec906fe9d6f 100644
+--- a/dist/runtime/app.mjs
++++ b/dist/runtime/app.mjs
+@@ -22,7 +22,7 @@ import { nitroAsyncContext } from "./context.mjs";
+ import { plugins } from "#internal/nitro/virtual/plugins";
+ import errorHandler from "#internal/nitro/virtual/error-handler";
+ import { handlers } from "#internal/nitro/virtual/server-handlers";
+-function createNitroApp() {
++async function createNitroApp() {
+   const config = useRuntimeConfig();
+   const hooks = createHooks();
+   const captureError = (error, context = {}) => {
+@@ -140,7 +140,7 @@ function createNitroApp() {
+   };
+   for (const plugin of plugins) {
+     try {
+-      plugin(app);
++      await plugin(app);
+     } catch (err) {
+       captureError(err, { tags: ["plugin"] });
+       throw err;
+@@ -148,5 +148,5 @@ function createNitroApp() {
+   }
+   return app;
+ }
+-export const nitroApp = createNitroApp();
++export const nitroApp = await createNitroApp();
+ export const useNitroApp = () => nitroApp;
+diff --git a/dist/runtime/plugin.d.ts b/dist/runtime/plugin.d.ts
+index a83e51dc732331862e8eac011e97ae784ee525b8..7907875fe883e837e9305acccdd4cd55a1bf3353 100644
+--- a/dist/runtime/plugin.d.ts
++++ b/dist/runtime/plugin.d.ts
+@@ -1,6 +1,6 @@
+ import type { NitroApp } from "./app";
+ export interface NitroAppPlugin {
+-    (nitro: NitroApp): void;
++    (nitro: NitroApp): Promise<void> | void;
+ }
+ export declare function defineNitroPlugin(def: NitroAppPlugin): NitroAppPlugin;
+ export declare const nitroPlugin: typeof defineNitroPlugin;

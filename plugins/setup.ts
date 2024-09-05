@@ -1,13 +1,15 @@
 import { H3Error } from 'h3'
 
+import { initializeDatabase } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
+import { initializeStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
   logger.info(`🚀 Starting GitHub Actions Cache Server (${useRuntimeConfig().version})`)
 
-  await import('~/lib/env')
-  await import('~/lib/db')
+  await initializeDatabase()
+  await initializeStorageAdapter()
 
   nitro.hooks.hook('error', (error, { event }) => {
     if (!event) {
@@ -31,6 +33,8 @@ export default defineNitroPlugin(async (nitro) => {
       )
     })
   }
+
+  if (process.send) process.send('nitro:ready')
 })
 
 function obfuscateTokenFromPath(path: string) {

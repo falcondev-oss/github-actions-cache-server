@@ -19,7 +19,9 @@ export interface CacheKeysTable {
   accessed_at: string
 }
 
-async function initializeDatabase() {
+let db: Kysely<Database>
+
+export async function initializeDatabase() {
   const driverName = ENV.DB_DRIVER
   const driverSetup = getDatabaseDriver(driverName)
   if (!driverSetup) {
@@ -31,7 +33,7 @@ async function initializeDatabase() {
 
   const driver = await driverSetup()
 
-  const db = new Kysely<Database>({
+  db = new Kysely<Database>({
     dialect: driver,
   })
 
@@ -52,11 +54,7 @@ async function initializeDatabase() {
   }
   logger.debug('Migration results', results)
   logger.success('Database migrated')
-
-  return db
 }
-
-const db = await initializeDatabase()
 
 /**
  * @see https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#matching-a-cache-key
