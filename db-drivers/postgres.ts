@@ -6,13 +6,15 @@ import { defineDatabaseDriver } from '~/lib/db/driver'
 
 export const postgresDriver = defineDatabaseDriver({
   envSchema: z.object({
-    DB_POSTGRES_DATABASE: z.string(),
-    DB_POSTGRES_HOST: z.string(),
-    DB_POSTGRES_USER: z.string(),
-    DB_POSTGRES_PASSWORD: z.string(),
-    DB_POSTGRES_PORT: z.coerce.number().int(),
+    DB_POSTGRES_CONNECTION_STRING: z.string().optional(),
+    DB_POSTGRES_DATABASE: z.string().optional(),
+    DB_POSTGRES_HOST: z.string().optional(),
+    DB_POSTGRES_USER: z.string().optional(),
+    DB_POSTGRES_PASSWORD: z.string().optional(),
+    DB_POSTGRES_PORT: z.coerce.number().int().optional(),
   }),
   async setup({
+    DB_POSTGRES_CONNECTION_STRING,
     DB_POSTGRES_DATABASE,
     DB_POSTGRES_HOST,
     DB_POSTGRES_PASSWORD,
@@ -20,11 +22,12 @@ export const postgresDriver = defineDatabaseDriver({
     DB_POSTGRES_USER,
   }) {
     const pool = new pg.Pool({
-      database: DB_POSTGRES_DATABASE,
-      host: DB_POSTGRES_HOST,
-      password: DB_POSTGRES_PASSWORD,
-      port: DB_POSTGRES_PORT,
-      user: DB_POSTGRES_USER,
+      connectionString: DB_POSTGRES_CONNECTION_STRING || undefined,
+      database: DB_POSTGRES_DATABASE || undefined,
+      host: DB_POSTGRES_HOST || undefined,
+      password: DB_POSTGRES_PASSWORD || undefined,
+      port: DB_POSTGRES_PORT || undefined,
+      user: DB_POSTGRES_USER || undefined,
       max: 10,
     })
     await pool.connect()
