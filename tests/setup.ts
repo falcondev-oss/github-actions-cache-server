@@ -8,15 +8,18 @@ import { build, createNitro, prepare } from 'nitropack'
 import { GenericContainer } from 'testcontainers'
 import { match } from 'ts-pattern'
 
-import type { DatabaseDriverName } from '~/db-drivers'
-import type { StorageDriverName } from '~/storage-drivers'
+import type { DatabaseDriverName } from '~/lib/db/drivers'
+import type { StorageDriverName } from '~/lib/storage/drivers'
 
 import type { ResultPromise } from 'execa'
 import type { Nitro } from 'nitropack'
 import type { StartedTestContainer } from 'testcontainers'
 
 let nitro: Nitro
-let server: ResultPromise
+let server: ResultPromise<{
+  node: true
+  stdio: 'inherit'
+}>
 const testContainers: (StartedTestContainer | undefined)[] = []
 export async function setup() {
   // config
@@ -63,7 +66,6 @@ export async function setup() {
           })
           .start(),
       )
-
       .with('sqlite', () => undefined)
       .exhaustive(),
     await match(storageDriver)
@@ -110,8 +112,6 @@ export async function setup() {
 
       .with('filesystem', () => undefined)
 
-      .with('memory', () => undefined)
-
       .exhaustive(),
   )
 
@@ -130,11 +130,13 @@ export async function setup() {
     // eslint-disable-next-line unicorn/no-process-exit
     process.exit(1)
   })
-  await new Promise<void>((resolve) => {
+  // eslint-disable-next-line unicorn/no-process-exit
+  server.addListener('error', () => process.exit(1))
+  await new Promise<void>((resolve) =>
     server.on('message', (message) => {
       if (message === 'nitro:ready') resolve()
-    })
-  })
+    }),
+  )
 }
 
 export async function teardown() {

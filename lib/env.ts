@@ -1,16 +1,16 @@
 import { z } from 'zod'
 
+const booleanSchema = z.string().transform((v) => v.toLowerCase() === 'true')
+
 const envSchema = z.object({
+  ENABLE_DIRECT_DOWNLOADS: booleanSchema.default('false'),
+  DOWNLOAD_SECRET_KEY: z.string(),
   URL_ACCESS_TOKEN: z.string().min(1),
   CLEANUP_OLDER_THAN_DAYS: z.coerce.number().int().min(0).default(90),
   API_BASE_URL: z.string().url(),
   STORAGE_DRIVER: z.string().toLowerCase().default('filesystem'),
   DB_DRIVER: z.string().toLowerCase().default('sqlite'),
-  TEMP_DIR: z.string().min(1).default('/tmp'),
-  DEBUG: z
-    .string()
-    .transform((v) => v === 'true')
-    .default('false'),
+  DEBUG: booleanSchema.default('false'),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)

@@ -1,7 +1,7 @@
-import { mysqlDriver } from '~/db-drivers/mysql'
-import { postgresDriver } from '~/db-drivers/postgres'
-import { sqliteDriver } from '~/db-drivers/sqlite'
-import type { defineDatabaseDriver } from '~/lib/db/driver'
+import type { defineDatabaseDriver } from '~/lib/db/defineDatabaseDriver'
+import { mysqlDriver } from '~/lib/db/drivers/mysql'
+import { postgresDriver } from '~/lib/db/drivers/postgres'
+import { sqliteDriver } from '~/lib/db/drivers/sqlite'
 
 const databaseDrivers = {
   sqlite: sqliteDriver,

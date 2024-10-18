@@ -1,4 +1,4 @@
-FROM node:20-alpine as builder
+FROM node:22-alpine as builder
 
 ARG BUILD_HASH
 ENV BUILD_HASH=${BUILD_HASH}
@@ -21,7 +21,7 @@ RUN pnpm run build
 
 # --------------------------------------------
 
-FROM node:20-alpine as runner
+FROM node:22-alpine as runner
 
 WORKDIR /app
 
