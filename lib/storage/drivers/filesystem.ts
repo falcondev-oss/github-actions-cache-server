@@ -3,7 +3,6 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { ENV } from '~/lib/env'
 import { defineStorageDriver } from '~/lib/storage/defineStorageDriver'
 
 export const filesystemDriver = defineStorageDriver({
@@ -16,6 +15,12 @@ export const filesystemDriver = defineStorageDriver({
     await fs.mkdir(basePath, {
       recursive: true,
     })
+
+    const tempDir = await fs.mkdtemp('github-actions-cache-server')
+
+    function getUploadBufferPath(uploadId: string) {
+      return path.join(tempDir, uploadId)
+    }
 
     function getStoragePath(objectName: string) {
       return path.join(basePath, objectName)
@@ -69,7 +74,3 @@ export const filesystemDriver = defineStorageDriver({
     }
   },
 })
-
-function getUploadBufferPath(uploadId: string) {
-  return path.join(ENV.TEMP_DIR, 'github-actions-cache-server', uploadId)
-}
