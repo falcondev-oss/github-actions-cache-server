@@ -2,7 +2,7 @@ import { PostgresDialect } from 'kysely'
 import pg from 'pg'
 import { z } from 'zod'
 
-import { defineDatabaseDriver } from '~/lib/db/driver'
+import { defineDatabaseDriver } from '~/lib/db/defineDatabaseDriver'
 
 export const postgresDriver = defineDatabaseDriver({
   envSchema: z.object({

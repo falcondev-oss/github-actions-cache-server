@@ -2,7 +2,6 @@ import { z } from 'zod'
 
 import { auth } from '~/lib/auth'
 import { useStorageAdapter } from '~/lib/storage'
-import type { ArtifactCacheEntry } from '~/lib/types'
 
 const queryParamSchema = z.object({
   keys: z
@@ -31,6 +30,6 @@ export default defineEventHandler({
       return
     }
 
-    return storageEntry satisfies ArtifactCacheEntry
+    return storageEntry
   },
 })

@@ -1,3 +1,4 @@
+/* eslint-disable unicorn/filename-case */
 import { formatZodError } from '~/lib/env'
 import { logger } from '~/lib/logger'
 

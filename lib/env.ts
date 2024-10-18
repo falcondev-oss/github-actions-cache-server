@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
+const booleanSchema = z.string().transform((v) => v.toLowerCase() === 'true')
+
 const envSchema = z.object({
+  ENABLE_DIRECT_DOWNLOADS: booleanSchema.default('false'),
+  DOWNLOAD_SECRET_KEY: z.string(),
   URL_ACCESS_TOKEN: z.string().min(1),
   CLEANUP_OLDER_THAN_DAYS: z.coerce.number().int().min(0).default(90),
   API_BASE_URL: z.string().url(),
