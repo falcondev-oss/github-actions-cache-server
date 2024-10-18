@@ -16,5 +16,6 @@ export default defineNitroPlugin(() => {
   )
   job.schedule(async () => {
     await useStorageAdapter().pruneCaches(ENV.CLEANUP_OLDER_THAN_DAYS)
+    await useStorageAdapter().pruneUploads()
   })
 })

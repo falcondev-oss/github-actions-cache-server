@@ -43,6 +43,7 @@ export interface Storage {
     cacheId: number | null
   }>
   pruneCaches: (olderThanDays?: number) => Promise<void>
+  pruneUploads: () => Promise<void>
 }
 
 let storage: Storage
@@ -233,6 +234,28 @@ export async function initializeStorage() {
         logger.debug('Prune: Caches pruned', {
           olderThanDays,
         })
+      },
+      async pruneUploads() {
+        logger.debug('Prune uploads')
+
+        // uploads older than 24 hours
+        const uploads = await db
+          .selectFrom('uploads')
+          .selectAll()
+          .where('created_at', '<', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+          .execute()
+
+        for (const upload of uploads) {
+          await driver
+            .abortMultipartUpload({
+              uploadId: upload.driver_upload_id,
+              objectName: getObjectNameFromKey(upload.key, upload.version),
+            })
+            .catch(() => {
+              // noop
+            })
+          await db.deleteFrom('uploads').where('id', '=', upload.id)
+        }
       },
     }
   } catch (err) {
