@@ -84,7 +84,7 @@ export async function initializeStorage() {
           .values({
             created_at: new Date().toISOString(),
             driver_upload_id: driverUploadId,
-            id: uploadId,
+            id: uploadId.toString(),
             key,
             version,
           })
@@ -105,7 +105,7 @@ export async function initializeStorage() {
         const upload = await db
           .selectFrom('uploads')
           .selectAll()
-          .where('id', '=', uploadId)
+          .where('id', '=', uploadId.toString())
           .executeTakeFirst()
         if (!upload) {
           logger.debug(`Upload: Upload not found. Ignoring...`, {
@@ -138,7 +138,7 @@ export async function initializeStorage() {
             .insertInto('upload_parts')
             .values({
               part_number: partNumber,
-              upload_id: uploadId,
+              upload_id: uploadId.toString(),
               e_tag: eTag,
             })
             .execute()
@@ -157,7 +157,7 @@ export async function initializeStorage() {
         const upload = await db
           .selectFrom('uploads')
           .selectAll()
-          .where('id', '=', uploadId)
+          .where('id', '=', uploadId.toString())
           .executeTakeFirst()
 
         if (!upload) {

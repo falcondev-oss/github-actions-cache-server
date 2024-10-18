@@ -1,3 +1,5 @@
+import { hash } from 'node:crypto'
+
 import { Kysely, Migrator } from 'kysely'
 
 import type { DatabaseDriverName } from '~/lib/db/drivers'
@@ -9,6 +11,7 @@ import { logger } from '~/lib/logger'
 import type { Selectable } from 'kysely'
 
 export interface CacheKeysTable {
+  id: string
   key: string
   version: string
   updated_at: string
@@ -18,11 +21,11 @@ export interface UploadsTable {
   created_at: string
   key: string
   version: string
-  id: number
+  id: string
   driver_upload_id: string
 }
 export interface UploadPartsTable {
-  upload_id: number
+  upload_id: string
   part_number: number
   e_tag: string | null
 }
@@ -86,8 +89,7 @@ export async function findKeyMatch(
   logger.debug('Finding key match', args)
   const exactPrimaryMatch = await db
     .selectFrom('cache_keys')
-    .where('key', '=', args.key)
-    .where('version', '=', args.version)
+    .where('id', '=', getCacheKeyId(args.key, args.version))
     .selectAll()
     .executeTakeFirst()
   if (exactPrimaryMatch) {
@@ -117,8 +119,7 @@ export async function findKeyMatch(
   for (const key of args.restoreKeys) {
     const exactMatch = await db
       .selectFrom('cache_keys')
-      .where('version', '=', args.version)
-      .where('key', '=', key)
+      .where('id', '=', getCacheKeyId(key, args.version))
       .orderBy('cache_keys.updated_at desc')
       .selectAll()
       .executeTakeFirst()
@@ -161,8 +162,7 @@ export async function updateOrCreateKey(
     .updateTable('cache_keys')
     .set('updated_at', now.toISOString())
     .set('accessed_at', now.toISOString())
-    .where('key', '=', key)
-    .where('version', '=', version)
+    .where('id', '=', getCacheKeyId(key, version))
     .executeTakeFirst()
   if (Number(updateResult.numUpdatedRows) === 0) {
     await createKey(db, { key, version, date })
@@ -177,8 +177,7 @@ export async function touchKey(
   await db
     .updateTable('cache_keys')
     .set('accessed_at', now.toISOString())
-    .where('key', '=', key)
-    .where('version', '=', version)
+    .where('id', '=', getCacheKeyId(key, version))
     .execute()
 }
 
@@ -205,6 +204,7 @@ export async function createKey(
   await db
     .insertInto('cache_keys')
     .values({
+      id: getCacheKeyId(key, version),
       key,
       version,
       updated_at: now.toISOString(),
@@ -213,15 +213,15 @@ export async function createKey(
     .execute()
 }
 
+function getCacheKeyId(key: string, version: string) {
+  return hash('sha256', Buffer.from(`${key}-${version}`))
+}
+
 export async function pruneKeys(db: DB, keys?: Selectable<CacheKeysTable>[]) {
   if (keys) {
     await db.transaction().execute(async (tx) => {
       for (const { key, version } of keys ?? []) {
-        await tx
-          .deleteFrom('cache_keys')
-          .where('key', '=', key)
-          .where('version', '=', version)
-          .execute()
+        await tx.deleteFrom('cache_keys').where('id', '=', getCacheKeyId(key, version)).execute()
       }
     })
   } else {
