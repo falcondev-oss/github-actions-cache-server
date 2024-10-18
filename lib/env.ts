@@ -11,10 +11,7 @@ const envSchema = z.object({
   STORAGE_DRIVER: z.string().toLowerCase().default('filesystem'),
   DB_DRIVER: z.string().toLowerCase().default('sqlite'),
   TEMP_DIR: z.string().min(1).default('/tmp'),
-  DEBUG: z
-    .string()
-    .transform((v) => v === 'true')
-    .default('false'),
+  DEBUG: booleanSchema.default('false'),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)
