@@ -4,7 +4,7 @@ import type { DatabaseDriverName } from '~/lib/db/drivers'
 
 export function migrations(dbType: DatabaseDriverName) {
   return {
-    '2024-04-20T11:18:44': {
+    cache_keys_table: {
       async up(db) {
         let query = db.schema
           .createTable('cache_keys')
@@ -22,7 +22,7 @@ export function migrations(dbType: DatabaseDriverName) {
         await db.schema.dropTable('cache_keys').ifExists().execute()
       },
     },
-    '2024-10-15T16:39:29': {
+    uploads_and_upload_parts_tables: {
       async up(db) {
         await db.schema
           .createTable('uploads')
