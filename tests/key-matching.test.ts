@@ -1,21 +1,22 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import { findKeyMatch, initializeDatabase, pruneKeys, updateOrCreateKey } from '~/lib/db'
-import { initializeStorageAdapter } from '~/lib/storage'
+import { findKeyMatch, initializeDatabase, pruneKeys, updateOrCreateKey, useDB } from '~/lib/db'
+import { initializeStorage } from '~/lib/storage'
 import { sleep } from '~/tests/utils'
 
 describe('key matching', () => {
   beforeEach(async () => {
-    await initializeStorageAdapter()
+    await initializeStorage()
     await initializeDatabase()
-    await pruneKeys()
+    await pruneKeys(useDB())
   })
 
   const version = '0577ec58bee6d5415625'
   test('exact primary match', async () => {
-    await updateOrCreateKey('cache-a', version)
+    const db = useDB()
+    await updateOrCreateKey(db, { key: 'cache-a', version })
 
-    const match = await findKeyMatch({
+    const match = await findKeyMatch(db, {
       key: 'cache-a',
       version,
     })
@@ -24,9 +25,10 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('exact restore key match', async () => {
-    await updateOrCreateKey('cache-a', version)
+    const db = useDB()
+    await updateOrCreateKey(db, { key: 'cache-a', version })
 
-    const match = await findKeyMatch({
+    const match = await findKeyMatch(db, {
       key: 'cache-b',
       version,
       restoreKeys: ['cache-a'],
@@ -36,9 +38,10 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('prefixed restore key match', async () => {
-    await updateOrCreateKey('prefixed-cache-a', version)
+    const db = useDB()
+    await updateOrCreateKey(db, { key: 'prefixed-cache-a', version })
 
-    const match = await findKeyMatch({
+    const match = await findKeyMatch(db, {
       key: 'prefixed-cache-b',
       version,
       restoreKeys: ['prefixed-cache'],
@@ -48,10 +51,11 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('restore key match with multiple keys', async () => {
-    await updateOrCreateKey('cache-a', version)
-    await updateOrCreateKey('cache-b', version)
+    const db = useDB()
+    await updateOrCreateKey(db, { key: 'cache-a', version })
+    await updateOrCreateKey(db, { key: 'cache-b', version })
 
-    const match = await findKeyMatch({
+    const match = await findKeyMatch(db, {
       key: 'cache-c',
       version,
       restoreKeys: ['cache-a', 'cache-b'],
@@ -61,11 +65,12 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('prefixed restore key match with multiple keys returns newest key', async () => {
-    await updateOrCreateKey('prefixed-cache-a', version)
+    const db = useDB()
+    await updateOrCreateKey(db, { key: 'prefixed-cache-a', version })
     await sleep(10)
-    await updateOrCreateKey('prefixed-cache-b', version)
+    await updateOrCreateKey(db, { key: 'prefixed-cache-b', version })
 
-    const match = await findKeyMatch({
+    const match = await findKeyMatch(db, {
       key: 'prefixed-cache-c',
       version,
       restoreKeys: ['prefixed-cache'],
@@ -75,11 +80,12 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('restore key prefers exact match over prefixed match', async () => {
-    await updateOrCreateKey('prefixed-cache', version)
+    const db = useDB()
+    await updateOrCreateKey(db, { key: 'prefixed-cache', version })
     await sleep(10)
-    await updateOrCreateKey('prefixed-cache-a', version)
+    await updateOrCreateKey(db, { key: 'prefixed-cache-a', version })
 
-    const match = await findKeyMatch({
+    const match = await findKeyMatch(db, {
       key: 'prefixed-cache-b',
       version,
       restoreKeys: ['prefixed-cache'],

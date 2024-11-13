@@ -3,13 +3,13 @@ import { H3Error } from 'h3'
 import { initializeDatabase } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
-import { initializeStorageAdapter } from '~/lib/storage'
+import { initializeStorage } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
   logger.info(`🚀 Starting GitHub Actions Cache Server (${useRuntimeConfig().version})`)
 
   await initializeDatabase()
-  await initializeStorageAdapter()
+  await initializeStorage()
 
   nitro.hooks.hook('error', (error, { event }) => {
     if (!event) {

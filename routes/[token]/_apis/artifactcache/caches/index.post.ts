@@ -2,7 +2,6 @@ import { z } from 'zod'
 
 import { auth } from '~/lib/auth'
 import { useStorageAdapter } from '~/lib/storage'
-import type { ReserveCacheResponse } from '~/lib/types'
 
 const bodySchema = z.object({
   key: z.string().min(1),
@@ -23,8 +22,6 @@ export default defineEventHandler({
 
     const { cacheSize, key, version } = parsedBody.data
 
-    const response = await useStorageAdapter().reserveCache(key, version, cacheSize ?? undefined)
-
-    return response satisfies ReserveCacheResponse
+    return useStorageAdapter().reserveCache(key, version, cacheSize ?? undefined)
   },
 })
