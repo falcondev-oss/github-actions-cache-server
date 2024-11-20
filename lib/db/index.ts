@@ -244,18 +244,3 @@ export async function uploadExists(db: DB, { key, version }: { key: string; vers
     .executeTakeFirst()
   return !!row
 }
-
-export async function upsertVersion(db: DB, version: string) {
-  const existing = await db
-    .selectFrom('meta')
-    .where('key', '=', 'version')
-    .select('value')
-    .executeTakeFirst()
-  if (existing) {
-    await db.updateTable('meta').set('value', version).where('key', '=', 'version').execute()
-  } else {
-    await db.insertInto('meta').values({ key: 'version', value: version }).execute()
-  }
-
-  return version !== existing?.value
-}
