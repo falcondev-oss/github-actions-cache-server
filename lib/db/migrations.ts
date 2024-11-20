@@ -4,7 +4,7 @@ import type { DatabaseDriverName } from '~/lib/db/drivers'
 
 export function migrations(dbType: DatabaseDriverName) {
   return {
-    cache_keys_table: {
+    $0_cache_keys_table: {
       async up(db) {
         let query = db.schema
           .createTable('cache_keys')
@@ -22,7 +22,7 @@ export function migrations(dbType: DatabaseDriverName) {
         await db.schema.dropTable('cache_keys').ifExists().execute()
       },
     },
-    uploads_and_upload_parts_tables: {
+    $1_uploads_and_upload_parts_tables: {
       async up(db) {
         await db.schema
           .createTable('uploads')
@@ -54,6 +54,19 @@ export function migrations(dbType: DatabaseDriverName) {
       async down(db) {
         await db.schema.dropTable('uploads').ifExists().execute()
         await db.schema.dropTable('upload_parts').ifExists().execute()
+      },
+    },
+    $2_meta_table: {
+      async up(db) {
+        await db.schema
+          .createTable('meta')
+          .addColumn('key', dbType === 'mysql' ? 'varchar(255)' : 'text', (c) => c.primaryKey())
+          .addColumn('value', 'text')
+          .ifNotExists()
+          .execute()
+      },
+      async down(db) {
+        await db.schema.dropTable('meta').ifExists().execute()
       },
     },
   } satisfies Record<string, Migration>
