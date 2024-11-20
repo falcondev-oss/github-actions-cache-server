@@ -14,6 +14,7 @@ export default eslintConfig({
   .append({
     rules: {
       'compat/compat': 'off',
+      'node/prefer-global/buffer': 'off',
     },
   })
   .append({

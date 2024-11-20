@@ -33,15 +33,13 @@ features:
     - title: Storage Drivers
       description: Support for multiple storage drivers like S3, file system, and more.
       icon: i-ph-database-fill
-      to: /
+      to: /getting-started/storage-drivers
       target: _blank
     - title: No Workflow Changes
       description: No need to change any workflow files, just deploy and start using.
       icon: i-simple-icons-githubactions
-      to: /
-      target: _blank
     - title: Self-Hosted
       description: Host your own cache server to keep your data private and increase caching speed.
       icon: i-ph-lock-fill
-      to: /
+      to: /getting-started
       target: _blank

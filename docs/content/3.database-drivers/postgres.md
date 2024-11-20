@@ -26,3 +26,7 @@ The user to authenticate with the PostgreSQL database.
 #### `DB_POSTGRES_PASSWORD`
 
 The password to authenticate with the PostgreSQL database.
+
+#### `DB_POSTGRES_URL`
+
+The full URL to the PostgreSQL database. This is an alternative to the above configuration options.

@@ -1,28 +1,54 @@
-import { createHash, randomBytes, randomInt } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import fs from 'node:fs/promises'
-import path from 'node:path'
+import { randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
-import { findKeyMatch, findStaleKeys, pruneKeys, touchKey, updateOrCreateKey } from '~/lib/db'
+import {
+  findKeyMatch,
+  findStaleKeys,
+  pruneKeys,
+  touchKey,
+  updateOrCreateKey,
+  uploadExists,
+  useDB,
+} from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
-import { encodeCacheKey } from '~/lib/storage/driver'
-import type { StorageAdapter } from '~/lib/types'
-import { getStorageDriver } from '~/storage-drivers'
+import { getStorageDriver } from '~/lib/storage/drivers'
+import { getObjectNameFromKey } from '~/lib/utils'
 
 import type { Buffer } from 'node:buffer'
+import type { Readable } from 'node:stream'
 
-export const DOWNLOAD_SECRET_KEY = randomBytes(32).toString('hex')
-export const bufferDir = path.join(ENV.TEMP_DIR, 'github-actions-cache-server/upload-buffers')
-await fs.mkdir(bufferDir, {
-  recursive: true,
-})
+export interface Storage {
+  getCacheEntry: (
+    keys: string[],
+    version: string,
+  ) => Promise<{
+    cacheKey?: string
+    archiveLocation: string
+  } | null>
+  download: (objectName: string) => Promise<ReadableStream | Readable>
+  uploadChunk: (
+    uploadId: number,
+    chunkStream: ReadableStream<Buffer>,
+    chunkStart: number,
+    chunkEnd: number,
+  ) => Promise<void>
+  commitCache: (uploadId: number, size: number) => Promise<void>
+  reserveCache: (
+    key: string,
+    version: string,
+    cacheSize?: number,
+  ) => Promise<{
+    cacheId: number | null
+  }>
+  pruneCaches: (olderThanDays?: number) => Promise<void>
+  pruneUploads: () => Promise<void>
+}
 
-let storageAdapter: StorageAdapter
+let storage: Storage
 
-export async function initializeStorageAdapter() {
+export async function initializeStorage() {
   try {
     const driverName = ENV.STORAGE_DRIVER
     const driverSetup = getStorageDriver(driverName)
@@ -34,164 +60,207 @@ export async function initializeStorageAdapter() {
     logger.info(`Using storage driver: ${driverName}`)
 
     const driver = await driverSetup()
+    const db = useDB()
 
-    const uploadFileBuffers = new Map<string, string>()
-    const cacheKeyByUploadId = new Map<number, { key: string; version: string }>()
-    const commitLocks = new Set<number>()
-    const uploadChunkLocks = new Map<string, Promise<any>>()
+    storage = {
+      async reserveCache(key, version, totalSize) {
+        logger.debug('Reserve:', { key, version })
 
-    storageAdapter = {
-      async reserveCache(key, version, cacheSize) {
-        logger.debug('Reserve: Reserving cache for', key, version, cacheSize ?? '[no cache size]')
-        const bufferKey = `${key}:${version}`
-        if (uploadFileBuffers.has(bufferKey)) {
-          logger.debug(`Reserve: Cache for key ${bufferKey} already reserved. Ignoring...`)
+        if (await uploadExists(db, { key, version })) {
+          logger.debug(`Reserve: Already reserved. Ignoring...`, { key, version })
           return {
             cacheId: null,
           }
         }
 
+        const driverUploadId = await driver.initiateMultiPartUpload({
+          objectName: getObjectNameFromKey(key, version),
+          totalSize: totalSize ?? 0,
+        })
         const uploadId = randomInt(1_000_000_000, 9_999_999_999)
 
-        const bufferPath = path.join(bufferDir, uploadId.toString())
-        uploadFileBuffers.set(bufferKey, bufferPath)
-        await fs.writeFile(bufferPath, '', {
-          flag: 'w',
-        })
+        await db
+          .insertInto('uploads')
+          .values({
+            created_at: new Date().toISOString(),
+            driver_upload_id: driverUploadId,
+            id: uploadId.toString(),
+            key,
+            version,
+          })
+          .execute()
 
-        cacheKeyByUploadId.set(uploadId, { key, version })
-
-        logger.debug(
-          'Reserve: Cache reserved for',
+        logger.debug(`Reserve:`, {
           key,
           version,
-          cacheSize ?? '[no cache size]',
-          'with upload',
+          driverUploadId,
           uploadId,
-        )
+        })
 
         return {
           cacheId: uploadId,
         }
       },
+      async uploadChunk(uploadId, chunkStream, chunkStart, chunkEnd) {
+        const upload = await db
+          .selectFrom('uploads')
+          .selectAll()
+          .where('id', '=', uploadId.toString())
+          .executeTakeFirst()
+        if (!upload) {
+          logger.debug(`Upload: Upload not found. Ignoring...`, {
+            uploadId,
+          })
+          return
+        }
+
+        if (chunkEnd === chunkStart) {
+          throw new Error('Chunk end must be greater than chunk start')
+        }
+
+        // this should be the correct chunk size except for the last chunk
+        const chunkSize = Math.floor(chunkStart / (chunkEnd - chunkStart) + 1)
+        // this should handle the incorrect chunk size of the last chunk by just setting it to the limit of 10000 (for s3)
+        // TODO find a better way to calculate chunk size
+        const partNumber = Math.min(chunkSize, 10_000)
+
+        const objectName = getObjectNameFromKey(upload.key, upload.version)
+        try {
+          const { eTag } = await driver.uploadPart({
+            objectName,
+            uploadId: upload.driver_upload_id,
+            partNumber,
+            data: chunkStream,
+            chunkStart,
+            chunkEnd,
+          })
+          await db
+            .insertInto('upload_parts')
+            .values({
+              part_number: partNumber,
+              upload_id: uploadId.toString(),
+              e_tag: eTag,
+            })
+            .execute()
+        } catch (err) {
+          logger.debug(
+            'Upload: Error',
+            { driverUploadId: upload.driver_upload_id, uploadId, chunkStart, chunkEnd, partNumber },
+            err,
+          )
+          throw err
+        }
+
+        logger.debug('Upload:', { uploadId, chunkStart, chunkEnd, partNumber })
+      },
+      async commitCache(uploadId) {
+        const upload = await db
+          .selectFrom('uploads')
+          .selectAll()
+          .where('id', '=', uploadId.toString())
+          .executeTakeFirst()
+
+        if (!upload) {
+          logger.debug('Commit: Upload not found. Ignoring...')
+          return
+        }
+
+        const parts = await db
+          .selectFrom('upload_parts')
+          .selectAll()
+          .where('upload_id', '=', upload.id)
+          .orderBy('part_number asc')
+          .execute()
+
+        await db.transaction().execute(async (tx) => {
+          logger.debug('Commit:', uploadId)
+
+          await tx.deleteFrom('uploads').where('id', '=', upload.id).execute()
+          await updateOrCreateKey(tx, {
+            key: upload.key,
+            version: upload.version,
+          })
+
+          await driver.completeMultipartUpload({
+            objectName: getObjectNameFromKey(upload.key, upload.version),
+            uploadId: upload.driver_upload_id,
+            parts: parts.map((part) => ({
+              partNumber: part.part_number,
+              eTag: part.e_tag ?? undefined,
+            })),
+          })
+        })
+      },
       async getCacheEntry(keys, version) {
-        logger.debug('Get: Getting cache entry for', keys, version)
         const primaryKey = keys[0]
         const restoreKeys = keys.length > 1 ? keys.slice(1) : undefined
 
-        const cacheKey = await findKeyMatch({ key: primaryKey, version, restoreKeys })
+        const cacheKey = await findKeyMatch(db, { key: primaryKey, version, restoreKeys })
 
         if (!cacheKey) {
-          logger.debug('Get: No cache entry found for', keys, version)
+          logger.debug('Get: Cache entry not found', { keys, version })
           return null
         }
 
-        await touchKey(cacheKey.key, cacheKey.version)
+        await touchKey(db, { key: cacheKey.key, version: cacheKey.version })
 
-        const cacheFileName = encodeCacheKey(cacheKey.key, cacheKey.version)
-        const hashedKey = createHash('sha256')
-          .update(cacheFileName + DOWNLOAD_SECRET_KEY)
-          .digest('base64url')
+        const objectName = getObjectNameFromKey(cacheKey.key, cacheKey.version)
 
-        logger.debug('Get: Cache entry found for', keys, version, 'with id', cacheKey.key)
+        logger.debug('Get: Found', cacheKey)
 
         return {
-          archiveLocation: `${ENV.API_BASE_URL}/download/${hashedKey}/${cacheFileName}`,
+          archiveLocation:
+            ENV.ENABLE_DIRECT_DOWNLOADS && driver.createDownloadUrl
+              ? await driver.createDownloadUrl({ objectName })
+              : createLocalDownloadUrl(objectName),
           cacheKey: cacheKey.key,
         }
       },
-      async commitCache(uploadId) {
-        logger.debug('Commit: Committing cache for upload', uploadId)
-
-        if (commitLocks.has(uploadId)) {
-          logger.debug(`Commit: Commit for upload ${uploadId} already in progress. Ignoring...`)
-          return
-        }
-
-        const cacheKey = cacheKeyByUploadId.get(uploadId)
-        if (!cacheKey) {
-          logger.debug(`Commit: No cache key found for upload ${uploadId}. Ignoring...`)
-          return
-        }
-
-        const bufferKey = `${cacheKey.key}:${cacheKey.version}`
-        const bufferPath = uploadFileBuffers.get(bufferKey)
-        if (!bufferPath) {
-          logger.debug(`Commit: No buffer found for upload ${uploadId}. Ignoring...`)
-          return
-        }
-
-        commitLocks.add(uploadId)
-        const cacheFileName = encodeCacheKey(cacheKey.key, cacheKey.version)
-
-        try {
-          logger.debug('Commit: Committing cache for id', uploadId)
-          const stream = createReadStream(bufferPath)
-          await driver.upload(stream, cacheFileName)
-          await updateOrCreateKey(cacheKey.key, cacheKey.version)
-          logger.debug('Commit: Cache committed for id', uploadId)
-        } catch (err) {
-          logger.error('Commit: Failed to commit cache for id', uploadId, err)
-        } finally {
-          cacheKeyByUploadId.delete(uploadId)
-          uploadFileBuffers.delete(bufferKey)
-          await fs.rm(bufferPath)
-          commitLocks.delete(uploadId)
-        }
-      },
       async download(objectName) {
-        logger.debug('Download: Downloading', objectName)
-        return driver.download(objectName)
-      },
-      async uploadChunk(uploadId, chunkStream, chunkStart) {
-        logger.debug('Upload: Uploading chunk for upload', uploadId)
-        const cacheKey = cacheKeyByUploadId.get(uploadId)
-        if (!cacheKey) {
-          logger.debug(`Upload: No cache key found for upload ${uploadId}. Ignoring...`)
-          return
-        }
-
-        const bufferKey = `${cacheKey.key}:${cacheKey.version}`
-        const bufferPath = uploadFileBuffers.get(bufferKey)
-        if (!bufferPath) {
-          logger.debug(`Upload: No buffer found for key ${bufferKey}. Ignoring...`)
-          return
-        }
-
-        const uploadChunkLock = uploadChunkLocks.get(bufferKey)
-        if (uploadChunkLock) await uploadChunkLock
-
-        uploadChunkLocks.set(
-          bufferKey,
-          (async () => {
-            const file = await fs.open(bufferPath, 'r+')
-
-            let currentChunk = 0
-            const bufferWriteStream = new WritableStream<Buffer>({
-              async write(chunk) {
-                const start = chunkStart + currentChunk
-                currentChunk += chunk.length
-                await file.write(chunk, 0, chunk.length, start)
-              },
-            })
-            await chunkStream.pipeTo(bufferWriteStream)
-            await file.close()
-          })(),
-        )
-
-        await uploadChunkLocks.get(bufferKey)
-        uploadChunkLocks.delete(bufferKey)
-
-        logger.debug('Upload: Chunks uploaded for id', uploadId)
+        logger.debug('Download:', objectName)
+        return driver.download({ objectName })
       },
       async pruneCaches(olderThanDays) {
-        logger.debug('Prune: Pruning caches')
+        logger.debug('Prune:', {
+          olderThanDays,
+        })
 
-        const keys = await findStaleKeys(olderThanDays)
-        await driver.delete(keys.map((key) => encodeCacheKey(key.key, key.version)))
-        await pruneKeys(keys)
+        const keys = await findStaleKeys(db, { olderThanDays })
+        if (keys.length === 0) {
+          logger.debug('Prune: No caches to prune')
+          return
+        }
 
-        logger.debug('Prune: Caches pruned')
+        await driver.delete({
+          objectNames: keys.map((key) => getObjectNameFromKey(key.key, key.version)),
+        })
+        await pruneKeys(db, keys)
+
+        logger.debug('Prune: Caches pruned', {
+          olderThanDays,
+        })
+      },
+      async pruneUploads() {
+        logger.debug('Prune uploads')
+
+        // uploads older than 24 hours
+        const uploads = await db
+          .selectFrom('uploads')
+          .selectAll()
+          .where('created_at', '<', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+          .execute()
+
+        for (const upload of uploads) {
+          await driver
+            .abortMultipartUpload({
+              uploadId: upload.driver_upload_id,
+              objectName: getObjectNameFromKey(upload.key, upload.version),
+            })
+            .catch(() => {
+              // noop
+            })
+          await db.deleteFrom('uploads').where('id', '=', upload.id)
+        }
       },
     }
   } catch (err) {
@@ -201,6 +270,10 @@ export async function initializeStorageAdapter() {
   }
 }
 
+function createLocalDownloadUrl(objectName: string) {
+  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${objectName}`
+}
+
 export function useStorageAdapter() {
-  return storageAdapter
+  return storage
 }
