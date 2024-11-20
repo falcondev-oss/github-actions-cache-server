@@ -271,7 +271,7 @@ export async function initializeStorage() {
 }
 
 function createLocalDownloadUrl(objectName: string) {
-  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('base64')}/${objectName}`
+  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${objectName}`
 }
 
 export function useStorageAdapter() {

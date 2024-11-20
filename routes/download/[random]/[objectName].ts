@@ -4,7 +4,6 @@ import { useStorageAdapter } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
   objectName: z.string(),
-  hash: z.string(),
 })
 
 export default defineEventHandler(async (event) => {
