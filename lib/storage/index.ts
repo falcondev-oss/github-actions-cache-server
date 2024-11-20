@@ -1,4 +1,4 @@
-import { createHash, randomInt } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
@@ -266,11 +266,7 @@ export async function initializeStorage() {
 }
 
 function createLocalDownloadUrl(objectName: string) {
-  const hashedKey = createHash('sha256')
-    .update(objectName + ENV.DOWNLOAD_SECRET_KEY)
-    .digest('base64url')
-
-  return `${ENV.API_BASE_URL}/download/${hashedKey}/${objectName}`
+  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('base64')}/${objectName}`
 }
 
 export function useStorageAdapter() {
