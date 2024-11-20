@@ -1,4 +1,4 @@
-import { createHash, randomInt } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 
 import consola from 'consola'
 
@@ -226,6 +226,11 @@ export async function initializeStorage() {
         })
 
         const keys = await findStaleKeys(db, { olderThanDays })
+        if (keys.length === 0) {
+          logger.debug('Prune: No caches to prune')
+          return
+        }
+
         await driver.delete({
           objectNames: keys.map((key) => getObjectNameFromKey(key.key, key.version)),
         })
@@ -266,11 +271,7 @@ export async function initializeStorage() {
 }
 
 function createLocalDownloadUrl(objectName: string) {
-  const hashedKey = createHash('sha256')
-    .update(objectName + ENV.DOWNLOAD_SECRET_KEY)
-    .digest('base64url')
-
-  return `${ENV.API_BASE_URL}/download/${hashedKey}/${objectName}`
+  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${objectName}`
 }
 
 export function useStorageAdapter() {

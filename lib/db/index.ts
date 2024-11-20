@@ -30,10 +30,16 @@ export interface UploadPartsTable {
   e_tag: string | null
 }
 
+export interface MetaTable {
+  key: 'version'
+  value: string
+}
+
 export interface Database {
   cache_keys: CacheKeysTable
   uploads: UploadsTable
   upload_parts: UploadPartsTable
+  meta: MetaTable
 }
 
 let _db: Kysely<Database>

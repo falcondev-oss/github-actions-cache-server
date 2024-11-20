@@ -1,12 +1,13 @@
 import { H3Error } from 'h3'
 
-import { initializeDatabase } from '~/lib/db'
+import { initializeDatabase, useDB } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
-import { initializeStorage } from '~/lib/storage'
+import { initializeStorage, useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
-  logger.info(`🚀 Starting GitHub Actions Cache Server (${useRuntimeConfig().version})`)
+  const version = useRuntimeConfig().version
+  logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
 
   await initializeDatabase()
   await initializeStorage()
@@ -32,6 +33,28 @@ export default defineNitroPlugin(async (nitro) => {
         `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}`,
       )
     })
+  }
+
+  if (!version) throw new Error('No version found in runtime config')
+
+  const db = useDB()
+  const existing = await db
+    .selectFrom('meta')
+    .where('key', '=', 'version')
+    .select('value')
+    .executeTakeFirst()
+
+  if (!existing || existing.value !== version) {
+    logger.info(
+      `Version changed from ${existing?.value ?? '[no version, first install]'} to ${version}. Pruning cache...`,
+    )
+    await useStorageAdapter().pruneCaches()
+  }
+
+  if (existing) {
+    await db.updateTable('meta').set('value', version).where('key', '=', 'version').execute()
+  } else {
+    await db.insertInto('meta').values({ key: 'version', value: version }).execute()
   }
 
   if (process.send) process.send('nitro:ready')
