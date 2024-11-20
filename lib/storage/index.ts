@@ -226,6 +226,11 @@ export async function initializeStorage() {
         })
 
         const keys = await findStaleKeys(db, { olderThanDays })
+        if (keys.length === 0) {
+          logger.debug('Prune: No caches to prune')
+          return
+        }
+
         await driver.delete({
           objectNames: keys.map((key) => getObjectNameFromKey(key.key, key.version)),
         })
