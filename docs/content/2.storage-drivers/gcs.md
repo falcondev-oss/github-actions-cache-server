@@ -7,16 +7,14 @@ Driver: `gcs`
 
 This storage driver stores the cache in a GCS bucket.
 
-## ::u-alert
-
+::u-alert
+---
 icon: 'tabler:alert-triangle'
 class: ring-amber-400
 color: amber
 description: Because GCS doesn't support out-of-order multipart uploads (as of November 2024), the cache server will upload the parts into a temporary folder. To combine the parts into a single object, it will download all the parts and re-upload the combined object. This means using GCS as your storage driver will use 3x the bandwidth compared to other storage drivers.
 variant: subtle
-
 ---
-
 ::
 
 ## Configuration

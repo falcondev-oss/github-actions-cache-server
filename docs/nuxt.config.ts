@@ -1,6 +1,7 @@
 import wasm from 'vite-plugin-wasm'
 
 export default defineNuxtConfig({
+  compatibilityDate: '2024-11-20',
   extends: ['@nuxt/ui-pro'],
   modules: ['@nuxt/content', '@nuxt/ui', '@nuxt/fonts', '@nuxthq/studio'],
   hooks: {
@@ -41,9 +42,7 @@ export default defineNuxtConfig({
       routes: ['/'],
     },
   },
-  ui: {
-    icons: ['ph', 'simple-icons'],
-  },
+  ui: {},
   content: {
     highlight: {
       langs: [
