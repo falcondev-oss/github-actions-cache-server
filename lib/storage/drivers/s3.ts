@@ -9,7 +9,6 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import * as Minio from 'minio'
 import { z } from 'zod'
 
 import { defineStorageDriver } from '~/lib/storage/defineStorageDriver'
@@ -19,7 +18,7 @@ export const s3Driver = defineStorageDriver({
   envSchema: z.object({
     STORAGE_S3_BUCKET: z.string().min(1),
     STORAGE_S3_ENDPOINT: z.string().min(1),
-    STORAGE_S3_REGION: z.string().min(1).default(Minio.DEFAULT_REGION),
+    STORAGE_S3_REGION: z.string().min(1).default('us-east-1'),
     STORAGE_S3_PORT: z.coerce.number().positive(),
     STORAGE_S3_USE_SSL: z.string().transform((v) => v === 'true'),
     STORAGE_S3_ACCESS_KEY: z.string().min(1),
