@@ -54,7 +54,9 @@ export const filesystemDriver = defineStorageDriver({
       },
 
       async completeMultipartUpload({ uploadId, objectName }) {
-        await fs.rename(getUploadBufferPath(uploadId), getStoragePath(objectName))
+        const bufferPath = getUploadBufferPath(uploadId)
+        await fs.copyFile(bufferPath, getStoragePath(objectName))
+        await fs.rm(bufferPath)
       },
 
       async abortMultipartUpload({ uploadId }): Promise<void> {
