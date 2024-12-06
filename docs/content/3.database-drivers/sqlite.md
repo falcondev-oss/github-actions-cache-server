@@ -5,16 +5,14 @@ description:
 
 Driver: `sqlite`
 
-## ::u-alert
-
+::u-alert
+---
 icon: 'tabler:alert-triangle'
 class: ring-amber-400
 color: amber
 description: It is recommended to use a more robust database driver for production use.
 variant: subtle
-
 ---
-
 ::
 
 ## Configuration
