@@ -19,6 +19,7 @@ export default eslintConfig({
   })
   .append({
     ignores: [
+      'install/',
       '.prettierrc.cjs',
       '.lintstagedrc.mjs',
       'node_modules/',
