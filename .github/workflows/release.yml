@@ -38,13 +38,13 @@ jobs:
           ref: dev
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
       - name: 🛤️ Version tag must be on dev branch
         if: github.event_name == 'push'
         run: git branch --contains ${{ github.ref }} | grep dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
 
       - name: ⬆️ Bump version
         if: github.event_name == 'workflow_dispatch'
@@ -54,6 +54,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           npx bumpp ${{ env[inputs.version] }} -y -r --commit "chore(release): v%s"
+
+          VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
+          sed -E "s/^appVersion:.+$/appVersion: '$VERSION'/" -i install/kubernetes/github-actions-cache-server/Chart.yaml
+          git commit --amend --no-edit
 
           echo "RELEASE_REF=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
