@@ -31,6 +31,9 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
+podSecurityContext:
+  fsGroup: 1000
+
 securityContext:
   capabilities:
     drop:
@@ -38,7 +41,6 @@ securityContext:
   readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 1000
-  fsGroup: 1000
 
 service:
   type: ClusterIP
