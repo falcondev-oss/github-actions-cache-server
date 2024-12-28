@@ -13,6 +13,7 @@ import {
   touchKey,
   updateOrCreateKey,
   useDB,
+  findPrefixedKeysForRemoval,
 } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
@@ -21,6 +22,7 @@ import { getStorageDriver } from '~/lib/storage/drivers'
 import { getObjectNameFromKey } from '~/lib/utils'
 
 export interface Storage {
+  pruneCacheByKeyPrefix: (keyPrefix: string) => Promise<void>
   getCacheEntry: (
     keys: string[],
     version: string,
@@ -68,9 +70,44 @@ export async function initializeStorage() {
       const driver = await driverSetup()
       const db = await useDB()
 
-      storage = {
+    storage = {
+
+      async pruneCacheKeys(keysForRemoval){
+        if (keysForRemoval.length === 0) {
+          logger.debug('Prune: No caches to prune')
+          return
+        }
+
+        await driver.delete({
+          objectNames: keysForRemoval.map((key) => getObjectNameFromKey(key.key, key.version)),
+        })
+
+        await pruneKeys(db, keysForRemoval)
+      },
+
+      async pruneStaleCacheByType(key){
+        if (!ENV.ENABLE_TYPED_KEY_PREFIX_REMOVAL){
+          return
+        }
+        let keyTypeIndex = key.indexOf(ENV.TYPED_KEY_DELIMITER)
+        if (keyTypeIndex < 1){
+          return
+        }
+        let keyType = key.substring(0, keyTypeIndex)
+        logger.debug(`Prune by type is called: Type [${keyType}]. Full key [${key}].`)
+        let keysForRemoval = await findPrefixedKeysForRemoval(db, { keyPrefix: keyType, skipRecentKeysLimit: ENV.MAX_STORED_KEYS_PER_TYPE } )
+        logger.debug(`Removing ${keysForRemoval.length} keys for prefix [${keyType}].`)
+        await this.pruneCacheKeys(keysForRemoval)
+      },
+
+      async pruneCacheByKeyPrefix(keyPrefix){
+        let keysForRemoval = await findPrefixedKeysForRemoval(db, { keyPrefix: keyPrefix, skipRecentKeysLimit: 0 } )
+        logger.debug(`Removing ${keysForRemoval.length} keys for prefix [${keyPrefix}].`)
+        await this.pruneCacheKeys(keysForRemoval)
+      },
+
         async reserveCache(key, version, totalSize) {
-          logger.debug('Reserve:', { key, version })
+            logger.debug('Reserve:', { key, version })
 
           if (await getUpload(db, { key, version })) {
             logger.debug(`Reserve: Already reserved. Ignoring...`, { key, version })
@@ -102,6 +139,8 @@ export async function initializeStorage() {
             driverUploadId,
             uploadId,
           })
+
+          this.pruneStaleCacheByType(key)
 
           return {
             cacheId: uploadId,

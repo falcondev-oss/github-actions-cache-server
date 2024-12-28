@@ -221,6 +221,31 @@ export async function findStaleKeys(
     .execute()
 }
 
+export async function findPrefixedKeysForRemoval(
+  db: DB,
+  { keyPrefix, skipRecentKeysLimit }: { keyPrefix: string; skipRecentKeysLimit?: number; },
+) {
+
+  let query = db
+    .selectFrom('cache_keys')
+    .where('key', 'like', `${keyPrefix}%`)
+
+  if (skipRecentKeysLimit && skipRecentKeysLimit > 0){
+    query = query.where(({ eb, selectFrom, not }) => not(eb(
+      'id',
+      'in',
+      selectFrom('cache_keys')
+        .select('cache_keys.id')
+        .orderBy('cache_keys.accessed_at desc')
+        .limit(skipRecentKeysLimit)
+    )))
+  }
+
+  return query
+    .selectAll()
+    .execute()
+}
+
 export async function createKey(
   db: DB,
   { key, version, date }: { key: string; version: string; date?: Date },
