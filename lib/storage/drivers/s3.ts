@@ -18,7 +18,7 @@ export const s3Driver = defineStorageDriver({
   envSchema: z.object({
     STORAGE_S3_BUCKET: z.string().min(1),
     STORAGE_S3_ENDPOINT: z.string().optional(),
-    STORAGE_S3_REGION: z.string().min(1).default('us-east-1').optional(),
+    STORAGE_S3_REGION: z.string().min(1).default('us-east-1'),
     STORAGE_S3_PORT: z.coerce.number().positive().optional(),
     STORAGE_S3_USE_SSL: z
       .string()
