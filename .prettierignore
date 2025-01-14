@@ -6,3 +6,4 @@ dist/
 pnpm-lock.yaml
 data/
 docs/content/**/*.md
+install/
