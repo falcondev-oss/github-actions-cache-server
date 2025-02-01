@@ -7,10 +7,10 @@ import consola from 'consola'
 import {
   findKeyMatch,
   findStaleKeys,
+  getUpload,
   pruneKeys,
   touchKey,
   updateOrCreateKey,
-  uploadExists,
   useDB,
 } from '~/lib/db'
 import { ENV } from '~/lib/env'
@@ -24,7 +24,7 @@ export interface Storage {
     keys: string[],
     version: string,
   ) => Promise<{
-    cacheKey?: string
+    cacheKey: string
     archiveLocation: string
   } | null>
   download: (objectName: string) => Promise<ReadableStream | Readable>
@@ -34,7 +34,7 @@ export interface Storage {
     chunkStart: number,
     chunkEnd: number,
   ) => Promise<void>
-  commitCache: (uploadId: number, size: number) => Promise<void>
+  commitCache: (uploadId: number | string, size: number) => Promise<void>
   reserveCache: (
     key: string,
     version: string,
@@ -71,7 +71,7 @@ export async function initializeStorage() {
         async reserveCache(key, version, totalSize) {
           logger.debug('Reserve:', { key, version })
 
-          if (await uploadExists(db, { key, version })) {
+          if (await getUpload(db, { key, version })) {
             logger.debug(`Reserve: Already reserved. Ignoring...`, { key, version })
             return {
               cacheId: null,

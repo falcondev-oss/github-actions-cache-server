@@ -247,12 +247,12 @@ export async function pruneKeys(db: DB, keys?: Selectable<CacheKeysTable>[]) {
   }
 }
 
-export async function uploadExists(db: DB, { key, version }: { key: string; version: string }) {
+export async function getUpload(db: DB, { key, version }: { key: string; version: string }) {
   const row = await db
     .selectFrom('uploads')
     .select('id')
     .where('key', '=', key)
     .where('version', '=', version)
     .executeTakeFirst()
-  return !!row
+  return row
 }
