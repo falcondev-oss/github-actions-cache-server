@@ -16,7 +16,7 @@
     "lint:ci": "eslint --cache --cache-strategy content . && prettier --check --cache --cache-strategy content .",
     "lint:fix": "eslint --fix --cache . && prettier --write --cache .",
     "type-check": "tsc -p tsconfig.json --noEmit",
-    "action": "act -v --env ACTIONS_CACHE_URL=http://host.docker.internal:3000/test_token/ --container-architecture linux/amd64 -W tests",
+    "action": "act -v --env ACTIONS_CACHE_URL=http://host.docker.internal:3000/ --container-architecture linux/amd64 -W tests",
     "test:watch": "DEBUG=true VITEST_DB_DRIVER=sqlite VITEST_STORAGE_DRIVER=filesystem vitest --watch --ui",
     "test:run": "vitest run"
   },

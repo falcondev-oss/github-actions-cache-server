@@ -19,19 +19,17 @@ export default defineNitroPlugin(async (nitro) => {
     }
 
     logger.error(
-      `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${error instanceof H3Error ? error.statusCode : '[no status code]'}\n`,
+      `Response: ${event.method} ${event.path} > ${error instanceof H3Error ? error.statusCode : '[no status code]'}\n`,
       error,
     )
   })
 
   if (ENV.DEBUG) {
     nitro.hooks.hook('request', (event) => {
-      logger.debug(`Request: ${event.method} ${obfuscateTokenFromPath(event.path)}`)
+      logger.debug(`Request: ${event.method} ${event.path}`)
     })
     nitro.hooks.hook('afterResponse', (event) => {
-      logger.debug(
-        `Response: ${event.method} ${obfuscateTokenFromPath(event.path)} > ${getResponseStatus(event)}`,
-      )
+      logger.debug(`Response: ${event.method} ${event.path} > ${getResponseStatus(event)}`)
     })
   }
 
@@ -60,9 +58,3 @@ export default defineNitroPlugin(async (nitro) => {
 
   if (process.send) process.send('nitro:ready')
 })
-
-function obfuscateTokenFromPath(path: string) {
-  const split = path.split('/_apis')
-  if (split.length <= 1) return path
-  return `/<secret_token>/_apis${split[1]}`
-}
