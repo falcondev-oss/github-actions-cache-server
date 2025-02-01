@@ -1,10 +1,10 @@
-import { z } from 'zod'
+import type { Buffer } from 'node:buffer'
 
+import { z } from 'zod'
 import { auth } from '~/lib/auth'
 import { logger } from '~/lib/logger'
-import { useStorageAdapter } from '~/lib/storage'
 
-import type { Buffer } from 'node:buffer'
+import { useStorageAdapter } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
   cacheId: z.coerce.number(),
@@ -40,7 +40,8 @@ export default defineEventHandler({
       throw createError({ statusCode: 400, statusMessage: 'Invalid content-range header' })
     }
 
-    await useStorageAdapter().uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
+    const adapter = await useStorageAdapter()
+    await adapter.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
   },
 })
 

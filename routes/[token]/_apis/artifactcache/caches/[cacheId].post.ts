@@ -33,6 +33,7 @@ export default defineEventHandler({
 
     const { size } = parsedBody.data
 
-    await useStorageAdapter().commitCache(cacheId, size)
+    const adapter = await useStorageAdapter()
+    await adapter.commitCache(cacheId, size)
   },
 })

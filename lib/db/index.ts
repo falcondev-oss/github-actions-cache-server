@@ -1,14 +1,14 @@
-import { hash } from 'node:crypto'
-
-import { Kysely, Migrator } from 'kysely'
+import type { Selectable } from 'kysely'
 
 import type { DatabaseDriverName } from '~/lib/db/drivers'
+
+import { hash } from 'node:crypto'
+import { Kysely, Migrator } from 'kysely'
 import { getDatabaseDriver } from '~/lib/db/drivers'
 import { migrations } from '~/lib/db/migrations'
 import { ENV } from '~/lib/env'
-import { logger } from '~/lib/logger'
 
-import type { Selectable } from 'kysely'
+import { logger } from '~/lib/logger'
 
 export interface CacheKeysTable {
   id: string
@@ -44,42 +44,54 @@ export interface Database {
 
 let _db: Kysely<Database>
 
+let initializationPromise: Promise<void> | undefined
 export async function initializeDatabase() {
-  const driverName = ENV.DB_DRIVER
-  const driverSetup = getDatabaseDriver(driverName)
-  if (!driverSetup) {
-    logger.error(`No database driver found for ${driverName}`)
-    // eslint-disable-next-line unicorn/no-process-exit
-    process.exit(1)
-  }
-  logger.info(`Using database driver: ${driverName}`)
+  if (initializationPromise) return initializationPromise
 
-  const driver = await driverSetup()
+  // eslint-disable-next-line unicorn/consistent-function-scoping
+  const init = async () => {
+    const driverName = ENV.DB_DRIVER
+    const driverSetup = getDatabaseDriver(driverName)
+    if (!driverSetup) {
+      logger.error(`No database driver found for ${driverName}`)
+      // eslint-disable-next-line unicorn/no-process-exit
+      process.exit(1)
+    }
+    logger.info(`Using database driver: ${driverName}`)
 
-  _db = new Kysely<Database>({
-    dialect: driver,
-  })
+    const driver = await driverSetup()
 
-  logger.info('Migrating database...')
-  const migrator = new Migrator({
-    db: _db,
-    provider: {
-      async getMigrations() {
-        return migrations(driverName as DatabaseDriverName)
+    _db = new Kysely<Database>({
+      dialect: driver,
+    })
+
+    logger.info('Migrating database...')
+    const migrator = new Migrator({
+      db: _db,
+      provider: {
+        async getMigrations() {
+          return migrations(driverName as DatabaseDriverName)
+        },
       },
-    },
-  })
-  const { error, results } = await migrator.migrateToLatest()
-  if (error) {
-    logger.error('Database migration failed', error)
-    // eslint-disable-next-line unicorn/no-process-exit
-    process.exit(1)
+    })
+    const { error, results } = await migrator.migrateToLatest()
+    if (error) {
+      logger.error('Database migration failed', error)
+      // eslint-disable-next-line unicorn/no-process-exit
+      process.exit(1)
+    }
+    logger.debug('Migration results', results)
+    logger.success('Database migrated')
   }
-  logger.debug('Migration results', results)
-  logger.success('Database migrated')
+
+  initializationPromise = init()
+  return initializationPromise
 }
 
-export function useDB() {
+export async function useDB() {
+  if (!_db) {
+    await initializeDatabase()
+  }
   return _db
 }
 

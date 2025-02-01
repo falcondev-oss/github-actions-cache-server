@@ -22,6 +22,7 @@ export default defineEventHandler({
 
     const { cacheSize, key, version } = parsedBody.data
 
-    return useStorageAdapter().reserveCache(key, version, cacheSize ?? undefined)
+    const adapter = await useStorageAdapter()
+    return adapter.reserveCache(key, version, cacheSize ?? undefined)
   },
 })

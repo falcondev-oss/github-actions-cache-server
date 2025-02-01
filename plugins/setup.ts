@@ -37,7 +37,7 @@ export default defineNitroPlugin(async (nitro) => {
 
   if (!version) throw new Error('No version found in runtime config')
 
-  const db = useDB()
+  const db = await useDB()
   const existing = await db
     .selectFrom('meta')
     .where('key', '=', 'version')
@@ -48,7 +48,8 @@ export default defineNitroPlugin(async (nitro) => {
     logger.info(
       `Version changed from ${existing?.value ?? '[no version, first install]'} to ${version}. Pruning cache...`,
     )
-    await useStorageAdapter().pruneCaches()
+    const adapter = await useStorageAdapter()
+    await adapter.pruneCaches()
   }
 
   if (existing) {
