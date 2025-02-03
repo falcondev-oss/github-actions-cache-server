@@ -5,8 +5,7 @@ ENV BUILD_HASH=${BUILD_HASH}
 
 WORKDIR /app
 
-RUN corepack enable
-RUN corepack prepare pnpm@latest-9 --activate
+RUN npm install -g pnpm@latest-9
 
 COPY package.json pnpm-lock.yaml .npmrc ./
 COPY patches patches
