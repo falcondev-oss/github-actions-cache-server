@@ -46,6 +46,11 @@ jobs:
         with:
           node-version: lts/*
 
+      - name: Install yq
+        run: |
+          wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+          chmod +x /usr/bin/yq
+
       - name: ⬆️ Bump version
         if: github.event_name == 'workflow_dispatch'
         id: bump-version
@@ -54,7 +59,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
-          sed -E "s/^appVersion:.+$/appVersion: '$VERSION'/" -i install/kubernetes/github-actions-cache-server/Chart.yaml
+          yq e -i '.appVersion = env(VERSION)' install/kubernetes/github-actions-cache-server/Chart.yaml
           git stage install/kubernetes/github-actions-cache-server/Chart.yaml
           git commit -nm "chore(release): update helm chart appVersion to $VERSION"
 
