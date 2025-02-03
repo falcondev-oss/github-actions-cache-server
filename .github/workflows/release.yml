@@ -53,15 +53,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          npx bumpp ${{ env[inputs.version] }} -y -r --commit "chore(release): v%s"
+          npx bumpp ${{ env[inputs.version] }} -y -r --commit "chore(release): v%s" --no-push
+
+          export VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//') 
+          sed -E "s/^appVersion:.+$/appVersion: '$VERSION'/" -i install/kubernetes/github-actions-cache-server/Chart.yaml
+          git stage install/kubernetes/github-actions-cache-server/Chart.yaml
+          git commit -n --no-edit --amend
+          git tag -f "v$VERSION"
+
+          git push origin dev
+          git push origin --tags
 
           echo "RELEASE_REF=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: ⬆️ Bump Helm chart app version
-        run: |
-          VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//') sed -E "s/^appVersion:.+$/appVersion: '$VERSION'/" -i install/kubernetes/github-actions-cache-server/Chart.yaml
-          git stage install/kubernetes/github-actions-cache-server/Chart.yaml
-          git commit -nm "chore(release): update helm chart appVersion to $VERSION"
 
       - name: 📥 Create release PR
         id: create-release-pr
