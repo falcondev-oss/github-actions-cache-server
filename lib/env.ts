@@ -10,6 +10,9 @@ const envSchema = z.object({
   STORAGE_DRIVER: z.string().toLowerCase().default('filesystem'),
   DB_DRIVER: z.string().toLowerCase().default('sqlite'),
   DEBUG: booleanSchema.default('false'),
+  ENABLE_TYPED_KEY_PREFIX_REMOVAL: booleanSchema.default('false'),
+  MAX_STORED_KEYS_PER_TYPE: z.coerce.number().int().min(0).default(3),
+  TYPED_KEY_DELIMITER: z.string().default('@#@'),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)
