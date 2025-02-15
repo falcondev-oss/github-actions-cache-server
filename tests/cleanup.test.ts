@@ -11,16 +11,16 @@ import {
 } from '~/lib/db'
 import { initializeStorage } from '~/lib/storage'
 
-describe('setting last accessed date', () => {
+describe('setting last accessed date', async () => {
+  const db = await useDB()
   beforeEach(async () => {
     await initializeStorage()
     await initializeDatabase()
-    await pruneKeys(useDB())
+    await pruneKeys(db)
   })
 
   const version = '0577ec58bee6d5415625'
   test('`updateOrCreateKey` sets accessed_at', async () => {
-    const db = useDB()
     const date = new Date('2024-01-01T00:00:00Z')
     await updateOrCreateKey(db, { key: 'cache-a', version, date })
 
@@ -33,7 +33,6 @@ describe('setting last accessed date', () => {
   })
 
   test('`touchKey` updates accessed_at', async () => {
-    const db = useDB()
     const date = new Date('2024-01-01T00:00:00Z')
     await updateOrCreateKey(db, { key: 'cache-a', version, date })
 
@@ -58,12 +57,12 @@ describe('setting last accessed date', () => {
   })
 })
 
-describe('getting stale keys', () => {
-  beforeEach(() => pruneKeys(useDB()))
+describe('getting stale keys', async () => {
+  const db = await useDB()
+  beforeEach(() => pruneKeys(db))
 
   const version = '0577ec58bee6d5415625'
   test('returns stale keys if threshold is passed', async () => {
-    const db = useDB()
     const referenceDate = new Date('2024-04-01T00:00:00Z')
     await updateOrCreateKey(db, { key: 'cache-a', version, date: new Date('2024-01-01T00:00:00Z') })
     await updateOrCreateKey(db, { key: 'cache-b', version, date: new Date('2024-02-01T00:00:00Z') })
@@ -83,7 +82,6 @@ describe('getting stale keys', () => {
   })
 
   test('returns all keys if threshold is not passed', async () => {
-    const db = useDB()
     const referenceDate = new Date('2024-04-01T00:00:00Z')
     await updateOrCreateKey(db, { key: 'cache-a', version, date: new Date('2024-01-01T00:00:00Z') })
     await updateOrCreateKey(db, { key: 'cache-b', version, date: new Date('2024-02-01T00:00:00Z') })

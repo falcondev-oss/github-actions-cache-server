@@ -1,4 +1,4 @@
-import { LogLevels, createConsola } from 'consola'
+import { createConsola, LogLevels } from 'consola'
 
 import { ENV } from '~/lib/env'
 

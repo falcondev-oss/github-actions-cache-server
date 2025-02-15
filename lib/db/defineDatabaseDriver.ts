@@ -1,9 +1,9 @@
 /* eslint-disable unicorn/filename-case */
-import { formatZodError } from '~/lib/env'
-import { logger } from '~/lib/logger'
-
 import type { Dialect } from 'kysely'
 import type { z } from 'zod'
+
+import { formatZodError } from '~/lib/env'
+import { logger } from '~/lib/logger'
 
 interface DefineDatabaseDriverOptions<EnvSchema extends z.ZodTypeAny> {
   envSchema: EnvSchema
