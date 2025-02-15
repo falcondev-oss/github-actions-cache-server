@@ -3,7 +3,6 @@ import eslintConfig from '@louishaftmann/eslint-config'
 
 export default eslintConfig({
   nuxt: false,
-  unicorn: true,
 })
   .append({
     files: ['routes/**/*.*'],

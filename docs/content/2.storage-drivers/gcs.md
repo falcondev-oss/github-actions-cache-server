@@ -30,7 +30,6 @@ services:
     ports:
       - '3000:3000'
     environment:
-      URL_ACCESS_TOKEN: random_token
       API_BASE_URL: http://localhost:3000
 
       STORAGE_DRIVER: gcs

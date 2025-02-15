@@ -16,7 +16,8 @@ export default defineEventHandler(async (event) => {
 
   const { objectName } = parsedPathParams.data
 
-  const stream = await useStorageAdapter().download(objectName)
+  const adapter = await useStorageAdapter()
+  const stream = await adapter.download(objectName)
 
   return sendStream(event, stream)
 })

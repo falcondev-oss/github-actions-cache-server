@@ -128,10 +128,3 @@ apiBaseUrl: ''
 env:
   - name: DEBUG
     value: 'true'
-extraEnv:
-  - name: URL_ACCESS_TOKEN
-    value: changeme
-    # valueFrom:
-    #   secretKeyRef:
-    #     name: url-access-token
-    #     key: token

@@ -1,7 +1,7 @@
 import ky from 'ky'
 
 export const cacheApi = ky.extend({
-  prefixUrl: 'http://localhost:3000/test_token/_apis/artifactcache',
+  prefixUrl: 'http://localhost:3000/_apis/artifactcache',
   throwHttpErrors: false,
 })
 
