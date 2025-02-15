@@ -3,9 +3,9 @@
   "type": "module",
   "version": "4.0.3",
   "private": true,
-  "packageManager": "pnpm@9.1.3",
   "engines": {
-    "node": ">=22"
+    "node": "22",
+    "pnpm": "10"
   },
   "scripts": {
     "prepare": "nitropack prepare && husky",
