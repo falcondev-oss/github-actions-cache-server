@@ -5,7 +5,7 @@ ENV BUILD_HASH=${BUILD_HASH}
 
 WORKDIR /app
 
-RUN npm install -g pnpm@latest-9
+RUN npm install -g pnpm@latest-10
 
 COPY package.json pnpm-lock.yaml .npmrc ./
 COPY patches patches
