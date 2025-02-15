@@ -69,5 +69,12 @@
     "ts-pattern": "^5.6.2",
     "vitest": "^3.0.4",
     "wait-on": "^8.0.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "better-sqlite3",
+      "esbuild"
+    ]
   }
 }
