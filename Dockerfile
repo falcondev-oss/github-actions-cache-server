@@ -8,7 +8,6 @@ WORKDIR /app
 RUN npm install -g pnpm@latest-10
 
 COPY package.json pnpm-lock.yaml .npmrc ./
-COPY patches patches
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm fetch --prod
 
