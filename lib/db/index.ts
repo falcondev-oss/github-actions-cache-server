@@ -163,6 +163,10 @@ export async function findKeyMatch(
   }
 }
 
+export async function listEntriesByKey(db: DB, key: string) {
+  return db.selectFrom('cache_keys').where('key', '=', key).selectAll().execute()
+}
+
 export async function updateOrCreateKey(
   db: DB,
   {
