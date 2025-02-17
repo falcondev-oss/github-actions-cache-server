@@ -1,19 +1,19 @@
-import fs from 'node:fs/promises'
+import type { ResultPromise } from 'execa'
 
+import type { Nitro } from 'nitropack'
+import type { StartedTestContainer } from 'testcontainers'
+import type { DatabaseDriverName } from '~/lib/db/drivers'
+import type { StorageDriverName } from '~/lib/storage/drivers'
+import fs from 'node:fs/promises'
 import { MySqlContainer } from '@testcontainers/mysql'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
+
 import { configDotenv } from 'dotenv'
 import { execa } from 'execa'
+
 import { build, createNitro, prepare } from 'nitropack'
 import { GenericContainer } from 'testcontainers'
 import { match } from 'ts-pattern'
-
-import type { DatabaseDriverName } from '~/lib/db/drivers'
-import type { StorageDriverName } from '~/lib/storage/drivers'
-
-import type { ResultPromise } from 'execa'
-import type { Nitro } from 'nitropack'
-import type { StartedTestContainer } from 'testcontainers'
 
 let nitro: Nitro
 let server: ResultPromise<{

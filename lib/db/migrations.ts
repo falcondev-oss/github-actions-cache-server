@@ -1,6 +1,7 @@
-import { type Migration, sql } from 'kysely'
+import type { Migration } from 'kysely'
 
 import type { DatabaseDriverName } from '~/lib/db/drivers'
+import { sql } from 'kysely'
 
 export function migrations(dbType: DatabaseDriverName) {
   return {

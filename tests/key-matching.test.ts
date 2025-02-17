@@ -4,16 +4,16 @@ import { findKeyMatch, initializeDatabase, pruneKeys, updateOrCreateKey, useDB }
 import { initializeStorage } from '~/lib/storage'
 import { sleep } from '~/tests/utils'
 
-describe('key matching', () => {
+describe('key matching', async () => {
+  const db = await useDB()
   beforeEach(async () => {
     await initializeStorage()
     await initializeDatabase()
-    await pruneKeys(useDB())
+    await pruneKeys(db)
   })
 
   const version = '0577ec58bee6d5415625'
   test('exact primary match', async () => {
-    const db = useDB()
     await updateOrCreateKey(db, { key: 'cache-a', version })
 
     const match = await findKeyMatch(db, {
@@ -25,7 +25,6 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('exact restore key match', async () => {
-    const db = useDB()
     await updateOrCreateKey(db, { key: 'cache-a', version })
 
     const match = await findKeyMatch(db, {
@@ -38,7 +37,6 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('prefixed restore key match', async () => {
-    const db = useDB()
     await updateOrCreateKey(db, { key: 'prefixed-cache-a', version })
 
     const match = await findKeyMatch(db, {
@@ -51,7 +49,6 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('restore key match with multiple keys', async () => {
-    const db = useDB()
     await updateOrCreateKey(db, { key: 'cache-a', version })
     await updateOrCreateKey(db, { key: 'cache-b', version })
 
@@ -65,7 +62,6 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('prefixed restore key match with multiple keys returns newest key', async () => {
-    const db = useDB()
     await updateOrCreateKey(db, { key: 'prefixed-cache-a', version })
     await sleep(10)
     await updateOrCreateKey(db, { key: 'prefixed-cache-b', version })
@@ -80,7 +76,6 @@ describe('key matching', () => {
     expect(match!.version).toBe(version)
   })
   test('restore key prefers exact match over prefixed match', async () => {
-    const db = useDB()
     await updateOrCreateKey(db, { key: 'prefixed-cache', version })
     await sleep(10)
     await updateOrCreateKey(db, { key: 'prefixed-cache-a', version })
