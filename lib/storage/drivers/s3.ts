@@ -17,24 +17,36 @@ import { streamToBuffer } from '~/lib/utils'
 export const s3Driver = defineStorageDriver({
   envSchema: z.object({
     STORAGE_S3_BUCKET: z.string().min(1),
-    STORAGE_S3_ENDPOINT: z.string().min(1),
+    STORAGE_S3_ENDPOINT: z.string().optional(),
     STORAGE_S3_REGION: z.string().min(1).default('us-east-1'),
-    STORAGE_S3_PORT: z.coerce.number().positive(),
-    STORAGE_S3_USE_SSL: z.string().transform((v) => v === 'true'),
-    STORAGE_S3_ACCESS_KEY: z.string().min(1),
-    STORAGE_S3_SECRET_KEY: z.string().min(1),
+    STORAGE_S3_PORT: z.coerce.number().positive().optional(),
+    STORAGE_S3_USE_SSL: z
+      .string()
+      .transform((v) => v === 'true')
+      .optional(),
+    STORAGE_S3_ACCESS_KEY: z.string().optional(),
+    STORAGE_S3_SECRET_KEY: z.string().optional(),
+    AWS_REGION: z.string().optional(),
+    AWS_DEFAULT_REGION: z.string().optional(),
   }),
   async setup(options) {
     const protocol = options.STORAGE_S3_USE_SSL ? 'https' : 'http'
     const port = options.STORAGE_S3_PORT ? `:${options.STORAGE_S3_PORT}` : ''
+    let credentials
 
-    const s3 = new S3Client({
-      credentials: {
+    if (options.STORAGE_S3_ACCESS_KEY && options.STORAGE_S3_SECRET_KEY) {
+      credentials = {
         secretAccessKey: options.STORAGE_S3_SECRET_KEY,
         accessKeyId: options.STORAGE_S3_ACCESS_KEY,
-      },
-      endpoint: `${protocol}://${options.STORAGE_S3_ENDPOINT}${port}`,
-      region: options.STORAGE_S3_REGION,
+      }
+    }
+
+    const s3 = new S3Client({
+      credentials,
+      endpoint: options.STORAGE_S3_ENDPOINT
+        ? `${protocol}://${options.STORAGE_S3_ENDPOINT}${port}`
+        : undefined,
+      region: options.AWS_REGION ?? options.AWS_DEFAULT_REGION ?? options.STORAGE_S3_REGION,
       forcePathStyle: true,
     })
 
