@@ -26,8 +26,10 @@ export default defineNitroPlugin(() => {
   logger.info(
     `Cleaning up dangling uploads with schedule ${colorize('blue', job.getPattern() ?? '')}${nextRun ? ` (next run: ${nextRun.toLocaleString()})` : ''}`,
   )
+  let lastRun = new Date()
   job.schedule(async () => {
     const adapter = await useStorageAdapter()
-    await adapter.pruneUploads()
+    await adapter.pruneUploads(lastRun)
+    lastRun = new Date()
   })
 })
