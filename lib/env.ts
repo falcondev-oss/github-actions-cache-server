@@ -18,6 +18,7 @@ const envSchema = z.object({
   CA_KEY_PATH: z.string(),
   CA_CERT_PATH: z.string(),
   TEMP_DIR: z.string().default(tmpdir()),
+  DISABLE_PROXY: booleanSchema.default('false'),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)

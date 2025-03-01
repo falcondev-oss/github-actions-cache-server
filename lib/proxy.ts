@@ -3,6 +3,11 @@ import { ENV } from './env'
 import { logger } from './logger'
 
 export async function initializeProxy() {
+  if (ENV.DISABLE_PROXY) {
+    logger.warn('Proxy is disabled')
+    return
+  }
+
   const port = ENV.PROXY_PORT
   logger.info(`Starting proxy server on port ${port}...`)
 
