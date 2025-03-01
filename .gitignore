@@ -11,3 +11,5 @@ data/
 .idea
 .DS_Store
 tests/temp/
+certs/*
+!certs/.gitkeep
