@@ -9,6 +9,7 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import * as R from 'remeda'
 import { z } from 'zod'
 
 import { defineStorageDriver } from '~/lib/storage/defineStorageDriver'
@@ -130,14 +131,18 @@ export const s3Driver = defineStorageDriver({
         )
       },
       async delete({ objectNames }) {
-        await s3.send(
-          new DeleteObjectsCommand({
-            Bucket: options.STORAGE_S3_BUCKET,
-            Delete: {
-              Objects: objectNames.map((name) => ({ Key: getObjectKey(name) })),
-              Quiet: true,
-            },
-          }),
+        await Promise.all(
+          R.chunk(objectNames, 1000).map((chunkedObjectNames) =>
+            s3.send(
+              new DeleteObjectsCommand({
+                Bucket: options.STORAGE_S3_BUCKET,
+                Delete: {
+                  Objects: chunkedObjectNames.map((name) => ({ Key: getObjectKey(name) })),
+                  Quiet: true,
+                },
+              }),
+            ),
+          ),
         )
       },
     }

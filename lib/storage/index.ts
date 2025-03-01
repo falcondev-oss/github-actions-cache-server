@@ -43,7 +43,7 @@ export interface Storage {
     cacheId: number | null
   }>
   pruneCaches: (olderThanDays?: number) => Promise<void>
-  pruneUploads: () => Promise<void>
+  pruneUploads: (olderThanDate: Date) => Promise<void>
 }
 
 let storage: Storage
@@ -251,14 +251,14 @@ export async function initializeStorage() {
             olderThanDays,
           })
         },
-        async pruneUploads() {
+        async pruneUploads(olderThanDate) {
           logger.debug('Prune uploads')
 
           // uploads older than 24 hours
           const uploads = await db
             .selectFrom('uploads')
             .selectAll()
-            .where('created_at', '<', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+            .where('created_at', '<', olderThanDate.toISOString())
             .execute()
 
           for (const upload of uploads) {

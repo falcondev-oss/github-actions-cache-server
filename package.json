@@ -1,7 +1,7 @@
 {
   "name": "github-actions-cache-server",
   "type": "module",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "private": true,
   "engines": {
     "node": "22",
@@ -35,9 +35,11 @@
     "execa": "^9.5.2",
     "h3": "^1.14.0",
     "kysely": "^0.27.5",
+    "mockttp": "^3.16.0",
     "mysql2": "^3.12.0",
     "nitropack": "^2.10.4",
     "pg": "^8.13.1",
+    "remeda": "^2.21.0",
     "typescript": "^5.7.3",
     "zod": "^3.24.1"
   },
