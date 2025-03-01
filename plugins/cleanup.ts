@@ -7,16 +7,29 @@ import { Cron } from 'croner'
 import { useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(() => {
-  if (ENV.CLEANUP_OLDER_THAN_DAYS === 0) return
+  // cache cleanup
+  if (ENV.CACHE_CLEANUP_OLDER_THAN_DAYS > 0) {
+    const job = new Cron(ENV.CACHE_CLEANUP_CRON)
+    const nextRun = job.nextRun()
+    logger.info(
+      `Cleaning up cache entries older than ${colorize('blue', `${ENV.CACHE_CLEANUP_OLDER_THAN_DAYS}d`)} with schedule ${colorize('blue', job.getPattern() ?? '')}${nextRun ? ` (next run: ${nextRun.toLocaleString()})` : ''}`,
+    )
+    job.schedule(async () => {
+      const adapter = await useStorageAdapter()
+      await adapter.pruneCaches(ENV.CACHE_CLEANUP_OLDER_THAN_DAYS)
+    })
+  }
 
-  const job = new Cron('0 0 * * *') // daily
+  // upload cleanup
+  const job = new Cron(ENV.UPLOAD_CLEANUP_CRON)
   const nextRun = job.nextRun()
   logger.info(
-    `Cleaning up cache entries older than ${colorize('blue', `${ENV.CLEANUP_OLDER_THAN_DAYS}d`)} with schedule ${colorize('blue', job.getPattern() ?? '')}${nextRun ? ` (next run: ${nextRun.toLocaleString()})` : ''}`,
+    `Cleaning up dangling uploads with schedule ${colorize('blue', job.getPattern() ?? '')}${nextRun ? ` (next run: ${nextRun.toLocaleString()})` : ''}`,
   )
+  let lastRun = new Date()
   job.schedule(async () => {
     const adapter = await useStorageAdapter()
-    await adapter.pruneCaches(ENV.CLEANUP_OLDER_THAN_DAYS)
-    await adapter.pruneUploads()
+    await adapter.pruneUploads(lastRun)
+    lastRun = new Date()
   })
 })

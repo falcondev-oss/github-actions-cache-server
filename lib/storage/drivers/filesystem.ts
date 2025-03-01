@@ -1,8 +1,8 @@
 import { createReadStream, promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { z } from 'zod'
+import { ENV } from '~/lib/env'
 
 import { defineStorageDriver } from '~/lib/storage/defineStorageDriver'
 
@@ -17,7 +17,7 @@ export const filesystemDriver = defineStorageDriver({
       recursive: true,
     })
 
-    const tempDir = await fs.mkdtemp(path.join(tmpdir(), 'github-actions-cache-server'))
+    const tempDir = await fs.mkdtemp(path.join(ENV.TEMP_DIR, 'github-actions-cache-server'))
 
     function getUploadBufferPath(uploadId: string) {
       return path.join(tempDir, uploadId)

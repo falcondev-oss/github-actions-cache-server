@@ -30,7 +30,7 @@ export default defineAppConfig({
     ],
   },
   footer: {
-    credits: 'Copyright © 2024',
+    credits: 'Made wih ❤️ by @falcondev-oss',
     colorMode: false,
     links: [
       {

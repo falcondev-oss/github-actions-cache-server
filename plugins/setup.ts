@@ -3,12 +3,14 @@ import { H3Error } from 'h3'
 import { initializeDatabase, useDB } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
+import { initializeProxy } from '~/lib/proxy'
 import { initializeStorage, useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
   const version = useRuntimeConfig().version
   logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
 
+  await initializeProxy()
   await initializeDatabase()
   await initializeStorage()
 
