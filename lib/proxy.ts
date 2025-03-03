@@ -13,15 +13,18 @@ export async function initializeProxy() {
 
   // generate ca with `openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365`
   const server = mockttp.getLocal({
-    https: {
-      keyPath: ENV.CA_KEY_PATH,
-      certPath: ENV.CA_CERT_PATH,
-      tlsPassthrough: [
-        {
-          hostname: 'broker.actions.githubusercontent.com',
-        },
-      ],
-    },
+    https:
+      ENV.PROXY_SCHEME === 'https'
+        ? {
+            keyPath: ENV.CA_KEY_PATH,
+            certPath: ENV.CA_CERT_PATH,
+            tlsPassthrough: [
+              {
+                hostname: 'broker.actions.githubusercontent.com',
+              },
+            ],
+          }
+        : undefined,
     debug: ENV.DEBUG,
   })
 
