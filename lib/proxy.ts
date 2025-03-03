@@ -22,6 +22,7 @@ export async function initializeProxy() {
         },
       ],
     },
+    debug: ENV.DEBUG,
   })
 
   await server
