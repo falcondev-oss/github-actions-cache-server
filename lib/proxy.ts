@@ -16,9 +16,9 @@ export async function initializeProxy() {
     https: {
       keyPath: ENV.CA_KEY_PATH,
       certPath: ENV.CA_CERT_PATH,
-      tlsPassthrough: [
+      tlsInterceptOnly: [
         {
-          hostname: 'broker.actions.githubusercontent.com',
+          hostname: 'results-receiver.actions.githubusercontent.com',
         },
       ],
     },
