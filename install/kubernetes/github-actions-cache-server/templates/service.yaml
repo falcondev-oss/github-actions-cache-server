@@ -8,8 +8,12 @@ spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: http
+      targetPort: cache
       protocol: TCP
-      name: http
+      name: cache
+    - port: {{ .Values.service.proxyPort }}
+      targetPort: proxy
+      protocol: TCP
+      name: proxy
   selector:
     {{- include "github-actions-cache-server.selectorLabels" . | nindent 4 }}

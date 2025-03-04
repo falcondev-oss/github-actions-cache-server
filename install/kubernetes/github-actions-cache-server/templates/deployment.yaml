@@ -43,8 +43,11 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: http
+            - name: cache
               containerPort: 3000
+              protocol: TCP
+            - name: proxy
+              containerPort: 8000
               protocol: TCP
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
@@ -62,12 +65,11 @@ spec:
           env:
             - name: PORT
               value: "3000"
+            - name: PROXY_PORT
+              value: "8000"
             - name: API_BASE_URL
               value: {{ default $internalApiBaseUrl .Values.apiBaseUrl }}
           {{- with .Values.env }}
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:

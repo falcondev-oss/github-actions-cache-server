@@ -45,6 +45,7 @@ securityContext:
 service:
   type: ClusterIP
   port: 80
+  proxyPort: 8000
 
 ingress:
   enabled: false
@@ -74,11 +75,11 @@ resources:
 livenessProbe:
   httpGet:
     path: /
-    port: http
+    port: cache
 readinessProbe:
   httpGet:
     path: /
-    port: http
+    port: cache
 
 autoscaling:
   enabled: true
@@ -127,4 +128,4 @@ apiBaseUrl: ''
 
 env:
   - name: DEBUG
-    value: 'true'
+    value: 'false'
