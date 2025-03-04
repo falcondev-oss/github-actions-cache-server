@@ -11,36 +11,30 @@ const testFilePath = path.join(TEST_TEMP_DIR, 'test.bin')
 
 const MB = 1024 * 1024
 
-const versions = ['v2', 'v1'] as const
-
-for (const version of versions) {
-  describe(`save and restore cache with @actions/cache package with api ${version}`, () => {
-    beforeAll(() => {
-      if (version !== 'v2') return
-
-      process.env.ACTIONS_CACHE_SERVICE_V2 = 'true'
-      process.env.ACTIONS_RUNTIME_TOKEN = 'mock-runtime-token'
-    })
-    afterAll(() => {
-      delete process.env.ACTIONS_CACHE_SERVICE_V2
-      delete process.env.ACTIONS_RUNTIME_TOKEN
-    })
-
-    for (const size of [5 * MB, 50 * MB, 500 * MB, 1024 * MB])
-      test(`${size} Bytes`, { timeout: 90_000 }, async () => {
-        // save
-        const expectedContents = crypto.randomBytes(size)
-        await fs.writeFile(testFilePath, expectedContents)
-        await saveCache([testFilePath], 'cache-key')
-        await fs.rm(testFilePath)
-
-        // restore
-        const cacheHitKey = await restoreCache([testFilePath], 'cache-key')
-        expect(cacheHitKey).toBe('cache-key')
-
-        // check contents
-        const restoredContents = await fs.readFile(testFilePath)
-        expect(restoredContents.compare(expectedContents)).toBe(0)
-      })
+describe(`save and restore cache with @actions/cache package`, () => {
+  beforeAll(() => {
+    process.env.ACTIONS_CACHE_SERVICE_V2 = 'true'
+    process.env.ACTIONS_RUNTIME_TOKEN = 'mock-runtime-token'
   })
-}
+  afterAll(() => {
+    delete process.env.ACTIONS_CACHE_SERVICE_V2
+    delete process.env.ACTIONS_RUNTIME_TOKEN
+  })
+
+  for (const size of [5 * MB, 50 * MB, 500 * MB, 1024 * MB])
+    test(`${size} Bytes`, { timeout: 90_000 }, async () => {
+      // save
+      const expectedContents = crypto.randomBytes(size)
+      await fs.writeFile(testFilePath, expectedContents)
+      await saveCache([testFilePath], 'cache-key')
+      await fs.rm(testFilePath)
+
+      // restore
+      const cacheHitKey = await restoreCache([testFilePath], 'cache-key')
+      expect(cacheHitKey).toBe('cache-key')
+
+      // check contents
+      const restoredContents = await fs.readFile(testFilePath)
+      expect(restoredContents.compare(expectedContents)).toBe(0)
+    })
+})

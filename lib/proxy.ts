@@ -28,9 +28,7 @@ export async function initializeProxy() {
 
   await server
     .forAnyRequest()
-    .withUrlMatching(
-      /(twirp\/github\.actions\.results\.api\.v1\.CacheService)|(_apis\/artifactcache)/,
-    )
+    .withUrlMatching(/twirp\/github\.actions\.results\.api\.v1\.CacheService/)
     .thenForwardTo(`http://localhost:${ENV.NITRO_PORT}`)
 
   await server.forAnyWebSocket().thenPassThrough()
