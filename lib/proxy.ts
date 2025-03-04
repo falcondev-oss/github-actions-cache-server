@@ -22,6 +22,7 @@ export async function initializeProxy() {
         },
       ],
     },
+    http2: true,
     debug: ENV.DEBUG,
   })
 
