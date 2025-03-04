@@ -33,6 +33,7 @@ export async function initializeProxy() {
     )
     .thenForwardTo(`http://localhost:${ENV.NITRO_PORT}`)
 
+  await server.forAnyWebSocket().thenPassThrough()
   await server.forUnmatchedRequest().thenPassThrough()
 
   await server.start(port)
