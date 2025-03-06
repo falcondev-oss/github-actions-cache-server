@@ -21,6 +21,8 @@ RUN pnpm run build
 
 FROM node:22-alpine as runner
 
+ENV NITRO_CLUSTER_WORKERS=1
+
 WORKDIR /app
 
 COPY --from=builder /app/.output ./
