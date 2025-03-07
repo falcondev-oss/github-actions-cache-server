@@ -13,12 +13,8 @@ const envSchema = z.object({
   STORAGE_DRIVER: z.string().toLowerCase().default('filesystem'),
   DB_DRIVER: z.string().toLowerCase().default('sqlite'),
   DEBUG: booleanSchema.default('false'),
-  PROXY_PORT: portSchema.default(8000),
   NITRO_PORT: portSchema.default(3000),
-  CA_KEY_PATH: z.string(),
-  CA_CERT_PATH: z.string(),
   TEMP_DIR: z.string().default(tmpdir()),
-  DISABLE_PROXY: booleanSchema.default('false'),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)

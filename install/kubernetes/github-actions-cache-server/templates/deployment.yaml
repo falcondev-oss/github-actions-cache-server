@@ -46,9 +46,6 @@ spec:
             - name: cache
               containerPort: 3000
               protocol: TCP
-            - name: proxy
-              containerPort: 8000
-              protocol: TCP
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
@@ -65,8 +62,6 @@ spec:
           env:
             - name: PORT
               value: "3000"
-            - name: PROXY_PORT
-              value: "8000"
             - name: API_BASE_URL
               value: {{ default $internalApiBaseUrl .Values.apiBaseUrl }}
           {{- with .Values.env }}

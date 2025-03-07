@@ -11,9 +11,5 @@ spec:
       targetPort: cache
       protocol: TCP
       name: cache
-    - port: {{ .Values.service.proxyPort }}
-      targetPort: proxy
-      protocol: TCP
-      name: proxy
   selector:
     {{- include "github-actions-cache-server.selectorLabels" . | nindent 4 }}

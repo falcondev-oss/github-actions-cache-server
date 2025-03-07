@@ -45,7 +45,6 @@ securityContext:
 service:
   type: ClusterIP
   port: 80
-  proxyPort: 8000
 
 ingress:
   enabled: false

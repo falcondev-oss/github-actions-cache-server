@@ -2,9 +2,9 @@ title: GitHub Actions Cache Server
 description: Easily deploy your own GitHub actions cache without needing to change any workflow files!
 navigation: false
 hero:
-  title: Self-Hosted Cache Server<br>for GitHub Actions
+  title: Self-Hosted Cache Server for GitHub Actions
   description: Easily deploy your own GitHub actions cache without needing to change any workflow files!
-  orientation: vertical
+  orientation: horizontal
   links:
     - label: Get started
       icon: i-heroicons-arrow-right-20-solid
@@ -18,25 +18,13 @@ hero:
         image: ghcr.io/falcondev-oss/github-actions-cache-server:latest
         ports:
           - '3000:3000'
-          - '8000:8000'
         environment:
           API_BASE_URL: http://localhost:3000
-          CA_KEY_PATH: /run/secrets/ca_key
-          CA_CERT_PATH: /run/secrets/ca_cert
         volumes:
           - cache-data:/app/.data
-        secrets:
-          - ca_key
-          - ca_cert
 
     volumes:
       cache-data:
-
-    secrets:
-      ca_key:
-        file: ./key.pem
-      ca_cert:
-        file: ./cert.pem
     ```
 features:
   items:

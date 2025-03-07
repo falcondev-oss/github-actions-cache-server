@@ -50,16 +50,10 @@ jobs:
       - name: pnpm install
         uses: falcondev-it/.github/actions/pnpm-install@master
 
-      - run: touch mock.key
-      - run: touch mock.crt
-
       - run: pnpm run test:run
         env:
           VITEST_DB_DRIVER: ${{ matrix.db-driver }}
           VITEST_STORAGE_DRIVER: ${{ matrix.storage-driver }}
-          DISABLE_PROXY: true
-          CA_CERT_PATH: mock.crt
-          CA_KEY_PATH: mock.key
 
   deploy:
     if: github.event.ref == 'refs/heads/dev'

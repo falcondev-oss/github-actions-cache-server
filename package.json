@@ -35,7 +35,6 @@
     "execa": "^9.5.2",
     "h3": "npm:h3-nightly@1.15.1-20250222-111608-d1c00fc",
     "kysely": "^0.27.5",
-    "mockttp": "^3.16.0",
     "mysql2": "^3.12.0",
     "nitropack": "npm:nitropack-nightly@2.11.0-20250301-231416.f56ead19",
     "pg": "^8.13.1",
