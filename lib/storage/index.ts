@@ -1,6 +1,7 @@
 import type { Buffer } from 'node:buffer'
-
 import type { Readable } from 'node:stream'
+
+import cluster from 'node:cluster'
 
 import { randomBytes, randomInt } from 'node:crypto'
 import consola from 'consola'
@@ -62,7 +63,7 @@ export async function initializeStorage() {
         // eslint-disable-next-line unicorn/no-process-exit
         process.exit(1)
       }
-      logger.info(`Using storage driver: ${driverName}`)
+      if (cluster.isPrimary) logger.info(`Using storage driver: ${driverName}`)
 
       const driver = await driverSetup()
       const db = await useDB()

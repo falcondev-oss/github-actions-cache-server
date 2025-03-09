@@ -74,11 +74,11 @@ resources:
 livenessProbe:
   httpGet:
     path: /
-    port: http
+    port: cache
 readinessProbe:
   httpGet:
     path: /
-    port: http
+    port: cache
 
 autoscaling:
   enabled: true
@@ -127,4 +127,4 @@ apiBaseUrl: ''
 
 env:
   - name: DEBUG
-    value: 'true'
+    value: 'false'

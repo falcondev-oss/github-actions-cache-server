@@ -1,3 +1,4 @@
+import cluster from 'node:cluster'
 import { ENV } from '@/lib/env'
 import { logger } from '@/lib/logger'
 
@@ -7,6 +8,8 @@ import { Cron } from 'croner'
 import { useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(() => {
+  if (!cluster.isPrimary) return
+
   // cache cleanup
   if (ENV.CACHE_CLEANUP_OLDER_THAN_DAYS > 0) {
     const job = new Cron(ENV.CACHE_CLEANUP_CRON)
