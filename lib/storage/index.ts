@@ -271,7 +271,7 @@ export async function initializeStorage() {
               .catch(() => {
                 // noop
               })
-            await db.deleteFrom('uploads').where('id', '=', upload.id)
+            await db.deleteFrom('uploads').where('id', '=', upload.id).execute()
           }
         },
       }
