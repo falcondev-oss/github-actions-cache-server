@@ -55,7 +55,7 @@ jobs:
 
           npx bumpp ${{ env[inputs.version] }} -y -r --commit "chore(release): v%s" --no-push
 
-          export VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//') 
+          export VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
           sed -E "s/^appVersion:.+$/appVersion: '$VERSION'/" -i install/kubernetes/github-actions-cache-server/Chart.yaml
           git stage install/kubernetes/github-actions-cache-server/Chart.yaml
           git commit -n --no-edit --amend
@@ -113,6 +113,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.release.outputs.RELEASE_TAG }}
             type=semver,pattern={{major}},value=${{ needs.release.outputs.RELEASE_TAG }}
             latest
+            dev
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
