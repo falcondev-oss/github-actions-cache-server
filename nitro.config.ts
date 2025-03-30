@@ -36,4 +36,5 @@ export default defineNitroConfig({
       exclude: ['../../docs'],
     },
   },
+  compatibilityDate: '2025-02-01',
 })
