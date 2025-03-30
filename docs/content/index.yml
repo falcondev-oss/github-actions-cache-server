@@ -13,8 +13,6 @@ hero:
       size: lg
   code: |
     ```yaml [docker-compose.yml]
-    version: '3.9'
-
     services:
       cache-server:
         image: ghcr.io/falcondev-oss/github-actions-cache-server:latest

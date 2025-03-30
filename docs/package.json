@@ -25,5 +25,13 @@
     "@iconify-json/tabler": "^1.2.16",
     "@nuxthq/studio": "^2.2.1",
     "vue-tsc": "^2.2.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "better-sqlite3",
+      "esbuild",
+      "vue-demi"
+    ]
   }
 }

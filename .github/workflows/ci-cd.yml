@@ -50,7 +50,10 @@ jobs:
       - name: pnpm install
         uses: falcondev-it/.github/actions/pnpm-install@master
 
-      - run: VITEST_DB_DRIVER=${{ matrix.db-driver }} VITEST_STORAGE_DRIVER=${{ matrix.storage-driver }} pnpm run test:run
+      - run: pnpm run test:run
+        env:
+          VITEST_DB_DRIVER: ${{ matrix.db-driver }}
+          VITEST_STORAGE_DRIVER: ${{ matrix.storage-driver }}
 
   deploy:
     if: github.event.ref == 'refs/heads/dev'

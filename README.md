@@ -10,8 +10,6 @@ This is a drop-in replacement for the official GitHub hosted cache server. It is
 - 😎 Easy setup
 
 ```yaml
-version: '3.9'
-
 services:
   cache-server:
     image: ghcr.io/falcondev-oss/github-actions-cache-server

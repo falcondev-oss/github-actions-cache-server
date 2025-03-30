@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { version } from './package.json'
 
 export default defineNitroConfig({
-  preset: 'node-server',
+  preset: 'node-cluster',
   runtimeConfig: {
     version: `v${version}${process.env.BUILD_HASH ? ` [${process.env.BUILD_HASH}]` : ''}`,
   },
@@ -21,8 +21,6 @@ export default defineNitroConfig({
   },
   alias: {
     '@': fileURLToPath(new URL('.', import.meta.url)),
-    // https://github.com/unjs/consola/issues/276
-    'consola': 'consola',
   },
   esbuild: {
     options: {

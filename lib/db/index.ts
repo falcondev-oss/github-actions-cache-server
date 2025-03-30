@@ -1,6 +1,7 @@
 import type { Selectable } from 'kysely'
-
 import type { DatabaseDriverName } from '~/lib/db/drivers'
+
+import cluster from 'node:cluster'
 
 import { hash } from 'node:crypto'
 import { Kysely, Migrator } from 'kysely'
@@ -57,7 +58,7 @@ export async function initializeDatabase() {
       // eslint-disable-next-line unicorn/no-process-exit
       process.exit(1)
     }
-    logger.info(`Using database driver: ${driverName}`)
+    if (cluster.isPrimary) logger.info(`Using database driver: ${driverName}`)
 
     const driver = await driverSetup()
 
@@ -65,23 +66,25 @@ export async function initializeDatabase() {
       dialect: driver,
     })
 
-    logger.info('Migrating database...')
-    const migrator = new Migrator({
-      db: _db,
-      provider: {
-        async getMigrations() {
-          return migrations(driverName as DatabaseDriverName)
+    if (cluster.isPrimary) {
+      logger.info('Migrating database...')
+      const migrator = new Migrator({
+        db: _db,
+        provider: {
+          async getMigrations() {
+            return migrations(driverName as DatabaseDriverName)
+          },
         },
-      },
-    })
-    const { error, results } = await migrator.migrateToLatest()
-    if (error) {
-      logger.error('Database migration failed', error)
-      // eslint-disable-next-line unicorn/no-process-exit
-      process.exit(1)
+      })
+      const { error, results } = await migrator.migrateToLatest()
+      if (error) {
+        logger.error('Database migration failed', error)
+        // eslint-disable-next-line unicorn/no-process-exit
+        process.exit(1)
+      }
+      logger.debug('Migration results', results)
+      logger.success('Database migrated')
     }
-    logger.debug('Migration results', results)
-    logger.success('Database migrated')
   }
 
   initializationPromise = init()

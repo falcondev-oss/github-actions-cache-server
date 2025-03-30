@@ -1,5 +1,6 @@
-import { H3Error } from 'h3'
+import cluster from 'node:cluster'
 
+import { H3Error } from 'h3'
 import { initializeDatabase, useDB } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
@@ -7,7 +8,7 @@ import { initializeStorage, useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
   const version = useRuntimeConfig().version
-  logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
+  if (cluster.isPrimary) logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
 
   await initializeDatabase()
   await initializeStorage()
@@ -35,26 +36,28 @@ export default defineNitroPlugin(async (nitro) => {
 
   if (!version) throw new Error('No version found in runtime config')
 
-  const db = await useDB()
-  const existing = await db
-    .selectFrom('meta')
-    .where('key', '=', 'version')
-    .select('value')
-    .executeTakeFirst()
+  if (cluster.isPrimary) {
+    const db = await useDB()
+    const existing = await db
+      .selectFrom('meta')
+      .where('key', '=', 'version')
+      .select('value')
+      .executeTakeFirst()
 
-  if (!existing || existing.value !== version) {
-    logger.info(
-      `Version changed from ${existing?.value ?? '[no version, first install]'} to ${version}. Pruning cache...`,
-    )
-    const adapter = await useStorageAdapter()
-    await adapter.pruneCaches()
+    if (!existing || existing.value !== version) {
+      logger.info(
+        `Version changed from ${existing?.value ?? '[no version, first install]'} to ${version}. Pruning cache...`,
+      )
+      const adapter = await useStorageAdapter()
+      await adapter.pruneCaches()
+    }
+
+    if (existing) {
+      await db.updateTable('meta').set('value', version).where('key', '=', 'version').execute()
+    } else {
+      await db.insertInto('meta').values({ key: 'version', value: version }).execute()
+    }
   }
 
-  if (existing) {
-    await db.updateTable('meta').set('value', version).where('key', '=', 'version').execute()
-  } else {
-    await db.insertInto('meta').values({ key: 'version', value: version }).execute()
-  }
-
-  if (process.send) process.send('nitro:ready')
+  if (process.send && cluster.isPrimary) process.send('nitro:ready')
 })
