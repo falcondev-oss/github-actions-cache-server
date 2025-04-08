@@ -18,25 +18,13 @@ import { streamToBuffer } from '~/lib/utils'
 export const s3Driver = defineStorageDriver({
   envSchema: z.object({
     STORAGE_S3_BUCKET: z.string().min(1),
-    STORAGE_S3_ENDPOINT: z.string().min(1),
-    STORAGE_S3_REGION: z.string().min(1).default('us-east-1'),
-    STORAGE_S3_PORT: z.coerce.number().positive(),
-    STORAGE_S3_USE_SSL: z.string().transform((v) => v === 'true'),
-    STORAGE_S3_ACCESS_KEY: z.string().min(1),
-    STORAGE_S3_SECRET_KEY: z.string().min(1),
+    // AWS SDK requires an AWS_REGION to be set, even if you're using a custom endpoint
+    AWS_REGION: z.string().default('us-east-1'),
   }),
   async setup(options) {
-    const protocol = options.STORAGE_S3_USE_SSL ? 'https' : 'http'
-    const port = options.STORAGE_S3_PORT ? `:${options.STORAGE_S3_PORT}` : ''
-
     const s3 = new S3Client({
-      credentials: {
-        secretAccessKey: options.STORAGE_S3_SECRET_KEY,
-        accessKeyId: options.STORAGE_S3_ACCESS_KEY,
-      },
-      endpoint: `${protocol}://${options.STORAGE_S3_ENDPOINT}${port}`,
-      region: options.STORAGE_S3_REGION,
       forcePathStyle: true,
+      region: options.AWS_REGION,
     })
 
     try {

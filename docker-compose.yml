@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   postgres:
     image: postgres:15
@@ -24,3 +22,25 @@ services:
     command: -c 'mkdir -p /data/test && /usr/bin/minio server /data'
     ports:
       - 9000:9000
+    environment:
+      MINIO_ROOT_USER: access_key
+      MINIO_ROOT_PASSWORD: secret_key
+
+  cache-server:
+    build:
+      dockerfile: Dockerfile
+      context: .
+    ports:
+      - '3000:3000'
+    depends_on:
+      - minio
+
+    environment:
+      API_BASE_URL: http://localhost:3000
+
+      STORAGE_DRIVER: s3
+      STORAGE_S3_BUCKET: test
+
+      AWS_ACCESS_KEY_ID: access_key
+      AWS_SECRET_ACCESS_KEY: secret_key
+      AWS_ENDPOINT_URL: http://minio:9000
