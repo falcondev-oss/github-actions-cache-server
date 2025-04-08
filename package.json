@@ -1,7 +1,7 @@
 {
   "name": "github-actions-cache-server",
   "type": "module",
-  "version": "7.0.1",
+  "version": "8.0.0",
   "private": true,
   "engines": {
     "node": "22",
