@@ -91,8 +91,8 @@ jobs:
 
           npx changelogithub
 
-  deploy:
-    name: 🚀 Build and push
+  deploy-docker:
+    name: 🚀 Build and push Docker image
     permissions:
       packages: write
       contents: read
@@ -136,3 +136,36 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  deploy-chart:
+    name: 🚀 Build and push Helm chart
+    permissions:
+      packages: write
+      contents: read
+    needs: [release]
+    runs-on: ubuntu-latest
+    env:
+      CHART_DIR: install/kubernetes/github-actions-cache-server
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package Helm chart
+        run: helm package . --destination packaged
+        working-directory: ${{ env.CHART_DIR }}
+
+      - name: Push Helm chart to GHCR
+        run: |
+          shopt -s nullglob
+          for pkg in ${{ env.CHART_DIR }}/packaged/*.tgz; do
+            echo "Pushing $pkg to ghcr.io/${{ github.repository_owner }}/charts"
+            helm push "$pkg" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          done
