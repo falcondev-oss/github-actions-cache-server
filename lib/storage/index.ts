@@ -29,12 +29,13 @@ export interface Storage {
     archiveLocation: string
   } | null>
   download: (objectName: string) => Promise<ReadableStream | Readable>
-  uploadChunk: (
-    uploadId: number,
-    chunkStream: ReadableStream<Buffer>,
-    chunkStart: number,
-    chunkEnd: number,
-  ) => Promise<void>
+  uploadChunk: (opts: {
+    uploadId: number
+    chunkStream: ReadableStream<Buffer>
+    chunkStart: number
+    chunkEnd: number
+    chunkIndex: number
+  }) => Promise<void>
   commitCache: (uploadId: number | string, size: number) => Promise<void>
   reserveCache: (
     key: string,
@@ -107,7 +108,7 @@ export async function initializeStorage() {
             cacheId: uploadId,
           }
         },
-        async uploadChunk(uploadId, chunkStream, chunkStart, chunkEnd) {
+        async uploadChunk({ uploadId, chunkStream, chunkStart, chunkEnd, chunkIndex }) {
           const upload = await db
             .selectFrom('uploads')
             .selectAll()
@@ -124,11 +125,7 @@ export async function initializeStorage() {
             throw new Error('Chunk end must be greater than chunk start')
           }
 
-          // this should be the correct chunk size except for the last chunk
-          const chunkSize = Math.floor(chunkStart / (chunkEnd - chunkStart) + 1)
-          // this should handle the incorrect chunk size of the last chunk by just setting it to the limit of 10000 (for s3)
-          // TODO find a better way to calculate chunk size
-          const partNumber = Math.min(chunkSize, 10_000)
+          const partNumber = chunkIndex + 1
 
           const objectName = getObjectNameFromKey(upload.key, upload.version)
           try {

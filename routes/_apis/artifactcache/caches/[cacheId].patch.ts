@@ -37,8 +37,19 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Invalid content-range header' })
   }
 
+  // TODO find a better way to calculate chunk size
+  // this should be the correct chunk size except for the last chunk
+  // this should handle the incorrect chunk size of the last chunk by just setting it to the limit of 10000 (for s3)
+  const chunkIndex = Math.min(Math.floor(start / (end - start)), 9999)
+
   const adapter = await useStorageAdapter()
-  await adapter.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
+  await adapter.uploadChunk({
+    uploadId: cacheId,
+    chunkStream: stream as ReadableStream<Buffer>,
+    chunkStart: start,
+    chunkEnd: end,
+    chunkIndex,
+  })
 })
 
 function parseContentRangeHeader(contentRange: string) {

@@ -6,13 +6,11 @@ import { logger } from '~/lib/logger'
 import { useStorageAdapter } from '~/lib/storage'
 
 // https://github.com/actions/toolkit/blob/340a6b15b5879eefe1412ee6c8606978b091d3e8/packages/cache/src/cache.ts#L470
-const chunkSize = 64 * 1024 * 1024
+const MB = 1024 * 1024
 
 const pathParamsSchema = z.object({
   cacheId: z.coerce.number(),
 })
-
-const sizeByBlockId = new Map<string, number>()
 
 export default defineEventHandler(async (event) => {
   const parsedPathParams = pathParamsSchema.safeParse(event.context.params)
@@ -24,7 +22,7 @@ export default defineEventHandler(async (event) => {
 
   if (getQuery(event).comp === 'blocklist') {
     setResponseStatus(event, 201)
-    return 'ok'
+    return
   }
 
   const blockId = getQuery(event)?.blockid as string
@@ -51,26 +49,40 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: "'content-length' header is required" })
   }
 
-  sizeByBlockId.set(blockId, contentLength)
+  const userAgent = getHeader(event, 'user-agent')
+
+  // 1 MB for docker buildx
+  // 64 MB for everything else
+  const chunkSize = userAgent && userAgent.startsWith('azsdk-go-azblob') ? MB : 64 * MB
   const start = chunkIndex * chunkSize
   const end = start + contentLength - 1
 
   const adapter = await useStorageAdapter()
-  await adapter.uploadChunk(cacheId, stream as ReadableStream<Buffer>, start, end)
+  await adapter.uploadChunk({
+    uploadId: cacheId,
+    chunkStream: stream as ReadableStream<Buffer>,
+    chunkStart: start,
+    chunkEnd: end,
+    chunkIndex,
+  })
 
   setResponseStatus(event, 201)
 })
 
-/**
- * Format (base64 decoded): 06a9ffa8-2e62-4e96-8e5b-15f24c117f1f000000000006
- */
-function getChunkIndexFromBlockId(blockId: string) {
-  const decoded = Buffer.from(blockId, 'base64').toString('utf8')
-  if (decoded.length !== 48) return
+function getChunkIndexFromBlockId(blockIdBase64: string) {
+  const base64Decoded = Buffer.from(blockIdBase64, 'base64')
 
-  // slice off uuid and convert to number
-  const index = Number.parseInt(decoded.slice(36))
-  if (Number.isNaN(index)) return
+  // 64 bytes used by docker buildx
+  // 48 bytes used by everything else
+  if (base64Decoded.length === 64) {
+    return base64Decoded.readUInt32BE(16)
+  } else if (base64Decoded.length === 48) {
+    const decoded = base64Decoded.toString('utf8')
 
-  return index
+    // slice off uuid and convert to number
+    const index = Number.parseInt(decoded.slice(36))
+    if (Number.isNaN(index)) return
+
+    return index
+  }
 }
