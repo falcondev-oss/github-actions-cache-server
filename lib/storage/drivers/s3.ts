@@ -83,13 +83,16 @@ export const s3Driver = defineStorageDriver({
         )
       },
       async uploadPart({ objectName, uploadId, partNumber, data }) {
+        const buffer = await streamToBuffer(data)
+        if (buffer.length === 0) return { eTag: null }
+
         const res = await s3.send(
           new UploadPartCommand({
             Bucket: options.STORAGE_S3_BUCKET,
             Key: getObjectKey(objectName),
             UploadId: uploadId,
             PartNumber: partNumber,
-            Body: await streamToBuffer(data),
+            Body: buffer,
           }),
         )
         return {
