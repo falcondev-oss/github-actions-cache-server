@@ -26,7 +26,7 @@ for (const version of versions) {
       delete process.env.ACTIONS_RUNTIME_TOKEN
     })
 
-    for (const size of [5 * MB, 50 * MB, 500 * MB, 1024 * MB])
+    for (const size of [1, 5 * MB, 50 * MB, 500 * MB, 1024 * MB])
       test(`${size} Bytes`, { timeout: 90_000 }, async () => {
         // save
         const expectedContents = crypto.randomBytes(size)

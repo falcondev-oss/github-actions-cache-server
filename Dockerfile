@@ -28,4 +28,4 @@ WORKDIR /app
 
 COPY --from=builder /app/.output ./
 
-CMD node /app/server/index.mjs
+CMD ["node", "/app/server/index.mjs"]

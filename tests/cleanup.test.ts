@@ -3,19 +3,18 @@ import { beforeEach, describe, expect, test } from 'vitest'
 import {
   findKeyMatch,
   findStaleKeys,
-  initializeDatabase,
   pruneKeys,
   touchKey,
   updateOrCreateKey,
   useDB,
 } from '~/lib/db'
-import { initializeStorage } from '~/lib/storage'
+import { useStorageAdapter } from '~/lib/storage'
 
 describe('setting last accessed date', async () => {
   const db = await useDB()
   beforeEach(async () => {
-    await initializeStorage()
-    await initializeDatabase()
+    await useStorageAdapter()
+    await useDB()
     await pruneKeys(db)
   })
 
