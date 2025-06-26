@@ -1,11 +1,12 @@
-FROM node:22-alpine as builder
+FROM node:22-alpine AS builder
 
 ARG BUILD_HASH
 ENV BUILD_HASH=${BUILD_HASH}
 
 WORKDIR /app
 
-RUN npm install -g pnpm@latest-10
+# remove when 10.12.4 released
+RUN npm install -g pnpm@10.12.1
 
 COPY package.json pnpm-lock.yaml .npmrc ./
 
@@ -19,7 +20,7 @@ RUN pnpm run build
 
 # --------------------------------------------
 
-FROM node:22-alpine as runner
+FROM node:22-alpine AS runner
 
 ENV NITRO_CLUSTER_WORKERS=1
 
