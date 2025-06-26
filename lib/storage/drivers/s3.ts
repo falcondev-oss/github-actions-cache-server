@@ -10,11 +10,11 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import * as R from 'remeda'
 
+import * as R from 'remeda'
 import { z } from 'zod'
 import { parseEnv, StorageDriver } from '~/lib/storage/defineStorageDriver'
-import { createTempDir } from '~/lib/utils'
+import { createTempDir, streamToBuffer } from '~/lib/utils'
 
 export class S3StorageDriver extends StorageDriver {
   s3
@@ -95,12 +95,7 @@ export class S3StorageDriver extends StorageDriver {
     )
   }
 
-  async uploadPart(opts: {
-    objectName: string
-    uploadId: string
-    partNumber: number
-    data: ReadableStream
-  }) {
+  async uploadPart(opts: { uploadId: string; partNumber: number; data: ReadableStream }) {
     await this.s3.send(
       new PutObjectCommand({
         Bucket: this.bucket,
@@ -108,7 +103,7 @@ export class S3StorageDriver extends StorageDriver {
           uploadId: opts.uploadId,
           partNumber: opts.partNumber,
         }),
-        Body: opts.data,
+        Body: await streamToBuffer(opts.data),
       }),
     )
   }
@@ -121,6 +116,7 @@ export class S3StorageDriver extends StorageDriver {
     const tempDir = await createTempDir()
     const outputTempFilePath = path.join(tempDir, 'output')
 
+    await fs.writeFile(outputTempFilePath, '')
     const outputTempFile = await fs.open(outputTempFilePath, 'r+')
 
     let currentChunk = 0
@@ -128,34 +124,32 @@ export class S3StorageDriver extends StorageDriver {
       const part = await this.s3.send(
         new GetObjectCommand({
           Bucket: this.bucket,
-          Key: this.addUploadFolderPrefix({
+          Key: this.getUploadPartObjectName({
+            partNumber,
             uploadId: opts.uploadId,
-            objectName: this.getUploadPartObjectName({
-              partNumber,
-              uploadId: opts.uploadId,
-            }),
           }),
         }),
       )
 
       if (!part.Body) throw new Error(`Part ${partNumber} is missing`)
 
-      const partStream = part.Body as ReadableStream
-
+      const partStream = part.Body.transformToWebStream()
       const bufferWriteStream = new WritableStream<Buffer>({
         async write(chunk) {
+          const start = currentChunk
           currentChunk += chunk.length
-          await outputTempFile.write(chunk, 0, chunk.length, currentChunk)
+          await outputTempFile.write(chunk, 0, chunk.length, start)
         },
       })
       await partStream.pipeTo(bufferWriteStream)
     }
 
+    const readStream = createReadStream(outputTempFilePath)
     await this.s3.send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: this.addBaseFolderPrefix(opts.finalOutputObjectName),
-        Body: await createReadStream(outputTempFilePath),
+        Body: readStream,
       }),
     )
 

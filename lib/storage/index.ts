@@ -92,10 +92,8 @@ export const useStorageAdapter = createSingletonPromise(async () => {
 
         const partNumber = chunkIndex + 1
 
-        const objectName = getObjectNameFromKey(upload.key, upload.version)
         try {
           await driver.uploadPart({
-            objectName,
             uploadId: upload.id,
             partNumber,
             data: chunkStream,
