@@ -144,6 +144,8 @@ export class S3StorageDriver extends StorageDriver {
       await partStream.pipeTo(bufferWriteStream)
     }
 
+    await outputTempFile.close()
+
     const readStream = createReadStream(outputTempFilePath)
     await this.s3.send(
       new PutObjectCommand({
