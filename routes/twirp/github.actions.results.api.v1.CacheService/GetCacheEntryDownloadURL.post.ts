@@ -17,7 +17,10 @@ export default defineEventHandler(async (event) => {
 
   const { key, restore_keys, version } = parsedBody.data
   const adapter = await useStorageAdapter()
-  const storageEntry = await adapter.getCacheEntry([key, ...(restore_keys ?? [])], version)
+  const storageEntry = await adapter.getCacheEntry({
+    keys: [key, ...(restore_keys ?? [])],
+    version,
+  })
 
   if (!storageEntry)
     return {

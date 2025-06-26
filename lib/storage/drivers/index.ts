@@ -1,13 +1,12 @@
-import type { defineStorageDriver } from '~/lib/storage/defineStorageDriver'
-import { filesystemDriver } from '~/lib/storage/drivers/filesystem'
-import { gcsDriver } from '~/lib/storage/drivers/gcs'
-import { s3Driver } from '~/lib/storage/drivers/s3'
+import { FilesystemStorageDriver } from './filesystem'
+import { GCSStorageDriver } from './gcs'
+import { S3StorageDriver } from './s3'
 
 const storageDrivers = {
-  s3: s3Driver,
-  gcs: gcsDriver,
-  filesystem: filesystemDriver,
-} as const satisfies Record<string, ReturnType<typeof defineStorageDriver>>
+  s3: S3StorageDriver,
+  gcs: GCSStorageDriver,
+  filesystem: FilesystemStorageDriver,
+} as const
 
 export type StorageDriverName = keyof typeof storageDrivers
 

@@ -4,7 +4,6 @@ import { useStorageAdapter } from '~/lib/storage'
 
 const bodySchema = z.object({
   key: z.string(),
-  size_bytes: z.coerce.number(),
   version: z.string(),
 })
 
@@ -16,7 +15,7 @@ export default defineEventHandler(async (event) => {
       statusMessage: `Invalid body: ${parsedBody.error.message}`,
     })
 
-  const { key, size_bytes, version } = parsedBody.data
+  const { key, version } = parsedBody.data
 
   const db = await useDB()
   const adapter = await useStorageAdapter()
@@ -27,7 +26,7 @@ export default defineEventHandler(async (event) => {
       statusMessage: 'Upload not found',
     })
 
-  await adapter.commitCache(upload.id, size_bytes)
+  await adapter.commitCache(upload.id)
 
   return {
     ok: true,

@@ -21,7 +21,7 @@ export default defineEventHandler(async (event) => {
   const { keys, version } = parsedQuery.data
 
   const adapter = await useStorageAdapter()
-  const storageEntry = await adapter.getCacheEntry(keys, version)
+  const storageEntry = await adapter.getCacheEntry({ keys, version })
 
   if (!storageEntry) {
     setResponseStatus(event, 204)

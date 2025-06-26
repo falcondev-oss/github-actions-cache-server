@@ -1,17 +1,17 @@
 import cluster from 'node:cluster'
 
 import { H3Error } from 'h3'
-import { initializeDatabase, useDB } from '~/lib/db'
+import { useDB } from '~/lib/db'
 import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
-import { initializeStorage, useStorageAdapter } from '~/lib/storage'
+import { useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
   const version = useRuntimeConfig().version
   if (cluster.isPrimary) logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
 
-  await initializeDatabase()
-  await initializeStorage()
+  await useDB()
+  await useStorageAdapter()
 
   nitro.hooks.hook('error', (error, { event }) => {
     if (!event) {

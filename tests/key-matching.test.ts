@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import { findKeyMatch, initializeDatabase, pruneKeys, updateOrCreateKey, useDB } from '~/lib/db'
-import { initializeStorage } from '~/lib/storage'
+import { findKeyMatch, pruneKeys, updateOrCreateKey, useDB } from '~/lib/db'
+import { useStorageAdapter } from '~/lib/storage'
 import { sleep } from '~/tests/utils'
 
 describe('key matching', async () => {
   const db = await useDB()
   beforeEach(async () => {
-    await initializeStorage()
-    await initializeDatabase()
+    await useStorageAdapter()
+    await useDB()
     await pruneKeys(db)
   })
 

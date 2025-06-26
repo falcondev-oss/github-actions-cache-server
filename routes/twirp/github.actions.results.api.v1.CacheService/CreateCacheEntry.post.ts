@@ -19,7 +19,7 @@ export default defineEventHandler(async (event) => {
   const { key, version } = parsedBody.data
 
   const adapter = await useStorageAdapter()
-  const reservation = await adapter.reserveCache(key, version)
+  const reservation = await adapter.reserveCache({ key, version })
   if (!reservation.cacheId)
     return {
       ok: false,
