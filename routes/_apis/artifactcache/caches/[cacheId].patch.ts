@@ -47,7 +47,6 @@ export default defineEventHandler(async (event) => {
     uploadId: cacheId,
     chunkStream: stream as ReadableStream<Buffer>,
     chunkStart: start,
-    chunkEnd: end,
     chunkIndex,
   })
 })

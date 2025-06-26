@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 
 import { z } from 'zod'
 import { logger } from '~/lib/logger'
@@ -22,6 +23,8 @@ export default defineEventHandler(async (event) => {
 
   if (getQuery(event).comp === 'blocklist') {
     setResponseStatus(event, 201)
+    // prevent random EOF error with in tonistiigi/go-actions-cache caused by missing request id
+    setHeader(event, 'x-ms-request-id', randomUUID())
     return
   }
 
@@ -42,30 +45,23 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Request body must be a stream' })
   }
 
-  const contentLengthHeader = getHeader(event, 'content-length')
-  const contentLength = Number.parseInt(contentLengthHeader ?? '')
-  if (!contentLengthHeader || Number.isNaN(contentLength)) {
-    logger.debug("Upload: 'content-length' header not found")
-    throw createError({ statusCode: 400, statusMessage: "'content-length' header is required" })
-  }
-
   const userAgent = getHeader(event, 'user-agent')
 
   // 1 MB for docker buildx
   // 64 MB for everything else
   const chunkSize = userAgent && userAgent.startsWith('azsdk-go-azblob') ? MB : 64 * MB
   const start = chunkIndex * chunkSize
-  const end = start + contentLength - 1
 
   const adapter = await useStorageAdapter()
   await adapter.uploadChunk({
     uploadId: cacheId,
     chunkStream: stream as ReadableStream<Buffer>,
     chunkStart: start,
-    chunkEnd: end,
     chunkIndex,
   })
 
+  // prevent random EOF error with in tonistiigi/go-actions-cache caused by missing request id
+  setHeader(event, 'x-ms-request-id', randomUUID())
   setResponseStatus(event, 201)
 })
 

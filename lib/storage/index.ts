@@ -1,9 +1,9 @@
 import type { Buffer } from 'node:buffer'
-import type { Readable } from 'node:stream'
 
 import cluster from 'node:cluster'
 
 import { randomBytes, randomInt } from 'node:crypto'
+import { createSingletonPromise } from '@antfu/utils'
 import consola from 'consola'
 import {
   findKeyMatch,
@@ -15,281 +15,218 @@ import {
   useDB,
 } from '~/lib/db'
 import { ENV } from '~/lib/env'
-import { logger } from '~/lib/logger'
 
+import { logger } from '~/lib/logger'
 import { getStorageDriver } from '~/lib/storage/drivers'
 import { getObjectNameFromKey } from '~/lib/utils'
 
-export interface Storage {
-  getCacheEntry: (
-    keys: string[],
-    version: string,
-  ) => Promise<{
-    cacheKey: string
-    archiveLocation: string
-  } | null>
-  download: (objectName: string) => Promise<ReadableStream | Readable>
-  uploadChunk: (opts: {
-    uploadId: number
-    chunkStream: ReadableStream<Buffer>
-    chunkStart: number
-    chunkEnd: number
-    chunkIndex: number
-  }) => Promise<void>
-  commitCache: (uploadId: number | string, size: number) => Promise<void>
-  reserveCache: (
-    key: string,
-    version: string,
-    cacheSize?: number,
-  ) => Promise<{
-    cacheId: number | null
-  }>
-  pruneCaches: (olderThanDays?: number) => Promise<void>
-  pruneUploads: (olderThanDate: Date) => Promise<void>
-}
-
-let storage: Storage
-let initializationPromise: Promise<void> | undefined
-
-export async function initializeStorage() {
-  if (initializationPromise) return initializationPromise
-
-  // eslint-disable-next-line unicorn/consistent-function-scoping
-  const init = async () => {
-    try {
-      const driverName = ENV.STORAGE_DRIVER
-      const driverSetup = getStorageDriver(driverName)
-      if (!driverSetup) {
-        consola.error(`No storage driver found for ${driverName}`)
-        // eslint-disable-next-line unicorn/no-process-exit
-        process.exit(1)
-      }
-      if (cluster.isPrimary) logger.info(`Using storage driver: ${driverName}`)
-
-      const driver = await driverSetup()
-      const db = await useDB()
-
-      storage = {
-        async reserveCache(key, version, totalSize) {
-          logger.debug('Reserve:', { key, version })
-
-          if (await getUpload(db, { key, version })) {
-            logger.debug(`Reserve: Already reserved. Ignoring...`, { key, version })
-            return {
-              cacheId: null,
-            }
-          }
-
-          const driverUploadId = await driver.initiateMultiPartUpload({
-            objectName: getObjectNameFromKey(key, version),
-            totalSize: totalSize ?? 0,
-          })
-          const uploadId = randomInt(1_000_000_000, 9_999_999_999)
-
-          await db
-            .insertInto('uploads')
-            .values({
-              created_at: new Date().toISOString(),
-              driver_upload_id: driverUploadId,
-              id: uploadId.toString(),
-              key,
-              version,
-            })
-            .execute()
-
-          logger.debug(`Reserve:`, {
-            key,
-            version,
-            driverUploadId,
-            uploadId,
-          })
-
-          return {
-            cacheId: uploadId,
-          }
-        },
-        async uploadChunk({ uploadId, chunkStream, chunkStart, chunkEnd, chunkIndex }) {
-          const upload = await db
-            .selectFrom('uploads')
-            .selectAll()
-            .where('id', '=', uploadId.toString())
-            .executeTakeFirst()
-          if (!upload) {
-            logger.debug(`Upload: Upload not found. Ignoring...`, {
-              uploadId,
-            })
-            return
-          }
-
-          if (chunkEnd === chunkStart) {
-            throw new Error('Chunk end must be greater than chunk start')
-          }
-
-          const partNumber = chunkIndex + 1
-
-          const objectName = getObjectNameFromKey(upload.key, upload.version)
-          try {
-            const { eTag } = await driver.uploadPart({
-              objectName,
-              uploadId: upload.driver_upload_id,
-              partNumber,
-              data: chunkStream,
-              chunkStart,
-              chunkEnd,
-            })
-            await db
-              .insertInto('upload_parts')
-              .values({
-                part_number: partNumber,
-                upload_id: uploadId.toString(),
-                e_tag: eTag,
-              })
-              .execute()
-          } catch (err) {
-            logger.debug(
-              'Upload: Error',
-              {
-                driverUploadId: upload.driver_upload_id,
-                uploadId,
-                chunkStart,
-                chunkEnd,
-                partNumber,
-              },
-              err,
-            )
-            throw err
-          }
-
-          logger.debug('Upload:', { uploadId, chunkStart, chunkEnd, partNumber })
-        },
-        async commitCache(uploadId) {
-          const upload = await db
-            .selectFrom('uploads')
-            .selectAll()
-            .where('id', '=', uploadId.toString())
-            .executeTakeFirst()
-
-          if (!upload) {
-            logger.debug('Commit: Upload not found. Ignoring...')
-            return
-          }
-
-          const parts = await db
-            .selectFrom('upload_parts')
-            .selectAll()
-            .where('upload_id', '=', upload.id)
-            .orderBy('part_number asc')
-            .execute()
-
-          await db.transaction().execute(async (tx) => {
-            logger.debug('Commit:', uploadId)
-
-            await tx.deleteFrom('uploads').where('id', '=', upload.id).execute()
-            await updateOrCreateKey(tx, {
-              key: upload.key,
-              version: upload.version,
-            })
-
-            await driver.completeMultipartUpload({
-              objectName: getObjectNameFromKey(upload.key, upload.version),
-              uploadId: upload.driver_upload_id,
-              parts: parts.map((part) => ({
-                partNumber: part.part_number,
-                eTag: part.e_tag ?? undefined,
-              })),
-            })
-          })
-        },
-        async getCacheEntry(keys, version) {
-          const primaryKey = keys[0]
-          const restoreKeys = keys.length > 1 ? keys.slice(1) : undefined
-
-          const cacheKey = await findKeyMatch(db, { key: primaryKey, version, restoreKeys })
-
-          if (!cacheKey) {
-            logger.debug('Get: Cache entry not found', { keys, version })
-            return null
-          }
-
-          await touchKey(db, { key: cacheKey.key, version: cacheKey.version })
-
-          const objectName = getObjectNameFromKey(cacheKey.key, cacheKey.version)
-
-          logger.debug('Get: Found', cacheKey)
-
-          return {
-            archiveLocation:
-              ENV.ENABLE_DIRECT_DOWNLOADS && driver.createDownloadUrl
-                ? await driver.createDownloadUrl({ objectName })
-                : createLocalDownloadUrl(objectName),
-            cacheKey: cacheKey.key,
-          }
-        },
-        async download(objectName) {
-          logger.debug('Download:', objectName)
-          return driver.download({ objectName })
-        },
-        async pruneCaches(olderThanDays) {
-          logger.debug('Prune:', {
-            olderThanDays,
-          })
-
-          const keys = await findStaleKeys(db, { olderThanDays })
-          if (keys.length === 0) {
-            logger.debug('Prune: No caches to prune')
-            return
-          }
-
-          await driver.delete({
-            objectNames: keys.map((key) => getObjectNameFromKey(key.key, key.version)),
-          })
-          await pruneKeys(db, keys)
-
-          logger.debug('Prune: Caches pruned', {
-            olderThanDays,
-          })
-        },
-        async pruneUploads(olderThanDate) {
-          logger.debug('Prune uploads')
-
-          // uploads older than 24 hours
-          const uploads = await db
-            .selectFrom('uploads')
-            .selectAll()
-            .where('created_at', '<', olderThanDate.toISOString())
-            .execute()
-
-          for (const upload of uploads) {
-            await driver
-              .abortMultipartUpload({
-                uploadId: upload.driver_upload_id,
-                objectName: getObjectNameFromKey(upload.key, upload.version),
-              })
-              .catch(() => {
-                // noop
-              })
-            await db.deleteFrom('uploads').where('id', '=', upload.id).execute()
-          }
-        },
-      }
-    } catch (err) {
-      consola.error('Failed to initialize storage driver:', err)
+export const useStorageAdapter = createSingletonPromise(async () => {
+  try {
+    const driverName = ENV.STORAGE_DRIVER
+    const driverClass = getStorageDriver(driverName)
+    if (!driverClass) {
+      consola.error(`No storage driver found for ${driverName}`)
       // eslint-disable-next-line unicorn/no-process-exit
       process.exit(1)
     }
-  }
+    if (cluster.isPrimary) logger.info(`Using storage driver: ${driverName}`)
 
-  initializationPromise = init()
-  return initializationPromise
-}
+    const driver = await driverClass.create()
+    const db = await useDB()
+
+    return {
+      async reserveCache({ key, version }: { key: string; version: string }) {
+        logger.debug('Reserve:', { key, version })
+
+        if (await getUpload(db, { key, version })) {
+          logger.debug(`Reserve: Already reserved. Ignoring...`, { key, version })
+          return {
+            cacheId: null,
+          }
+        }
+
+        const uploadId = randomInt(1_000_000_000, 9_999_999_999)
+
+        await db
+          .insertInto('uploads')
+          .values({
+            created_at: new Date().toISOString(),
+            id: uploadId.toString(),
+            key,
+            version,
+          })
+          .execute()
+
+        logger.debug(`Reserve:`, {
+          key,
+          version,
+          uploadId,
+        })
+
+        return {
+          cacheId: uploadId,
+        }
+      },
+      async uploadChunk({
+        uploadId,
+        chunkStream,
+        chunkStart,
+        chunkIndex,
+      }: {
+        uploadId: number
+        chunkStream: ReadableStream<Buffer>
+        chunkStart: number
+        chunkIndex: number
+      }) {
+        const upload = await db
+          .selectFrom('uploads')
+          .selectAll()
+          .where('id', '=', uploadId.toString())
+          .executeTakeFirst()
+        if (!upload) {
+          logger.debug(`Upload: Upload not found. Ignoring...`, {
+            uploadId,
+          })
+          return
+        }
+
+        const partNumber = chunkIndex + 1
+
+        try {
+          await driver.uploadPart({
+            uploadId: upload.id,
+            partNumber,
+            data: chunkStream,
+          })
+          await db
+            .insertInto('upload_parts')
+            .values({
+              part_number: partNumber,
+              upload_id: uploadId.toString(),
+            })
+            .execute()
+        } catch (err) {
+          logger.debug(
+            'Upload: Error',
+            {
+              uploadId,
+              chunkStart,
+              partNumber,
+            },
+            err,
+          )
+          throw err
+        }
+
+        logger.debug('Upload:', { uploadId, chunkStart, partNumber })
+      },
+      async commitCache(uploadId: number | string) {
+        const upload = await db
+          .selectFrom('uploads')
+          .selectAll()
+          .where('id', '=', uploadId.toString())
+          .executeTakeFirst()
+
+        if (!upload) {
+          logger.debug('Commit: Upload not found. Ignoring...')
+          return
+        }
+
+        const parts = await db
+          .selectFrom('upload_parts')
+          .selectAll()
+          .where('upload_id', '=', upload.id)
+          .orderBy('part_number asc')
+          .execute()
+
+        await db.transaction().execute(async (tx) => {
+          logger.debug('Commit:', uploadId)
+
+          await tx.deleteFrom('uploads').where('id', '=', upload.id).execute()
+          await updateOrCreateKey(tx, {
+            key: upload.key,
+            version: upload.version,
+          })
+
+          await driver.completeMultipartUpload({
+            finalOutputObjectName: getObjectNameFromKey(upload.key, upload.version),
+            uploadId: upload.id,
+            partNumbers: parts.map((part) => part.part_number),
+          })
+        })
+      },
+      async getCacheEntry({ keys, version }: { keys: string[]; version: string }) {
+        const primaryKey = keys[0]
+        const restoreKeys = keys.length > 1 ? keys.slice(1) : undefined
+
+        const cacheKey = await findKeyMatch(db, { key: primaryKey, version, restoreKeys })
+
+        if (!cacheKey) {
+          logger.debug('Get: Cache entry not found', { keys, version })
+          return null
+        }
+
+        await touchKey(db, { key: cacheKey.key, version: cacheKey.version })
+
+        const objectName = getObjectNameFromKey(cacheKey.key, cacheKey.version)
+
+        logger.debug('Get: Found', cacheKey)
+
+        return {
+          archiveLocation:
+            ENV.ENABLE_DIRECT_DOWNLOADS && driver.createDownloadUrl
+              ? await driver.createDownloadUrl(objectName)
+              : createLocalDownloadUrl(objectName),
+          cacheKey: cacheKey.key,
+        }
+      },
+      async download(objectName: string) {
+        logger.debug('Download:', objectName)
+        return driver.createReadStream(objectName)
+      },
+      async pruneCaches(olderThanDays?: number) {
+        logger.debug('Prune:', {
+          olderThanDays,
+        })
+
+        const keys = await findStaleKeys(db, { olderThanDays })
+        if (keys.length === 0) {
+          logger.debug('Prune: No caches to prune')
+          return
+        }
+
+        await driver.delete(keys.map((key) => getObjectNameFromKey(key.key, key.version)))
+        await pruneKeys(db, keys)
+
+        logger.debug('Prune: Caches pruned', {
+          olderThanDays,
+        })
+      },
+      async pruneUploads(olderThanDate: Date) {
+        logger.debug('Prune uploads')
+
+        // uploads older than 24 hours
+        const uploads = await db
+          .selectFrom('uploads')
+          .selectAll()
+          .where('created_at', '<', olderThanDate.toISOString())
+          .execute()
+
+        for (const upload of uploads) {
+          await driver.cleanupMultipartUpload(upload.id).catch(() => {
+            // noop
+          })
+          await db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+        }
+      },
+    }
+  } catch (err) {
+    consola.error('Failed to initialize storage driver:', err)
+    // eslint-disable-next-line unicorn/no-process-exit
+    process.exit(1)
+  }
+})
 
 function createLocalDownloadUrl(objectName: string) {
   return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${objectName}`
-}
-
-export async function useStorageAdapter() {
-  if (!storage) {
-    await initializeStorage()
-  }
-  return storage
 }

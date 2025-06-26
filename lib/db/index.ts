@@ -4,11 +4,12 @@ import type { DatabaseDriverName } from '~/lib/db/drivers'
 import cluster from 'node:cluster'
 
 import { hash } from 'node:crypto'
+import { createSingletonPromise } from '@antfu/utils'
 import { Kysely, Migrator } from 'kysely'
 import { getDatabaseDriver } from '~/lib/db/drivers'
 import { migrations } from '~/lib/db/migrations'
-import { ENV } from '~/lib/env'
 
+import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 
 export interface CacheKeysTable {
@@ -23,12 +24,10 @@ export interface UploadsTable {
   key: string
   version: string
   id: string
-  driver_upload_id: string
 }
 export interface UploadPartsTable {
   upload_id: string
   part_number: number
-  e_tag: string | null
 }
 
 export interface MetaTable {
@@ -43,62 +42,46 @@ export interface Database {
   meta: MetaTable
 }
 
-let _db: Kysely<Database>
+export const useDB = createSingletonPromise(async () => {
+  const driverName = ENV.DB_DRIVER
+  const driverSetup = getDatabaseDriver(driverName)
+  if (!driverSetup) {
+    logger.error(`No database driver found for ${driverName}`)
+    // eslint-disable-next-line unicorn/no-process-exit
+    process.exit(1)
+  }
+  if (cluster.isPrimary) logger.info(`Using database driver: ${driverName}`)
 
-let initializationPromise: Promise<void> | undefined
-export async function initializeDatabase() {
-  if (initializationPromise) return initializationPromise
+  const driver = await driverSetup()
 
-  // eslint-disable-next-line unicorn/consistent-function-scoping
-  const init = async () => {
-    const driverName = ENV.DB_DRIVER
-    const driverSetup = getDatabaseDriver(driverName)
-    if (!driverSetup) {
-      logger.error(`No database driver found for ${driverName}`)
+  const db = new Kysely<Database>({
+    dialect: driver,
+  })
+
+  if (cluster.isPrimary) {
+    logger.info('Migrating database...')
+    const migrator = new Migrator({
+      db,
+      provider: {
+        async getMigrations() {
+          return migrations(driverName as DatabaseDriverName)
+        },
+      },
+    })
+    const { error, results } = await migrator.migrateToLatest()
+    if (error) {
+      logger.error('Database migration failed', error)
       // eslint-disable-next-line unicorn/no-process-exit
       process.exit(1)
     }
-    if (cluster.isPrimary) logger.info(`Using database driver: ${driverName}`)
-
-    const driver = await driverSetup()
-
-    _db = new Kysely<Database>({
-      dialect: driver,
-    })
-
-    if (cluster.isPrimary) {
-      logger.info('Migrating database...')
-      const migrator = new Migrator({
-        db: _db,
-        provider: {
-          async getMigrations() {
-            return migrations(driverName as DatabaseDriverName)
-          },
-        },
-      })
-      const { error, results } = await migrator.migrateToLatest()
-      if (error) {
-        logger.error('Database migration failed', error)
-        // eslint-disable-next-line unicorn/no-process-exit
-        process.exit(1)
-      }
-      logger.debug('Migration results', results)
-      logger.success('Database migrated')
-    }
+    logger.debug('Migration results', results)
+    logger.success('Database migrated')
   }
 
-  initializationPromise = init()
-  return initializationPromise
-}
+  return db
+})
 
-export async function useDB() {
-  if (!_db) {
-    await initializeDatabase()
-  }
-  return _db
-}
-
-type DB = typeof _db
+type DB = Awaited<ReturnType<typeof useDB>>
 
 /**
  * @see https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#matching-a-cache-key

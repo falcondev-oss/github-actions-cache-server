@@ -70,5 +70,11 @@ export function migrations(dbType: DatabaseDriverName) {
         await db.schema.dropTable('meta').ifExists().execute()
       },
     },
+    $3_remove_unused_columns: {
+      async up(db) {
+        await db.schema.alterTable('uploads').dropColumn('driver_upload_id').execute()
+        await db.schema.alterTable('upload_parts').dropColumn('e_tag').execute()
+      },
+    },
   } satisfies Record<string, Migration>
 }
