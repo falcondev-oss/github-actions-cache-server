@@ -19,7 +19,6 @@ export interface StorageDriver {
     partNumber: number
     data: ReadableStream
     chunkStart: number
-    chunkEnd: number
   }) => Promise<{
     eTag: string | null
   }>

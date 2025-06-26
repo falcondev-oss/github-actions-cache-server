@@ -33,7 +33,6 @@ export interface Storage {
     uploadId: number
     chunkStream: ReadableStream<Buffer>
     chunkStart: number
-    chunkEnd: number
     chunkIndex: number
   }) => Promise<void>
   commitCache: (uploadId: number | string, size: number) => Promise<void>
@@ -108,7 +107,7 @@ export async function initializeStorage() {
             cacheId: uploadId,
           }
         },
-        async uploadChunk({ uploadId, chunkStream, chunkStart, chunkEnd, chunkIndex }) {
+        async uploadChunk({ uploadId, chunkStream, chunkStart, chunkIndex }) {
           const upload = await db
             .selectFrom('uploads')
             .selectAll()
@@ -121,10 +120,6 @@ export async function initializeStorage() {
             return
           }
 
-          if (chunkEnd === chunkStart) {
-            throw new Error('Chunk end must be greater than chunk start')
-          }
-
           const partNumber = chunkIndex + 1
 
           const objectName = getObjectNameFromKey(upload.key, upload.version)
@@ -135,7 +130,6 @@ export async function initializeStorage() {
               partNumber,
               data: chunkStream,
               chunkStart,
-              chunkEnd,
             })
             await db
               .insertInto('upload_parts')
@@ -152,7 +146,6 @@ export async function initializeStorage() {
                 driverUploadId: upload.driver_upload_id,
                 uploadId,
                 chunkStart,
-                chunkEnd,
                 partNumber,
               },
               err,
@@ -160,7 +153,7 @@ export async function initializeStorage() {
             throw err
           }
 
-          logger.debug('Upload:', { uploadId, chunkStart, chunkEnd, partNumber })
+          logger.debug('Upload:', { uploadId, chunkStart, partNumber })
         },
         async commitCache(uploadId) {
           const upload = await db
