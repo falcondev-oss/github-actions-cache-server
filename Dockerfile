@@ -5,8 +5,7 @@ ENV BUILD_HASH=${BUILD_HASH}
 
 WORKDIR /app
 
-# remove when 10.12.4 released
-RUN npm install -g pnpm@10.12.1
+RUN npm install -g pnpm@latest-10
 
 COPY package.json pnpm-lock.yaml .npmrc ./
 
