@@ -66,6 +66,7 @@ export class FilesystemStorageDriver extends StorageDriver {
     }
 
     await fs.copyFile(outputTempFilePath, this.addBaseFolderPrefix(opts.finalOutputObjectName))
+    await fs.rm(outputTempFilePath)
 
     await Promise.all([
       this.cleanupMultipartUpload(opts.uploadId),
