@@ -8,7 +8,7 @@
     "pnpm": "10"
   },
   "scripts": {
-    "prepare": "nitropack prepare && husky",
+    "prepare": "nitropack prepare && [ -z \"$CI\" ] && husky || echo 'Skipping husky in CI'",
     "dev": "nitropack dev",
     "build": "nitropack build",
     "preview": "node .output/server/index.mjs",
