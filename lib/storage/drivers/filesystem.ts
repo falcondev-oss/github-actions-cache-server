@@ -65,7 +65,7 @@ export class FilesystemStorageDriver extends StorageDriver {
       await fs.appendFile(outputTempFilePath, buffer)
     }
 
-    await fs.rename(outputTempFilePath, this.addBaseFolderPrefix(opts.finalOutputObjectName))
+    await fs.copyFile(outputTempFilePath, this.addBaseFolderPrefix(opts.finalOutputObjectName))
 
     await Promise.all([
       this.cleanupMultipartUpload(opts.uploadId),
