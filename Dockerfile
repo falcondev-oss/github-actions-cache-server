@@ -1,21 +1,17 @@
 FROM node:22-alpine AS builder
 
-ARG BUILD_HASH
-ENV BUILD_HASH=${BUILD_HASH}
-
 WORKDIR /app
 
-# remove when 10.12.4 released
-RUN npm install -g pnpm@10.12.1
+RUN npm install -g pnpm@latest-10
 
-COPY package.json pnpm-lock.yaml .npmrc ./
-
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm fetch --prod
 
 COPY . .
+RUN pnpm install --frozen-lockfile --prod --offline
 
-RUN pnpm install --frozen-lockfile --ignore-scripts --prod --offline
-
+ARG BUILD_HASH
+ENV BUILD_HASH=${BUILD_HASH}
 RUN pnpm run build
 
 # --------------------------------------------

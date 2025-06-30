@@ -1,14 +1,14 @@
 {
   "name": "github-actions-cache-server",
   "type": "module",
-  "version": "8.1.0",
+  "version": "8.1.1",
   "private": true,
   "engines": {
     "node": "22",
     "pnpm": "10"
   },
   "scripts": {
-    "prepare": "nitropack prepare && husky",
+    "prepare": "nitropack prepare && [ -z \"$CI\" ] && husky || echo 'Skipping husky in CI'",
     "dev": "nitropack dev",
     "build": "nitropack build",
     "preview": "node .output/server/index.mjs",
