@@ -88,16 +88,6 @@ export function migrations(dbType: DatabaseDriverName) {
     },
     $4_cache_entry_created_at: {
       async up(db) {
-        await db
-          .insertInto('cache_keys')
-          .values({
-            id: '',
-            key: '',
-            version: '',
-            updated_at: new Date().toISOString(),
-            accessed_at: new Date().toISOString(),
-          })
-          .execute()
         await db.schema.alterTable('cache_keys').addColumn('created_at', 'text').execute()
 
         await db
