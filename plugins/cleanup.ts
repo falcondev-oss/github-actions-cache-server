@@ -11,15 +11,22 @@ export default defineNitroPlugin(() => {
   if (!cluster.isPrimary) return
 
   // cache cleanup
-  if (ENV.CACHE_CLEANUP_OLDER_THAN_DAYS > 0) {
+  if (
+    ENV.CACHE_CLEANUP_OLDER_THAN_DAYS ||
+    ENV.CACHE_CLEANUP_TTL_DAYS ||
+    ENV.CACHE_CLEANUP_UNTOUCHED_TTL_DAYS
+  ) {
     const job = new Cron(ENV.CACHE_CLEANUP_CRON)
     const nextRun = job.nextRun()
     logger.info(
-      `Cleaning up cache entries older than ${colorize('blue', `${ENV.CACHE_CLEANUP_OLDER_THAN_DAYS}d`)} with schedule ${colorize('blue', job.getPattern() ?? '')}${nextRun ? ` (next run: ${nextRun.toLocaleString()})` : ''}`,
+      `Cleaning up cache entries with schedule ${colorize('blue', job.getPattern() ?? '')}${nextRun ? ` (next run: ${nextRun.toLocaleString()})` : ''}`,
     )
     job.schedule(async () => {
       const adapter = await useStorageAdapter()
-      await adapter.pruneCaches(ENV.CACHE_CLEANUP_OLDER_THAN_DAYS)
+      await adapter.pruneCaches({
+        ttlDays: ENV.CACHE_CLEANUP_TTL_DAYS,
+        untouchedTTLDays: ENV.CACHE_CLEANUP_UNTOUCHED_TTL_DAYS ?? ENV.CACHE_CLEANUP_OLDER_THAN_DAYS,
+      })
     })
   }
 

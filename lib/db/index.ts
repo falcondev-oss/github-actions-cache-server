@@ -18,6 +18,7 @@ export interface CacheKeysTable {
   version: string
   updated_at: string
   accessed_at: string
+  created_at: string
 }
 export interface UploadsTable {
   created_at: string
@@ -191,17 +192,26 @@ export async function touchKey(
 
 export async function findStaleKeys(
   db: DB,
-  { olderThanDays, date }: { olderThanDays?: number; date?: Date },
+  opts?: {
+    untouchedTTLDays?: number
+    ttlDays?: number
+    date?: Date
+  },
 ) {
-  if (olderThanDays === undefined) return db.selectFrom('cache_keys').selectAll().execute()
+  const now = opts?.date ?? new Date()
+  let query = db.selectFrom('cache_keys')
 
-  const now = date ?? new Date()
-  const threshold = new Date(now.getTime() - olderThanDays * 24 * 60 * 60 * 1000)
-  return db
-    .selectFrom('cache_keys')
-    .where('accessed_at', '<', threshold.toISOString())
-    .selectAll()
-    .execute()
+  if (opts?.ttlDays !== undefined) {
+    const threshold = new Date(now.getTime() - opts.ttlDays * 24 * 60 * 60 * 1000)
+    query = query.where('created_at', '<', threshold.toISOString())
+  }
+
+  if (opts?.untouchedTTLDays !== undefined) {
+    const untouchedThreshold = new Date(now.getTime() - opts.untouchedTTLDays * 24 * 60 * 60 * 1000)
+    query = query.where('accessed_at', '<', untouchedThreshold.toISOString())
+  }
+
+  return query.selectAll().execute()
 }
 
 export async function createKey(
@@ -217,6 +227,7 @@ export async function createKey(
       version,
       updated_at: now.toISOString(),
       accessed_at: now.toISOString(),
+      created_at: now.toISOString(),
     })
     .execute()
 }

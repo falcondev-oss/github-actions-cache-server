@@ -184,12 +184,10 @@ export const useStorageAdapter = createSingletonPromise(async () => {
         logger.debug('Download:', objectName)
         return driver.createReadStream(objectName)
       },
-      async pruneCaches(olderThanDays?: number) {
-        logger.debug('Prune:', {
-          olderThanDays,
-        })
+      async pruneCaches(opts?: { untouchedTTLDays?: number; ttlDays?: number }) {
+        logger.debug('Prune:', opts)
 
-        const keys = await findStaleKeys(db, { olderThanDays })
+        const keys = await findStaleKeys(db, opts)
         if (keys.length === 0) {
           logger.debug('Prune: No caches to prune')
           return
@@ -198,9 +196,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
         await driver.delete(keys.map((key) => getObjectNameFromKey(key.key, key.version)))
         await pruneKeys(db, keys)
 
-        logger.debug('Prune: Caches pruned', {
-          olderThanDays,
-        })
+        logger.debug('Prune: Caches pruned', opts)
       },
       async pruneUploads(olderThanDate: Date) {
         logger.debug('Prune uploads')
