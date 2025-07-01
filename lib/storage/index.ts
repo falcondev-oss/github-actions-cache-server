@@ -184,7 +184,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
         logger.debug('Download:', objectName)
         return driver.createReadStream(objectName)
       },
-      async pruneCaches(opts?: { untouchedTTLDays?: number; ttlDays?: number }) {
+      async pruneCaches(opts?: { unusedTTLDays?: number; ttlDays?: number }) {
         logger.debug('Prune:', opts)
 
         const keys = await findStaleKeys(db, opts)

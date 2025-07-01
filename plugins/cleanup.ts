@@ -14,7 +14,7 @@ export default defineNitroPlugin(() => {
   if (
     ENV.CACHE_CLEANUP_OLDER_THAN_DAYS ||
     ENV.CACHE_CLEANUP_TTL_DAYS ||
-    ENV.CACHE_CLEANUP_UNTOUCHED_TTL_DAYS
+    ENV.CACHE_CLEANUP_UNUSED_TTL_DAYS
   ) {
     const job = new Cron(ENV.CACHE_CLEANUP_CRON)
     const nextRun = job.nextRun()
@@ -25,7 +25,7 @@ export default defineNitroPlugin(() => {
       const adapter = await useStorageAdapter()
       await adapter.pruneCaches({
         ttlDays: ENV.CACHE_CLEANUP_TTL_DAYS,
-        untouchedTTLDays: ENV.CACHE_CLEANUP_UNTOUCHED_TTL_DAYS ?? ENV.CACHE_CLEANUP_OLDER_THAN_DAYS,
+        unusedTTLDays: ENV.CACHE_CLEANUP_UNUSED_TTL_DAYS ?? ENV.CACHE_CLEANUP_OLDER_THAN_DAYS,
       })
     })
   }

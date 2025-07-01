@@ -61,14 +61,14 @@ describe('getting stale keys', async () => {
   beforeEach(() => pruneKeys(db))
 
   const version = '0577ec58bee6d5415625'
-  test('returns untouched stale keys if threshold is passed', async () => {
+  test('returns unused stale keys if threshold is passed', async () => {
     const referenceDate = new Date('2024-04-01T00:00:00Z')
     await updateOrCreateKey(db, { key: 'cache-a', version, date: new Date('2024-01-01T00:00:00Z') })
     await updateOrCreateKey(db, { key: 'cache-b', version, date: new Date('2024-02-01T00:00:00Z') })
     await updateOrCreateKey(db, { key: 'cache-c', version, date: new Date('2024-03-15T00:00:00Z') })
     await updateOrCreateKey(db, { key: 'cache-d', version, date: new Date('2024-03-20T00:00:00Z') })
 
-    const match = await findStaleKeys(db, { untouchedTTLDays: 30, date: referenceDate })
+    const match = await findStaleKeys(db, { unusedTTLDays: 30, date: referenceDate })
     expect(match.length).toBe(2)
 
     const matchA = match.find((m) => m.key === 'cache-a')

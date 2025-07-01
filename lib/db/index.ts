@@ -193,7 +193,7 @@ export async function touchKey(
 export async function findStaleKeys(
   db: DB,
   opts?: {
-    untouchedTTLDays?: number
+    unusedTTLDays?: number
     ttlDays?: number
     date?: Date
   },
@@ -206,9 +206,9 @@ export async function findStaleKeys(
     query = query.where('created_at', '<', threshold.toISOString())
   }
 
-  if (opts?.untouchedTTLDays !== undefined) {
-    const untouchedThreshold = new Date(now.getTime() - opts.untouchedTTLDays * 24 * 60 * 60 * 1000)
-    query = query.where('accessed_at', '<', untouchedThreshold.toISOString())
+  if (opts?.unusedTTLDays !== undefined) {
+    const threshold = new Date(now.getTime() - opts.unusedTTLDays * 24 * 60 * 60 * 1000)
+    query = query.where('accessed_at', '<', threshold.toISOString())
   }
 
   return query.selectAll().execute()
