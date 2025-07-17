@@ -6,15 +6,15 @@ import {
   GetObjectCommand,
   HeadBucketCommand,
   ListObjectsV2Command,
-  PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { Upload } from '@aws-sdk/lib-storage'
 
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import * as R from 'remeda'
 import { z } from 'zod'
 import { parseEnv, StorageDriver } from '~/lib/storage/defineStorageDriver'
-import { createTempDir, streamToBuffer } from '~/lib/utils'
+import { createTempDir } from '~/lib/utils'
 
 export class S3StorageDriver extends StorageDriver {
   s3
@@ -96,16 +96,20 @@ export class S3StorageDriver extends StorageDriver {
   }
 
   async uploadPart(opts: { uploadId: string; partNumber: number; data: ReadableStream }) {
-    await this.s3.send(
-      new PutObjectCommand({
+    const upload = new Upload({
+      client: this.s3,
+      params: {
         Bucket: this.bucket,
         Key: this.getUploadPartObjectName({
           uploadId: opts.uploadId,
           partNumber: opts.partNumber,
         }),
-        Body: await streamToBuffer(opts.data),
-      }),
-    )
+        Body: opts.data,
+      },
+      partSize: 64 * 1024 * 1024, // 64 MB
+      queueSize: 1,
+    })
+    await upload.done()
   }
 
   async completeMultipartUpload(opts: {
@@ -147,13 +151,17 @@ export class S3StorageDriver extends StorageDriver {
     await outputTempFile.close()
 
     const readStream = createReadStream(outputTempFilePath)
-    await this.s3.send(
-      new PutObjectCommand({
+    const upload = new Upload({
+      client: this.s3,
+      params: {
         Bucket: this.bucket,
         Key: this.addBaseFolderPrefix(opts.finalOutputObjectName),
         Body: readStream,
-      }),
-    )
+      },
+      partSize: 64 * 1024 * 1024, // 64 MB
+      queueSize: 1,
+    })
+    await upload.done()
 
     await Promise.all([
       this.cleanupMultipartUpload(opts.uploadId),

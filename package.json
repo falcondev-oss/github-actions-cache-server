@@ -26,6 +26,7 @@
   "dependencies": {
     "@antfu/utils": "^9.2.0",
     "@aws-sdk/client-s3": "^3.740.0",
+    "@aws-sdk/lib-storage": "^3.846.0",
     "@aws-sdk/s3-request-presigner": "^3.740.0",
     "@google-cloud/storage": "^7.15.0",
     "@types/better-sqlite3": "^7.6.12",
