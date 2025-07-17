@@ -46,7 +46,7 @@ export async function setup() {
   testContainers.push(
     await match(dbDriver)
       .with('mysql', () =>
-        new MySqlContainer()
+        new MySqlContainer('mysql:latest')
           .withDatabase('mysql')
           .withRootPassword('root')
           .withExposedPorts({
@@ -56,7 +56,7 @@ export async function setup() {
           .start(),
       )
       .with('postgres', () =>
-        new PostgreSqlContainer()
+        new PostgreSqlContainer('postgres:latest')
           .withDatabase('postgres')
           .withPassword('postgres')
           .withUsername('postgres')

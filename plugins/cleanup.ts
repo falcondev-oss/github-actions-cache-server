@@ -1,10 +1,8 @@
 import cluster from 'node:cluster'
+import { colorize } from 'consola/utils'
+import { Cron } from 'croner'
 import { ENV } from '@/lib/env'
 import { logger } from '@/lib/logger'
-
-import { colorize } from 'consola/utils'
-
-import { Cron } from 'croner'
 import { useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(() => {
