@@ -136,7 +136,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
           .selectFrom('upload_parts')
           .selectAll()
           .where('upload_id', '=', upload.id)
-          .orderBy('part_number asc')
+          .orderBy('part_number', 'asc')
           .execute()
 
         await db.transaction().execute(async (tx) => {
