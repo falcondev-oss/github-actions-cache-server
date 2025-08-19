@@ -213,10 +213,12 @@ export const useStorageAdapter = createSingletonPromise(async () => {
           .execute()
 
         for (const upload of uploads) {
-          await driver.cleanupMultipartUpload(upload.id).catch(() => {
-            // noop
-          })
-          await db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+          try {
+            await driver.cleanupMultipartUpload(upload.id)
+            await db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+          } catch (err) {
+            logger.error('Failed to cleanup upload', upload, err)
+          }
         }
       },
     }
