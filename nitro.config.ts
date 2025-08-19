@@ -33,7 +33,6 @@ export default defineNitroConfig({
       compilerOptions: {
         skipLibCheck: true,
       },
-      exclude: ['../../docs'],
     },
   },
   compatibilityDate: '2025-02-01',

@@ -26,6 +26,5 @@ export default eslintConfig({
       '.nuxt/',
       '.output/',
       '.temp/',
-      'docs/',
     ],
   })
