@@ -1,97 +1,81 @@
+import type { StorageDriver } from '~/lib/storage/storage-driver'
 import { createReadStream, createWriteStream, promises as fs } from 'node:fs'
 import path from 'node:path'
+
 import { pipeline } from 'node:stream/promises'
 
 import { z } from 'zod'
-
-import { parseEnv, StorageDriver } from '~/lib/storage/defineStorageDriver'
+import { BASE_FOLDER, parseEnv, UPLOAD_FOLDER } from '~/lib/storage/storage-driver'
 import { createTempDir } from '~/lib/utils'
 
-export class FilesystemStorageDriver extends StorageDriver {
-  constructor(baseFolderPrefix?: string) {
-    super(baseFolderPrefix)
-  }
-
-  static async create() {
+export const FilesystemStorageDriver = {
+  async create() {
     const options = parseEnv(
       z.object({
         STORAGE_FILESYSTEM_PATH: z.string().default('.data/storage/filesystem'),
       }),
     )
 
-    const baseFolderPrefix = options.STORAGE_FILESYSTEM_PATH
-    await fs.mkdir(path.join(baseFolderPrefix, StorageDriver.baseFolder), {
+    const rootFolder = options.STORAGE_FILESYSTEM_PATH
+    await fs.mkdir(path.join(rootFolder, BASE_FOLDER), {
       recursive: true,
     })
-    await fs.mkdir(
-      path.join(baseFolderPrefix, StorageDriver.baseFolder, StorageDriver.uploadFolder),
-      {
-        recursive: true,
+    await fs.mkdir(path.join(rootFolder, BASE_FOLDER, UPLOAD_FOLDER), {
+      recursive: true,
+    })
+
+    return <StorageDriver>{
+      async uploadPart(opts) {
+        const folderPath = path.join(rootFolder, BASE_FOLDER, UPLOAD_FOLDER, opts.uploadId)
+        await fs.mkdir(folderPath, { recursive: true })
+        const writeStream = await createWriteStream(
+          path.join(folderPath, `part_${opts.partNumber}`),
+        )
+        await pipeline(opts.data, writeStream)
       },
-    )
 
-    return new FilesystemStorageDriver(baseFolderPrefix)
-  }
+      async completeMultipartUpload(opts) {
+        const tempDir = await createTempDir()
+        const outputTempFilePath = path.join(tempDir, 'output')
 
-  async uploadPart(opts: { uploadId: string; partNumber: number; data: ReadableStream }) {
-    const folderPath = this.getUploadFolderPrefix(opts.uploadId)
-    await fs.mkdir(folderPath, { recursive: true })
-    const writeStream = await createWriteStream(
-      this.getUploadPartObjectName({
-        uploadId: opts.uploadId,
-        partNumber: opts.partNumber,
-      }),
-    )
+        for (const partNumber of opts.partNumbers) {
+          const buffer = await fs.readFile(
+            path.join(rootFolder, BASE_FOLDER, UPLOAD_FOLDER, opts.uploadId, `part_${partNumber}`),
+          )
 
-    await pipeline(opts.data, writeStream)
-  }
+          await fs.appendFile(outputTempFilePath, buffer)
+        }
 
-  async completeMultipartUpload(opts: {
-    finalOutputObjectName: string
-    uploadId: string
-    partNumbers: number[]
-  }) {
-    const tempDir = await createTempDir()
-    const outputTempFilePath = path.join(tempDir, 'output')
+        await fs.copyFile(
+          outputTempFilePath,
+          path.join(rootFolder, BASE_FOLDER, opts.cacheFileName),
+        )
+        await fs.rm(outputTempFilePath)
 
-    for (const partNumber of opts.partNumbers) {
-      const buffer = await fs.readFile(
-        this.getUploadPartObjectName({
-          uploadId: opts.uploadId,
-          partNumber,
-        }),
-      )
+        await Promise.all([
+          this.cleanupMultipartUpload(opts.uploadId),
+          fs.rm(outputTempFilePath, { force: true }),
+        ])
+      },
 
-      await fs.appendFile(outputTempFilePath, buffer)
+      async cleanupMultipartUpload(uploadId) {
+        await fs.rm(path.join(rootFolder, BASE_FOLDER, UPLOAD_FOLDER, uploadId), {
+          force: true,
+          recursive: true,
+        })
+      },
+
+      async delete(cacheFileNames): Promise<void> {
+        for (const cacheFileName of cacheFileNames) {
+          await fs.rm(path.join(rootFolder, BASE_FOLDER, cacheFileName), {
+            force: true,
+          })
+        }
+      },
+
+      async createReadStream(cacheFileName) {
+        return createReadStream(path.join(rootFolder, BASE_FOLDER, cacheFileName))
+      },
     }
-
-    await fs.copyFile(outputTempFilePath, this.addBaseFolderPrefix(opts.finalOutputObjectName))
-    await fs.rm(outputTempFilePath)
-
-    await Promise.all([
-      this.cleanupMultipartUpload(opts.uploadId),
-      fs.rm(outputTempFilePath, { force: true }),
-    ])
-  }
-
-  async cleanupMultipartUpload(uploadId: string) {
-    await fs.rm(this.getUploadFolderPrefix(uploadId), {
-      force: true,
-      recursive: true,
-    })
-  }
-
-  async delete(objectNames: string[]): Promise<void> {
-    for (const name of objectNames) {
-      await fs.rm(this.addBaseFolderPrefix(name), {
-        force: true,
-      })
-    }
-  }
-
-  async createReadStream(objectName: string) {
-    return createReadStream(this.addBaseFolderPrefix(objectName))
-  }
-
-  createDownloadUrl: undefined
+  },
 }

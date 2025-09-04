@@ -1,9 +1,10 @@
-import { z } from 'zod'
+import type { CacheFileName } from '~/lib/storage/storage-driver'
 
+import { z } from 'zod'
 import { useStorageAdapter } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
-  objectName: z.string(),
+  cacheFileName: z.string(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -14,10 +15,10 @@ export default defineEventHandler(async (event) => {
       statusMessage: `Invalid path parameters: ${parsedPathParams.error.message}`,
     })
 
-  const { objectName } = parsedPathParams.data
+  const { cacheFileName } = parsedPathParams.data
 
   const adapter = await useStorageAdapter()
-  const stream = await adapter.download(objectName)
+  const stream = await adapter.download(cacheFileName as CacheFileName)
 
   return sendStream(event, stream)
 })

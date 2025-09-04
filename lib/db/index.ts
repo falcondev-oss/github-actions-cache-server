@@ -106,7 +106,7 @@ export async function findKeyMatch(
     .selectFrom('cache_keys')
     .where('key', 'like', `${args.key}%`)
     .where('version', '=', args.version)
-    .orderBy('cache_keys.updated_at desc')
+    .orderBy('cache_keys.updated_at', 'desc')
     .selectAll()
     .executeTakeFirst()
 
@@ -124,7 +124,7 @@ export async function findKeyMatch(
     const exactMatch = await db
       .selectFrom('cache_keys')
       .where('id', '=', getCacheKeyId(key, args.version))
-      .orderBy('cache_keys.updated_at desc')
+      .orderBy('cache_keys.updated_at', 'desc')
       .selectAll()
       .executeTakeFirst()
     if (exactMatch) {
@@ -137,7 +137,7 @@ export async function findKeyMatch(
       .selectFrom('cache_keys')
       .where('version', '=', args.version)
       .where('key', 'like', `${key}%`)
-      .orderBy('cache_keys.updated_at desc')
+      .orderBy('cache_keys.updated_at', 'desc')
       .selectAll()
       .executeTakeFirst()
 
