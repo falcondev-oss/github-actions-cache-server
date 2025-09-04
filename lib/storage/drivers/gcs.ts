@@ -32,7 +32,9 @@ export const GCSStorageDriver = {
         await deleteMany(cacheFileNames.map((fileName) => `${BASE_FOLDER}/${fileName}`))
       },
       async createReadStream(cacheFileName: string) {
-        return bucket.file(`${BASE_FOLDER}/${cacheFileName}`).createReadStream()
+        const file = bucket.file(`${BASE_FOLDER}/${cacheFileName}`)
+        if (!(await file.exists().then((res) => res[0]))) return null
+        return file.createReadStream()
       },
 
       async createDownloadUrl(cacheFileName: string) {
