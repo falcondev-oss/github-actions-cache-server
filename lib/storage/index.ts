@@ -36,6 +36,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
     const db = await useDB()
 
     return {
+      driver,
       async reserveCache({ key, version }: { key: string; version: string }) {
         logger.debug('Reserve:', { key, version })
 

@@ -9,7 +9,7 @@ export const UPLOAD_FOLDER = '.uploads'
 
 export interface StorageDriver {
   delete: (cacheFileNames: CacheFileName[]) => Promise<void>
-  createReadStream: (cacheFileName: CacheFileName) => Promise<ReadableStream | Readable>
+  createReadStream: (cacheFileName: CacheFileName) => Promise<ReadableStream | Readable | null>
   createDownloadUrl?: (cacheFileName: CacheFileName) => Promise<string>
   uploadPart: (opts: {
     uploadId: string

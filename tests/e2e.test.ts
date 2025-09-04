@@ -2,8 +2,11 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { Readable } from 'node:stream'
 import { restoreCache, saveCache } from '@actions/cache'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { useStorageAdapter } from '~/lib/storage'
+import { getCacheFileName } from '~/lib/utils'
 
 const TEST_TEMP_DIR = path.join(import.meta.dirname, 'temp')
 await fs.mkdir(TEST_TEMP_DIR, { recursive: true })
@@ -44,3 +47,69 @@ for (const version of versions) {
       })
   })
 }
+
+test(
+  'pruning cache',
+  {
+    timeout: 60_000,
+  },
+  async () => {
+    const storage = await useStorageAdapter()
+
+    const { cacheId } = await storage.reserveCache({
+      key: 'cache-a',
+      version: '1',
+    })
+    if (!cacheId) throw new Error('Failed to reserve cache')
+
+    // random 100MB ReadableStream
+    const stream = new ReadableStream<Buffer>({
+      start(controller) {
+        const chunkSize = 1024 * 1024 // 1MB
+        for (let i = 0; i < 100; i++) {
+          const chunk = Buffer.alloc(chunkSize)
+          controller.enqueue(chunk)
+        }
+        controller.close()
+      },
+    })
+    await storage.uploadChunk({
+      uploadId: cacheId,
+      chunkIndex: 0,
+      chunkStart: 0,
+      chunkStream: stream,
+    })
+    await storage.commitCache(cacheId)
+
+    // exists
+    expect(
+      await storage.getCacheEntry({
+        keys: ['cache-a'],
+        version: '1',
+      }),
+    ).toStrictEqual({
+      archiveLocation: expect.stringMatching(
+        new RegExp(
+          `http:\/\/localhost:3000\/download\/[^\/]+\/${getCacheFileName('cache-a', '1')}`,
+        ),
+      ),
+      cacheKey: 'cache-a',
+    })
+    expect(
+      await storage.driver.createReadStream(getCacheFileName('cache-a', '1')).catch(() => null),
+    ).toBeInstanceOf(Readable)
+
+    await storage.pruneCaches()
+
+    // doesn't exist
+    expect(
+      await storage.getCacheEntry({
+        keys: ['cache-a'],
+        version: '1',
+      }),
+    ).toBeNull()
+    expect(
+      await storage.driver.createReadStream(getCacheFileName('cache-a', '1')).catch(() => null),
+    ).toBe(null)
+  },
+)

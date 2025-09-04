@@ -19,6 +19,11 @@ export default defineEventHandler(async (event) => {
 
   const adapter = await useStorageAdapter()
   const stream = await adapter.download(cacheFileName as CacheFileName)
+  if (!stream)
+    throw createError({
+      statusCode: 404,
+      message: 'Cache file not found',
+    })
 
   return sendStream(event, stream)
 })
