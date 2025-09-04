@@ -24,7 +24,9 @@ export const GCSStorageDriver = {
     await bucket.getMetadata()
 
     async function deleteMany(objectNames: string[]) {
-      await Promise.all(objectNames.map((objectName) => bucket.file(objectName).delete()))
+      await Promise.all(
+        objectNames.map((objectName) => bucket.file(objectName).delete({ ignoreNotFound: true })),
+      )
     }
 
     return <StorageDriver>{
