@@ -230,6 +230,6 @@ export const useStorageAdapter = createSingletonPromise(async () => {
   }
 })
 
-function createLocalDownloadUrl(objectName: string) {
-  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${objectName}`
+function createLocalDownloadUrl(cacheFileName: CacheFileName) {
+  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${cacheFileName}`
 }
