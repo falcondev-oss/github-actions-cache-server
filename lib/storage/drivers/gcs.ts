@@ -1,21 +1,11 @@
-import type { Bucket } from '@google-cloud/storage'
-
+import type { StorageDriver } from '~/lib/storage/storage-driver'
 import { pipeline } from 'node:stream/promises'
 import { Storage } from '@google-cloud/storage'
 import { z } from 'zod'
-import { parseEnv, StorageDriver } from '~/lib/storage/defineStorageDriver'
+import { BASE_FOLDER, parseEnv, UPLOAD_FOLDER } from '~/lib/storage/storage-driver'
 
-export class GCSStorageDriver extends StorageDriver {
-  bucket
-  gcs
-
-  constructor(opts: { gcs: Storage; bucket: Bucket }) {
-    super()
-    this.gcs = opts.gcs
-    this.bucket = opts.bucket
-  }
-
-  static async create() {
+export const GCSStorageDriver = {
+  async create() {
     const options = parseEnv(
       z.object({
         STORAGE_GCS_BUCKET: z.string().min(1),
@@ -33,78 +23,67 @@ export class GCSStorageDriver extends StorageDriver {
     // Try to load metadata
     await bucket.getMetadata()
 
-    return new GCSStorageDriver({
-      gcs,
-      bucket,
-    })
-  }
-
-  async delete(objectNames: string[]) {
-    await Promise.all(
-      objectNames.map((name) => this.bucket.file(this.addBaseFolderPrefix(name)).delete()),
-    )
-  }
-  async createReadStream(objectName: string) {
-    return this.bucket.file(this.addBaseFolderPrefix(objectName)).createReadStream()
-  }
-
-  async createDownloadUrl?(objectName: string) {
-    return this.bucket
-      .file(this.addBaseFolderPrefix(objectName))
-      .getSignedUrl({
-        action: 'read',
-        expires: Date.now() + 5 * 60 * 1000, // 5 minutes
-      })
-      .then((res) => res[0])
-  }
-
-  async uploadPart(opts: { uploadId: string; partNumber: number; data: ReadableStream }) {
-    await this.bucket
-      .file(
-        this.getUploadPartObjectName({
-          uploadId: opts.uploadId,
-          partNumber: opts.partNumber,
-        }),
+    async function deleteMany(objectNames: string[]) {
+      await Promise.all(
+        objectNames.map((objectName) => bucket.file(objectName).delete({ ignoreNotFound: true })),
       )
-      .save(opts.data)
-  }
-
-  async completeMultipartUpload(opts: {
-    finalOutputObjectName: string
-    uploadId: string
-    partNumbers: number[]
-  }) {
-    const finalFile = this.bucket.file(this.addBaseFolderPrefix(opts.finalOutputObjectName))
-    const writeStream = finalFile.createWriteStream()
-
-    for (const partNumber of opts.partNumbers) {
-      const readStream = this.bucket
-        .file(
-          this.getUploadPartObjectName({
-            partNumber,
-            uploadId: opts.uploadId,
-          }),
-        )
-        .createReadStream()
-
-      await pipeline(readStream, writeStream, { end: false })
     }
 
-    writeStream.end()
+    return <StorageDriver>{
+      async delete(cacheFileNames) {
+        await deleteMany(cacheFileNames.map((fileName) => `${BASE_FOLDER}/${fileName}`))
+      },
+      async createReadStream(cacheFileName: string) {
+        const file = bucket.file(`${BASE_FOLDER}/${cacheFileName}`)
+        if (!(await file.exists().then((res) => res[0]))) return null
+        return file.createReadStream()
+      },
 
-    // Wait for the write to complete
-    await new Promise((resolve, reject) => {
-      writeStream.on('finish', resolve)
-      writeStream.on('error', reject)
-    })
+      async createDownloadUrl(cacheFileName: string) {
+        return bucket
+          .file(`${BASE_FOLDER}/${cacheFileName}`)
+          .getSignedUrl({
+            action: 'read',
+            expires: Date.now() + 5 * 60 * 1000, // 5 minutes
+          })
+          .then((res) => res[0])
+      },
 
-    // Clean up temp files
-    await this.cleanupMultipartUpload(opts.uploadId)
-  }
+      async uploadPart(opts) {
+        await bucket
+          .file(`${BASE_FOLDER}/${UPLOAD_FOLDER}/${opts.uploadId}/part_${opts.partNumber}`)
+          .save(opts.data)
+      },
 
-  async cleanupMultipartUpload(uploadId: string) {
-    await this.bucket.deleteFiles({
-      prefix: this.getUploadFolderPrefix(uploadId),
-    })
-  }
+      async completeMultipartUpload(opts) {
+        const cacheFile = bucket.file(`${BASE_FOLDER}/${opts.cacheFileName}`)
+        const writeStream = cacheFile.createWriteStream()
+
+        for (const partNumber of opts.partNumbers) {
+          const readStream = bucket
+            .file(`${BASE_FOLDER}/${UPLOAD_FOLDER}/${opts.uploadId}/part_${partNumber}`)
+            .createReadStream()
+
+          await pipeline(readStream, writeStream, { end: false })
+        }
+
+        writeStream.end()
+
+        // Wait for the write to complete
+        await new Promise((resolve, reject) => {
+          writeStream.on('finish', resolve)
+          writeStream.on('error', reject)
+        })
+
+        // Clean up temp files
+        await this.cleanupMultipartUpload(opts.uploadId)
+      },
+
+      async cleanupMultipartUpload(uploadId) {
+        await bucket.deleteFiles({
+          prefix: `${BASE_FOLDER}/${UPLOAD_FOLDER}/${uploadId}`,
+        })
+      },
+    }
+  },
 }

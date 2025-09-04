@@ -1,7 +1,8 @@
 import type { Buffer } from 'node:buffer'
 
-import cluster from 'node:cluster'
+import type { CacheFileName } from './storage-driver'
 
+import cluster from 'node:cluster'
 import { randomBytes, randomInt } from 'node:crypto'
 import { createSingletonPromise } from '@antfu/utils'
 import consola from 'consola'
@@ -14,11 +15,11 @@ import {
   updateOrCreateKey,
   useDB,
 } from '~/lib/db'
-import { ENV } from '~/lib/env'
 
+import { ENV } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { getStorageDriver } from '~/lib/storage/drivers'
-import { getObjectNameFromKey } from '~/lib/utils'
+import { getCacheFileName } from '~/lib/utils'
 
 export const useStorageAdapter = createSingletonPromise(async () => {
   try {
@@ -35,6 +36,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
     const db = await useDB()
 
     return {
+      driver,
       async reserveCache({ key, version }: { key: string; version: string }) {
         logger.debug('Reserve:', { key, version })
 
@@ -136,7 +138,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
           .selectFrom('upload_parts')
           .selectAll()
           .where('upload_id', '=', upload.id)
-          .orderBy('part_number asc')
+          .orderBy('part_number', 'asc')
           .execute()
 
         await db.transaction().execute(async (tx) => {
@@ -149,7 +151,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
           })
 
           await driver.completeMultipartUpload({
-            finalOutputObjectName: getObjectNameFromKey(upload.key, upload.version),
+            cacheFileName: getCacheFileName(upload.key, upload.version),
             uploadId: upload.id,
             partNumbers: parts.map((part) => part.part_number),
           })
@@ -168,21 +170,21 @@ export const useStorageAdapter = createSingletonPromise(async () => {
 
         await touchKey(db, { key: cacheKey.key, version: cacheKey.version })
 
-        const objectName = getObjectNameFromKey(cacheKey.key, cacheKey.version)
+        const cacheFileName = getCacheFileName(cacheKey.key, cacheKey.version)
 
         logger.debug('Get: Found', cacheKey)
 
         return {
           archiveLocation:
             ENV.ENABLE_DIRECT_DOWNLOADS && driver.createDownloadUrl
-              ? await driver.createDownloadUrl(objectName)
-              : createLocalDownloadUrl(objectName),
+              ? await driver.createDownloadUrl(cacheFileName)
+              : createLocalDownloadUrl(cacheFileName),
           cacheKey: cacheKey.key,
         }
       },
-      async download(objectName: string) {
-        logger.debug('Download:', objectName)
-        return driver.createReadStream(objectName)
+      async download(cacheFileName: CacheFileName) {
+        logger.debug('Download:', cacheFileName)
+        return driver.createReadStream(cacheFileName)
       },
       async pruneCaches(olderThanDays?: number) {
         logger.debug('Prune:', {
@@ -195,7 +197,7 @@ export const useStorageAdapter = createSingletonPromise(async () => {
           return
         }
 
-        await driver.delete(keys.map((key) => getObjectNameFromKey(key.key, key.version)))
+        await driver.delete(keys.map((key) => getCacheFileName(key.key, key.version)))
         await pruneKeys(db, keys)
 
         logger.debug('Prune: Caches pruned', {
@@ -229,6 +231,6 @@ export const useStorageAdapter = createSingletonPromise(async () => {
   }
 })
 
-function createLocalDownloadUrl(objectName: string) {
-  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${objectName}`
+function createLocalDownloadUrl(cacheFileName: CacheFileName) {
+  return `${ENV.API_BASE_URL}/download/${randomBytes(64).toString('hex')}/${cacheFileName}`
 }
