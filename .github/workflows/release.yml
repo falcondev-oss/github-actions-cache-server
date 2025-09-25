@@ -107,7 +107,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/falcondev-oss/github-actions-cache-server
+          images: ghcr.io/${{ github.repository_owner }}/github-actions-cache-server
           tags: |
             type=semver,pattern={{version}},value=${{ needs.release.outputs.RELEASE_TAG }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.release.outputs.RELEASE_TAG }}

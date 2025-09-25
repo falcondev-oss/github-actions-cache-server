@@ -76,7 +76,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/falcondev-oss/github-actions-cache-server
+          images: ghcr.io/${{ github.repository_owner }}/github-actions-cache-server
           tags: |
             dev
 
