@@ -128,3 +128,10 @@ apiBaseUrl: ''
 env:
   - name: DEBUG
     value: 'false'
+
+# Additional containers to run as sidecars alongside the main cache server container
+sidecars: []
+
+# Init containers to run before the main cache server container starts
+initContainers: []
+
