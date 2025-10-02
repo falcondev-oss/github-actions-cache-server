@@ -70,6 +70,9 @@ spec:
           {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom: {{ toYaml . | nindent 12 }}
+          {{- end }}
       volumes:
         - name: tmp
       {{- toYaml .Values.tmpVolume | nindent 10 }}
