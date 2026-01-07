@@ -128,3 +128,11 @@ apiBaseUrl: ''
 env:
   - name: DEBUG
     value: 'false'
+
+topologySpreadConstraints: []
+  # - topologyKey: topology.kubernetes.io/zone
+  #   maxSkew: 1
+  #   whenUnsatisfiable: "DoNotSchedule"
+  #   labelSelector:
+  #     matchLabels:
+  #       app.kubernetes.io/instance: example-release
