@@ -14,6 +14,10 @@ const envSchema = z.object({
   DEBUG: z.stringbool().default(false),
   NITRO_PORT: portSchema.default(3000),
   TEMP_DIR: z.string().default(tmpdir()),
+  DB_POSTGRES_URL: z.string(),
+  STORAGE_S3_BUCKET: z.string(),
+  AWS_REGION: z.string().default('us-east-1'),
+  DISABLE_CLEANUP_JOBS: z.stringbool().default(false),
 })
 
 const parsedEnv = envSchema.safeParse(process.env)

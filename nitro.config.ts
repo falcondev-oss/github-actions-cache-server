@@ -7,18 +7,6 @@ export default defineNitroConfig({
   runtimeConfig: {
     version: `v${version}${process.env.BUILD_HASH ? ` [${process.env.BUILD_HASH}]` : ''}`,
   },
-  storage: {
-    db: {
-      driver: 'fs',
-      base: './data/db',
-    },
-  },
-  devStorage: {
-    db: {
-      driver: 'fs',
-      base: './data/db',
-    },
-  },
   alias: {
     '@': fileURLToPath(new URL('.', import.meta.url)),
   },
@@ -36,4 +24,13 @@ export default defineNitroConfig({
     },
   },
   compatibilityDate: '2025-02-01',
+  experimental: {
+    tasks: true,
+  },
+  scheduledTasks: {
+    '*/5 * * * *': ['cleanup:uploads'], // every 5 minutes
+    '0 0 * * *': ['cleanup:cache-entries', 'cleanup:storage-locations'], // daily
+    '0 * * * *': ['cleanup:parts', 'cleanup:merges'], // hourly
+    '* * * * *': ['test'],
+  },
 })

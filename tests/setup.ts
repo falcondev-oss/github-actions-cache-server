@@ -2,18 +2,12 @@ import type { ResultPromise } from 'execa'
 
 import type { Nitro } from 'nitropack'
 import type { StartedTestContainer } from 'testcontainers'
-import type { DatabaseDriverName } from '~/lib/db/drivers'
-import type { StorageDriverName } from '~/lib/storage/drivers'
 import fs from 'node:fs/promises'
-import { MySqlContainer } from '@testcontainers/mysql'
-import { PostgreSqlContainer } from '@testcontainers/postgresql'
 
 import { configDotenv } from 'dotenv'
 import { execa } from 'execa'
 
 import { build, createNitro, prepare } from 'nitropack'
-import { GenericContainer } from 'testcontainers'
-import { match } from 'ts-pattern'
 
 let nitro: Nitro
 let server: ResultPromise<{
@@ -23,8 +17,8 @@ let server: ResultPromise<{
 const testContainers: (StartedTestContainer | undefined)[] = []
 export async function setup() {
   // config
-  const dbDriver = process.env.VITEST_DB_DRIVER as DatabaseDriverName | undefined
-  const storageDriver = process.env.VITEST_STORAGE_DRIVER as StorageDriverName | undefined
+  const dbDriver = 'postgres'
+  const storageDriver = 's3'
   if (!dbDriver || !storageDriver) {
     throw new Error('VITEST_DB_DRIVER and VITEST_STORAGE_DRIVER must be set')
   }
@@ -43,77 +37,77 @@ export async function setup() {
   console.log('Starting test containers for', dbDriver, storageDriver)
 
   // containers
-  testContainers.push(
-    await match(dbDriver)
-      .with('mysql', () =>
-        new MySqlContainer('mysql:latest')
-          .withDatabase('mysql')
-          .withRootPassword('root')
-          .withExposedPorts({
-            container: 3306,
-            host: 3306,
-          })
-          .start(),
-      )
-      .with('postgres', () =>
-        new PostgreSqlContainer('postgres:latest')
-          .withDatabase('postgres')
-          .withPassword('postgres')
-          .withUsername('postgres')
-          .withExposedPorts({
-            host: 5432,
-            container: 5432,
-          })
-          .start(),
-      )
-      .with('sqlite', () => undefined)
-      .exhaustive(),
-    await match(storageDriver)
-      .with('s3', async () => {
-        const container = await new GenericContainer('quay.io/minio/minio:latest')
-          .withEntrypoint(['sh'])
-          .withCommand([`-c`, `mkdir -p /data/test && /usr/bin/minio server /data`])
-          .withExposedPorts({
-            container: 9000,
-            host: 9000,
-          })
-          .withHealthCheck({
-            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/minio/health/ready'],
-            interval: 1000,
-            retries: 30,
-            startPeriod: 1000,
-          })
-          .start()
+  // testContainers.push(
+  // await match(dbDriver)
+  //   // .with('mysql', () =>
+  //   //   new MySqlContainer('mysql:latest')
+  //   //     .withDatabase('mysql')
+  //   //     .withRootPassword('root')
+  //   //     .withExposedPorts({
+  //   //       container: 3306,
+  //   //       host: 3306,
+  //   //     })
+  //   //     .start(),
+  //   // )
+  //   .with('postgres', () =>
+  //     new PostgreSqlContainer('postgres:latest')
+  //       .withDatabase('postgres')
+  //       .withPassword('postgres')
+  //       .withUsername('postgres')
+  //       .withExposedPorts({
+  //         host: 5432,
+  //         container: 5432,
+  //       })
+  //       .start(),
+  //   )
+  //   // .with('sqlite', () => undefined)
+  //   .exhaustive(),
+  // await match(storageDriver)
+  //   .with('s3', async () => {
+  //     const container = await new GenericContainer('quay.io/minio/minio:latest')
+  //       .withEntrypoint(['sh'])
+  //       .withCommand([`-c`, `mkdir -p /data/test && /usr/bin/minio server /data`])
+  //       .withExposedPorts({
+  //         container: 9000,
+  //         host: 9000,
+  //       })
+  //       .withHealthCheck({
+  //         test: ['CMD-SHELL', 'curl --fail http://localhost:9000/minio/health/ready'],
+  //         interval: 1000,
+  //         retries: 30,
+  //         startPeriod: 1000,
+  //       })
+  //       .start()
 
-        return container
-      })
+  //     return container
+  //   })
 
-      .with('gcs', async () => {
-        const container = await new GenericContainer('fsouza/fake-gcs-server:latest')
-          .withEntrypoint(['sh'])
-          .withCommand([
-            `-c`,
-            `mkdir -p /data/test && /bin/fake-gcs-server -scheme http -port 9000 -data /data`,
-          ])
-          .withExposedPorts({
-            container: 9000,
-            host: 9000,
-          })
-          .withHealthCheck({
-            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/storage/v1/b'],
-            interval: 1000,
-            retries: 30,
-            startPeriod: 1000,
-          })
-          .start()
+  //   // .with('gcs', async () => {
+  //   //   const container = await new GenericContainer('fsouza/fake-gcs-server:latest')
+  //   //     .withEntrypoint(['sh'])
+  //   //     .withCommand([
+  //   //       `-c`,
+  //   //       `mkdir -p /data/test && /bin/fake-gcs-server -scheme http -port 9000 -data /data`,
+  //   //     ])
+  //   //     .withExposedPorts({
+  //   //       container: 9000,
+  //   //       host: 9000,
+  //   //     })
+  //   //     .withHealthCheck({
+  //   //       test: ['CMD-SHELL', 'curl --fail http://localhost:9000/storage/v1/b'],
+  //   //       interval: 1000,
+  //   //       retries: 30,
+  //   //       startPeriod: 1000,
+  //   //     })
+  //   //     .start()
 
-        return container
-      })
+  //   //   return container
+  //   // })
 
-      .with('filesystem', () => undefined)
+  //   // .with('filesystem', () => undefined)
 
-      .exhaustive(),
-  )
+  //   .exhaustive(),
+  // )
 
   // nitro
   nitro = await createNitro({
