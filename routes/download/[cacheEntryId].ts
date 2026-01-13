@@ -23,5 +23,5 @@ export default defineEventHandler(async (event) => {
       message: 'Cache file not found',
     })
 
-  return sendStream(event, stream)
+  return sendStream(event, stream as globalThis.ReadableStream)
 })

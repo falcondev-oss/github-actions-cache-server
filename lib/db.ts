@@ -1,7 +1,14 @@
+/* eslint-disable no-shadow */
+import { mkdir } from 'node:fs/promises'
+import path from 'node:path'
 import { createSingletonPromise } from '@antfu/utils'
-import { Kysely, Migrator, PostgresDialect } from 'kysely'
+import SQLite from 'better-sqlite3'
+import { Kysely, Migrator, MysqlDialect, PostgresDialect, SqliteDialect } from 'kysely'
+import { createPool } from 'mysql2'
 import pg from 'pg'
-import { ENV } from './env'
+import { match } from 'ts-pattern'
+import { env } from './env'
+import { logger } from './logger'
 import { migrations } from './migrations'
 
 interface CacheEntry {
@@ -40,24 +47,93 @@ export interface Database {
   uploads: Upload
 }
 
+const dbLogger = logger.withTag('db')
+
 export const getDatabase = createSingletonPromise(async () => {
-  const pool = new pg.Pool({
-    connectionString: ENV.DB_POSTGRES_URL,
-  })
+  const dialect = await match(env)
+    .with({ DB_DRIVER: 'postgres' }, async (env) => {
+      const pool = new pg.Pool({
+        database: env.DB_POSTGRES_DATABASE,
+        host: env.DB_POSTGRES_HOST,
+        password: env.DB_POSTGRES_PASSWORD,
+        port: env.DB_POSTGRES_PORT,
+        user: env.DB_POSTGRES_USER,
+        max: 10,
+      })
+      await pool.connect()
+
+      return new PostgresDialect({
+        pool,
+      })
+    })
+    .with(
+      {
+        DB_DRIVER: 'mysql',
+      },
+      async (env) => {
+        const pool = createPool({
+          database: env.DB_MYSQL_DATABASE,
+          host: env.DB_MYSQL_HOST,
+          password: env.DB_MYSQL_PASSWORD,
+          port: env.DB_MYSQL_PORT,
+          user: env.DB_MYSQL_USER,
+          connectionLimit: 10,
+        })
+
+        return new MysqlDialect({
+          pool,
+        })
+      },
+    )
+    .with(
+      {
+        DB_DRIVER: 'sqlite',
+      },
+      async (env) => {
+        await mkdir(path.dirname(env.DB_SQLITE_PATH), { recursive: true })
+        return new SqliteDialect({
+          database: new SQLite(env.DB_SQLITE_PATH),
+        })
+      },
+    )
+    .exhaustive()
+
   const db = new Kysely<Database>({
-    dialect: new PostgresDialect({
-      pool,
-    }),
+    dialect,
+    log: (event) => {
+      if (event.level === 'error')
+        dbLogger.error('Query failed', {
+          durationMs: event.queryDurationMillis,
+          error: event.error,
+          sql: event.query.sql,
+          params: event.query.parameters,
+        })
+      else if (event.level === 'query' && env.DEBUG)
+        dbLogger.debug('Executed query', {
+          durationMs: event.queryDurationMillis,
+          sql: event.query.sql,
+          params: event.query.parameters,
+        })
+    },
   })
+
+  logger.info('Migrating database...')
   const migrator = new Migrator({
     db,
     provider: {
       async getMigrations() {
-        return migrations()
+        return migrations(env.DB_DRIVER)
       },
     },
   })
-  await migrator.migrateToLatest()
+  const { error, results } = await migrator.migrateToLatest()
+  if (error) {
+    logger.error('Database migration failed', error)
+    // eslint-disable-next-line unicorn/no-process-exit
+    process.exit(1)
+  }
+  logger.debug('Migration results', results)
+  logger.success('Database migrated')
 
   return db
 })

@@ -1,5 +1,5 @@
 import { getDatabase } from '~/lib/db'
-import { ENV } from '~/lib/env'
+import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
 
 const itemsPerPage = 10
@@ -11,7 +11,7 @@ export default defineTask({
       'Delete uploads without activity for over 1 minute. Since parts are only a few megabytes each, we can be fairly aggressive in cleaning up abandoned uploads.',
   },
   async run() {
-    if (ENV.DISABLE_CLEANUP_JOBS) return {}
+    if (env.DISABLE_CLEANUP_JOBS) return {}
 
     const oneMinuteAgo = Date.now() - 60 * 1000
     const db = await getDatabase()
@@ -38,7 +38,7 @@ export default defineTask({
       for (const upload of uploads) {
         await db.transaction().execute(async (tx) => {
           await tx.deleteFrom('uploads').where('id', '=', upload.id).execute()
-          await storage.deleteFolder(upload.folderName)
+          await storage.adapter.deleteFolder(upload.folderName)
         })
       }
 

@@ -10,11 +10,6 @@ export default defineNitroConfig({
   alias: {
     '@': fileURLToPath(new URL('.', import.meta.url)),
   },
-  esbuild: {
-    options: {
-      target: 'esnext',
-    },
-  },
   typescript: {
     strict: true,
     tsConfig: {
@@ -31,6 +26,5 @@ export default defineNitroConfig({
     '*/5 * * * *': ['cleanup:uploads'], // every 5 minutes
     '0 0 * * *': ['cleanup:cache-entries', 'cleanup:storage-locations'], // daily
     '0 * * * *': ['cleanup:parts', 'cleanup:merges'], // hourly
-    '* * * * *': ['test'],
   },
 })

@@ -1,6 +1,15 @@
+/* eslint-disable no-shadow */
+/* eslint-disable ts/method-signature-style */
 import type { Kysely } from 'kysely'
+import type { ReadableStream, WritableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
+import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
+import { createReadStream } from 'node:fs'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { Readable } from 'node:stream'
+import { TransformStream } from 'node:stream/web'
 import { createSingletonPromise } from '@antfu/utils'
 import {
   DeleteObjectsCommand,
@@ -10,65 +19,29 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
+import { Storage as GcsClient } from '@google-cloud/storage'
 import { chunk } from 'remeda'
+import { match } from 'ts-pattern'
 import { getDatabase } from './db'
-import { ENV } from './env'
+import { env } from './env'
 
-interface StorageCreateOptions {
-  bucket: string
-  region: string
-}
-
-export class Storage {
-  private s3
-  private bucket
-  private keyPrefix
+class Storage {
+  adapter
   private db
 
-  private constructor({
-    bucket,
-    db,
-    keyPrefix,
-    s3,
-  }: {
-    bucket: string
-    keyPrefix: string
-    s3: S3Client
-    db: Kysely<Database>
-  }) {
-    this.bucket = bucket
-    this.keyPrefix = keyPrefix
-    this.s3 = s3
+  private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
+    this.adapter = adapter
     this.db = db
   }
 
-  static async create(opts: StorageCreateOptions) {
-    const db = await getDatabase()
-    const s3 = new S3Client({
-      forcePathStyle: true,
-      region: opts.region,
-    })
-    const bucket = opts.bucket
-
-    try {
-      await s3.send(
-        new HeadBucketCommand({
-          Bucket: bucket,
-        }),
-      )
-      // bucket exists
-    } catch (err: any) {
-      if (err.name === 'NotFound') {
-        throw new Error(`Bucket ${bucket} does not exist`)
-      }
-      throw err
-    }
-
+  static async fromEnv() {
     return new Storage({
-      s3,
-      bucket,
-      keyPrefix: 'gh-actions-cache',
-      db,
+      adapter: await match(env)
+        .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
+        .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
+        .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
+        .exhaustive(),
+      db: await getDatabase(),
     })
   }
 
@@ -80,15 +53,7 @@ export class Storage {
       .executeTakeFirst()
     if (!upload) return
 
-    await new S3Upload({
-      client: this.s3,
-      params: {
-        Bucket: this.bucket,
-        Key: `${this.keyPrefix}/${upload.folderName}/parts/${partIndex}`,
-        Body: stream,
-      },
-      partSize: 64 * 1024 * 1024, // 64MB
-    }).done()
+    await this.adapter.uploadStream(`${upload.folderName}/parts/${partIndex}`, stream)
 
     void this.db
       .updateTable('uploads')
@@ -108,14 +73,7 @@ export class Storage {
       .executeTakeFirst()
     if (!upload) return
 
-    const partCount = await this.s3
-      .send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: `${this.keyPrefix}/${upload.folderName}/parts/`,
-        }),
-      )
-      .then((res) => res.KeyCount)
+    const partCount = await this.adapter.countFilesInFolder(`${upload.folderName}/parts`)
     if (!partCount) throw new Error('No parts found for upload')
 
     await this.db.transaction().execute(async (tx) => {
@@ -153,7 +111,7 @@ export class Storage {
           .deleteFrom('storage_locations')
           .where('id', '=', existingCacheEntry.locationId)
           .execute()
-        await this.deleteFolder(existingCacheEntry.folderName)
+        await this.adapter.deleteFolder(existingCacheEntry.folderName)
       } else
         await tx
           .insertInto('cache_entries')
@@ -204,15 +162,8 @@ export class Storage {
     const [uploadStream, responseStream] = readable.tee()
 
     try {
-      new S3Upload({
-        client: this.s3,
-        params: {
-          Bucket: this.bucket,
-          Key: `${this.keyPrefix}/${storageLocation.folderName}/merged`,
-          Body: uploadStream,
-        },
-      })
-        .done()
+      this.adapter
+        .uploadStream(`${storageLocation.folderName}/merged`, uploadStream)
         .then(async () => {
           await this.db
             .updateTable('storage_locations')
@@ -229,7 +180,7 @@ export class Storage {
               })
               .where('id', '=', storageLocation.id)
               .execute()
-            await this.deleteFolder(`${storageLocation.folderName}/parts`)
+            await this.adapter.deleteFolder(`${storageLocation.folderName}/parts`)
           })
         })
         .catch(async () => {
@@ -260,7 +211,7 @@ export class Storage {
   }
 
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
-    if (location.mergedAt) return this.createDownloadStream(`${location.folderName}/merged`)
+    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
 
     const { writable, readable } = new TransformStream()
     this.feedPartsToWritable(location, writable)
@@ -268,24 +219,14 @@ export class Storage {
     return readable
   }
 
-  private async createDownloadStream(objectName: string) {
-    const response = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: `${this.keyPrefix}/${objectName}`,
-      }),
-    )
-    if (!response.Body) throw new Error('No body in S3 get object response')
-
-    return response.Body?.transformToWebStream()
-  }
-
   async feedPartsToWritable(location: StorageLocation, writable: WritableStream) {
     if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
 
     try {
       for (let i = 0; i < location.partCount; i++) {
-        const partStream = await this.createDownloadStream(`${location.folderName}/parts/${i}`)
+        const partStream = await this.adapter.createDownloadStream(
+          `${location.folderName}/parts/${i}`,
+        )
         await partStream.pipeTo(writable, { preventClose: true })
       }
 
@@ -295,41 +236,12 @@ export class Storage {
     }
   }
 
-  async deleteFolder(folderName: string) {
-    const listResponse = await this.s3.send(
-      new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: `${this.keyPrefix}/${folderName}/`,
-      }),
-    )
-
-    if (!listResponse.Contents || listResponse.Contents.length === 0) return
-
-    await Promise.all(
-      chunk(
-        listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
-        1000,
-      ).map((chunkedObjects) =>
-        this.s3.send(
-          new DeleteObjectsCommand({
-            Bucket: this.bucket,
-            Delete: {
-              Objects: chunkedObjects.map((obj) => ({
-                Key: obj.Key,
-              })),
-              Quiet: true,
-            },
-          }),
-        ),
-      ),
-    )
-  }
-
   async createUpload(key: string, version: string) {
     const existingUpload = await this.db
       .selectFrom('uploads')
       .where('key', '=', key)
       .where('version', '=', version)
+      .select('id')
       .executeTakeFirst()
     if (existingUpload) return
 
@@ -399,9 +311,205 @@ export class Storage {
   }
 }
 
-export const getStorage = createSingletonPromise(async () =>
-  Storage.create({
-    bucket: ENV.STORAGE_S3_BUCKET,
-    region: ENV.AWS_REGION,
-  }),
-)
+export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
+
+interface StorageAdapter {
+  createDownloadStream(objectName: string): Promise<ReadableStream>
+  uploadStream(objectName: string, stream: ReadableStream): Promise<void>
+  deleteFolder(folderName: string): Promise<void>
+  countFilesInFolder(folderName: string): Promise<number>
+}
+
+class S3Adapter implements StorageAdapter {
+  private s3
+  private bucket
+  private keyPrefix = 'gh-actions-cache'
+
+  constructor({ bucket, s3 }: { s3: S3Client; bucket: string }) {
+    this.s3 = s3
+    this.bucket = bucket
+  }
+
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 's3' }>) {
+    const bucket = env.STORAGE_S3_BUCKET
+    const s3 = new S3Client({
+      forcePathStyle: true,
+      region: env.AWS_REGION,
+    })
+
+    try {
+      await s3.send(
+        new HeadBucketCommand({
+          Bucket: bucket,
+        }),
+      )
+    } catch (err: any) {
+      if (err.name === 'NotFound') {
+        throw new Error(`Bucket ${bucket} does not exist`)
+      }
+      throw err
+    }
+
+    return new S3Adapter({ s3, bucket })
+  }
+
+  async createDownloadStream(objectName: string) {
+    const response = await this.s3.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: `${this.keyPrefix}/${objectName}`,
+      }),
+    )
+    if (!response.Body) throw new Error('No body in S3 get object response')
+
+    return response.Body.transformToWebStream() as ReadableStream
+  }
+
+  async deleteFolder(folderName: string) {
+    const listResponse = await this.s3.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: `${this.keyPrefix}/${folderName}/`,
+      }),
+    )
+
+    if (!listResponse.Contents || listResponse.Contents.length === 0) return
+
+    await Promise.all(
+      chunk(
+        listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
+        1000,
+      ).map((chunkedObjects) =>
+        this.s3.send(
+          new DeleteObjectsCommand({
+            Bucket: this.bucket,
+            Delete: {
+              Objects: chunkedObjects.map((obj) => ({
+                Key: obj.Key,
+              })),
+              Quiet: true,
+            },
+          }),
+        ),
+      ),
+    )
+  }
+
+  async uploadStream(objectName: string, stream: ReadableStream) {
+    await new S3Upload({
+      client: this.s3,
+      params: {
+        Bucket: this.bucket,
+        Key: `${this.keyPrefix}/${objectName}`,
+        Body: stream as globalThis.ReadableStream,
+      },
+    }).done()
+  }
+
+  async countFilesInFolder(folderName: string) {
+    const listResponse = await this.s3.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: `${this.keyPrefix}/${folderName}/`,
+      }),
+    )
+
+    return listResponse.KeyCount ?? 0
+  }
+}
+
+class FileSystemAdapter implements StorageAdapter {
+  private rootFolder
+
+  constructor({ rootFolder }: { rootFolder: string }) {
+    this.rootFolder = rootFolder
+  }
+
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'filesystem' }>) {
+    const rootFolder = env.STORAGE_FILESYSTEM_PATH
+    await fs.mkdir(rootFolder, {
+      recursive: true,
+    })
+
+    return new FileSystemAdapter({
+      rootFolder,
+    })
+  }
+
+  async createDownloadStream(objectName: string) {
+    return Readable.toWeb(createReadStream(path.join(this.rootFolder, objectName)))
+  }
+
+  async deleteFolder(folderName: string) {
+    await fs.rm(path.join(this.rootFolder, folderName), {
+      recursive: true,
+      force: true,
+    })
+  }
+
+  async uploadStream(objectName: string, stream: ReadableStream) {
+    const filePath = path.join(this.rootFolder, objectName)
+    await fs.mkdir(path.dirname(filePath), {
+      recursive: true,
+    })
+    await fs.writeFile(filePath, Readable.fromWeb(stream))
+  }
+
+  async countFilesInFolder(folderName: string) {
+    const dir = await fs.readdir(path.join(this.rootFolder, folderName), {
+      withFileTypes: true,
+    })
+
+    return dir.filter((item) => item.isFile()).length
+  }
+}
+
+class GcsAdapter implements StorageAdapter {
+  private bucket
+  private keyPrefix = 'gh-actions-cache'
+
+  constructor({ bucket, gcs }: { bucket: string; gcs: GcsClient }) {
+    this.bucket = gcs.bucket(bucket)
+  }
+
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'gcs' }>) {
+    const bucketName = env.STORAGE_GCS_BUCKET
+
+    const gcs = new GcsClient({
+      keyFilename: env.STORAGE_GCS_SERVICE_ACCOUNT_KEY,
+      apiEndpoint: env.STORAGE_GCS_ENDPOINT,
+    })
+    const bucket = gcs.bucket(bucketName)
+
+    await bucket.getMetadata()
+
+    return new GcsAdapter({
+      bucket: bucketName,
+      gcs,
+    })
+  }
+
+  async createDownloadStream(objectName: string) {
+    const stream = this.bucket.file(`${this.keyPrefix}/${objectName}`).createReadStream()
+    return Readable.toWeb(stream)
+  }
+
+  async deleteFolder(folderName: string) {
+    await this.bucket.deleteFiles({
+      prefix: `${this.keyPrefix}/${folderName}/`,
+    })
+  }
+
+  async uploadStream(objectName: string, stream: ReadableStream) {
+    await this.bucket.file(`${this.keyPrefix}/${objectName}`).save(stream)
+  }
+
+  async countFilesInFolder(folderName: string) {
+    return this.bucket
+      .getFiles({
+        prefix: `${this.keyPrefix}/${folderName}/`,
+        autoPaginate: true,
+      })
+      .then((res) => res[0].length)
+  }
+}

@@ -2,11 +2,9 @@ import cluster from 'node:cluster'
 
 import { H3Error } from 'h3'
 import { getDatabase } from '~/lib/db'
-// import { useDB } from '~/lib/db'
-import { ENV } from '~/lib/env'
+import { env } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
-// import { useStorageAdapter } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
   const version = useRuntimeConfig().version
@@ -27,7 +25,7 @@ export default defineNitroPlugin(async (nitro) => {
     )
   })
 
-  if (ENV.DEBUG) {
+  if (env.DEBUG) {
     nitro.hooks.hook('request', (event) => {
       logger.debug(`Request: ${event.method} ${event.path}`)
     })

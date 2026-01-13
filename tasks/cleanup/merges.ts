@@ -1,5 +1,5 @@
 import { getDatabase } from '~/lib/db'
-import { ENV } from '~/lib/env'
+import { env } from '~/lib/env'
 
 export default defineTask({
   meta: {
@@ -7,7 +7,7 @@ export default defineTask({
     description: 'Reset stalled merges that have not completed within 15 minutes',
   },
   async run() {
-    if (ENV.DISABLE_CLEANUP_JOBS) return {}
+    if (env.DISABLE_CLEANUP_JOBS) return {}
 
     const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000
     const db = await getDatabase()

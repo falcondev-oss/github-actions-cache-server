@@ -4,9 +4,8 @@ import path from 'node:path'
 
 import { restoreCache, saveCache } from '@actions/cache'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { TEST_TEMP_DIR } from './setup'
 
-const TEST_TEMP_DIR = path.join(import.meta.dirname, 'temp')
-await fs.mkdir(TEST_TEMP_DIR, { recursive: true })
 const testFilePath = path.join(TEST_TEMP_DIR, 'test.bin')
 
 const MB = 1024 * 1024
@@ -21,7 +20,7 @@ describe(`save and restore cache with @actions/cache package`, () => {
     delete process.env.ACTIONS_RUNTIME_TOKEN
   })
 
-  for (const size of [500 * MB])
+  for (const size of [1, 2 * MB, 64 * MB, 128 * MB, 512 * MB])
     test(`${size} Bytes`, { timeout: 90_000 }, async () => {
       // save
       const expectedContents = crypto.randomBytes(size)
@@ -38,69 +37,3 @@ describe(`save and restore cache with @actions/cache package`, () => {
       expect(restoredContents.compare(expectedContents)).toBe(0)
     })
 })
-
-// test(
-//   'pruning cache',
-//   {
-//     timeout: 60_000,
-//   },
-//   async () => {
-//     const storage = await useStorageAdapter()
-
-//     const { cacheId } = await storage.reserveCache({
-//       key: 'cache-a',
-//       version: '1',
-//     })
-//     if (!cacheId) throw new Error('Failed to reserve cache')
-
-//     // random 100MB ReadableStream
-//     const stream = new ReadableStream<Buffer>({
-//       start(controller) {
-//         const chunkSize = 1024 * 1024 // 1MB
-//         for (let i = 0; i < 100; i++) {
-//           const chunk = Buffer.alloc(chunkSize)
-//           controller.enqueue(chunk)
-//         }
-//         controller.close()
-//       },
-//     })
-//     await storage.uploadChunk({
-//       uploadId: cacheId,
-//       chunkIndex: 0,
-//       chunkStart: 0,
-//       chunkStream: stream,
-//     })
-//     await storage.commitCache(cacheId)
-
-//     // exists
-//     expect(
-//       await storage.getCacheEntry({
-//         keys: ['cache-a'],
-//         version: '1',
-//       }),
-//     ).toStrictEqual({
-//       archiveLocation: expect.stringMatching(
-//         new RegExp(
-//           `http:\/\/localhost:3000\/download\/[^\/]+\/${getCacheFileName('cache-a', '1')}`,
-//         ),
-//       ),
-//       cacheKey: 'cache-a',
-//     })
-//     expect(
-//       await storage.driver.createReadStream(getCacheFileName('cache-a', '1')).catch(() => null),
-//     ).toBeInstanceOf(Readable)
-
-//     await storage.pruneCaches()
-
-//     // doesn't exist
-//     expect(
-//       await storage.getCacheEntry({
-//         keys: ['cache-a'],
-//         version: '1',
-//       }),
-//     ).toBeNull()
-//     expect(
-//       await storage.driver.createReadStream(getCacheFileName('cache-a', '1')).catch(() => null),
-//     ).toBe(null)
-//   },
-// )

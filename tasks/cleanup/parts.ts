@@ -1,5 +1,5 @@
 import { getDatabase } from '~/lib/db'
-import { ENV } from '~/lib/env'
+import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
 
 const itemsPerPage = 10
@@ -10,7 +10,7 @@ export default defineTask({
     description: 'Delete parts of merged cache entries',
   },
   async run() {
-    if (ENV.DISABLE_CLEANUP_JOBS) return {}
+    if (env.DISABLE_CLEANUP_JOBS) return {}
 
     const db = await getDatabase()
     const storage = await getStorage()
@@ -36,7 +36,7 @@ export default defineTask({
             })
             .where('id', '=', location.id)
             .execute()
-          await storage.deleteFolder(`${location.folderName}/parts`)
+          await storage.adapter.deleteFolder(`${location.folderName}/parts`)
           deletedCount += location.partCount
         })
       }

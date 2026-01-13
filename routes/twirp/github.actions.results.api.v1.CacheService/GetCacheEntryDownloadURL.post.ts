@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ENV } from '~/lib/env'
+import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
@@ -30,7 +30,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     ok: true,
-    signed_download_url: `${ENV.API_BASE_URL}/download/${cacheEntry.id}`,
+    signed_download_url: `${env.API_BASE_URL}/download/${cacheEntry.id}`,
     matched_key: cacheEntry.key,
   }
 })

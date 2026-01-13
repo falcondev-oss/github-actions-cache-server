@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ENV } from '~/lib/env'
+import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
@@ -27,6 +27,6 @@ export default defineEventHandler(async (event) => {
 
   return {
     ok: true,
-    signed_upload_url: `${ENV.API_BASE_URL}/upload/${upload.id}`,
+    signed_upload_url: `${env.API_BASE_URL}/upload/${upload.id}`,
   }
 })

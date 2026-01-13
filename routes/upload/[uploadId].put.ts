@@ -1,3 +1,4 @@
+import type { ReadableStream } from 'node:stream/web'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 
@@ -43,7 +44,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const storage = await getStorage()
-  await storage.uploadPart(uploadId.toString(), chunkIndex, stream)
+  await storage.uploadPart(uploadId.toString(), chunkIndex, stream as ReadableStream)
 
   // prevent random EOF error with in tonistiigi/go-actions-cache caused by missing request id
   setHeader(event, 'x-ms-request-id', randomUUID())

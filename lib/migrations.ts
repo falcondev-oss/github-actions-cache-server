@@ -1,12 +1,14 @@
 import type { Migration } from 'kysely'
+import type { Env } from './schemas'
 
-export function migrations() {
+export function migrations(driver: Env['DB_DRIVER']) {
   return {
     $0_init: {
       async up(db) {
+        const idType = driver === 'mysql' ? 'varchar(36)' : 'text'
         await db.schema
           .createTable('storage_locations')
-          .addColumn('id', 'text', (col) => col.primaryKey())
+          .addColumn('id', idType, (col) => col.primaryKey())
           .addColumn('folderName', 'text', (col) => col.notNull())
           .addColumn('partCount', 'integer', (col) => col.notNull())
           .addColumn('mergeStartedAt', 'bigint')
@@ -17,20 +19,24 @@ export function migrations() {
 
         await db.schema
           .createTable('cache_entries')
-          .addColumn('id', 'text', (col) => col.primaryKey())
-          .addColumn('key', 'text', (col) => col.notNull())
-          .addColumn('version', 'text', (col) => col.notNull())
+          .addColumn('id', idType, (col) => col.primaryKey())
+          .addColumn('key', driver === 'mysql' ? 'varchar(512)' : 'text', (col) => col.notNull())
+          .addColumn('version', driver === 'mysql' ? 'varchar(255)' : 'text', (col) =>
+            col.notNull(),
+          )
           .addColumn('updatedAt', 'bigint', (col) => col.notNull())
-          .addColumn('locationId', 'text', (col) =>
+          .addColumn('locationId', idType, (col) =>
             col.notNull().references('storage_locations.id').onDelete('cascade'),
           )
           .execute()
 
         await db.schema
           .createTable('uploads')
-          .addColumn('id', 'text', (col) => col.primaryKey())
-          .addColumn('key', 'text', (col) => col.notNull())
-          .addColumn('version', 'text', (col) => col.notNull())
+          .addColumn('id', idType, (col) => col.primaryKey())
+          .addColumn('key', driver === 'mysql' ? 'varchar(512)' : 'text', (col) => col.notNull())
+          .addColumn('version', driver === 'mysql' ? 'varchar(255)' : 'text', (col) =>
+            col.notNull(),
+          )
           .addColumn('createdAt', 'bigint', (col) => col.notNull())
           .addColumn('lastPartUploadedAt', 'bigint')
           .addColumn('folderName', 'text', (col) => col.notNull())
