@@ -32,7 +32,7 @@ export function migrations(driver: Env['DB_DRIVER']) {
 
         await db.schema
           .createTable('uploads')
-          .addColumn('id', idType, (col) => col.primaryKey())
+          .addColumn('id', 'bigint', (col) => col.primaryKey())
           .addColumn('key', driver === 'mysql' ? 'varchar(512)' : 'text', (col) => col.notNull())
           .addColumn('version', driver === 'mysql' ? 'varchar(255)' : 'text', (col) =>
             col.notNull(),

@@ -24,6 +24,7 @@ import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
 import { getDatabase } from './db'
 import { env } from './env'
+import { generateNumberId } from './helpers'
 
 class Storage {
   adapter
@@ -45,7 +46,7 @@ class Storage {
     })
   }
 
-  async uploadPart(uploadId: string, partIndex: number, stream: ReadableStream) {
+  async uploadPart(uploadId: number, partIndex: number, stream: ReadableStream) {
     const upload = await this.db
       .selectFrom('uploads')
       .where('id', '=', uploadId)
@@ -245,12 +246,12 @@ class Storage {
       .executeTakeFirst()
     if (existingUpload) return
 
-    const uploadId = randomUUID()
+    const uploadId = generateNumberId()
     await this.db
       .insertInto('uploads')
       .values({
         id: uploadId,
-        folderName: uploadId,
+        folderName: uploadId.toString(),
         createdAt: Date.now(),
         key,
         version,

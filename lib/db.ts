@@ -33,7 +33,7 @@ export interface StorageLocation {
 }
 
 interface Upload {
-  id: string
+  id: number
   key: string
   version: string
   createdAt: number
