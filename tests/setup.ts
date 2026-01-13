@@ -29,7 +29,8 @@ const TESTING_ENV_BASE = {
   RUNNER_TEMP: path.join(TEST_TEMP_DIR, 'runner-temp'),
   ACTIONS_RESULTS_URL: 'http://localhost:3000/',
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
-} satisfies typeof envBaseSchema.infer & Record<string, string>
+} satisfies Omit<typeof envBaseSchema.infer, 'CACHE_CLEANUP_OLDER_THAN_DAYS'> &
+  Record<string, string>
 
 const TESTING_ENV_BY_DB_DRIVER = {
   mysql: {
