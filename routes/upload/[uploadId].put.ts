@@ -1,16 +1,14 @@
+import type { ReadableStream } from 'node:stream/web'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 
 import { z } from 'zod'
 import { logger } from '~/lib/logger'
 
-import { useStorageAdapter } from '~/lib/storage'
-
-// https://github.com/actions/toolkit/blob/340a6b15b5879eefe1412ee6c8606978b091d3e8/packages/cache/src/cache.ts#L470
-const MB = 1024 * 1024
+import { getStorage } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
-  cacheId: z.coerce.number(),
+  uploadId: z.coerce.number(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -37,7 +35,7 @@ export default defineEventHandler(async (event) => {
       statusMessage: `Invalid block id: ${blockId}`,
     })
 
-  const { cacheId } = parsedPathParams.data
+  const { uploadId } = parsedPathParams.data
 
   const stream = getRequestWebStream(event)
   if (!stream) {
@@ -45,20 +43,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Request body must be a stream' })
   }
 
-  const userAgent = getHeader(event, 'user-agent')
-
-  // 1 MB for docker buildx
-  // 64 MB for everything else
-  const chunkSize = userAgent && userAgent.startsWith('azsdk-go-azblob') ? MB : 64 * MB
-  const start = chunkIndex * chunkSize
-
-  const adapter = await useStorageAdapter()
-  await adapter.uploadChunk({
-    uploadId: cacheId,
-    chunkStream: stream as ReadableStream<Buffer>,
-    chunkStart: start,
-    chunkIndex,
-  })
+  const storage = await getStorage()
+  await storage.uploadPart(uploadId, chunkIndex, stream as ReadableStream)
 
   // prevent random EOF error with in tonistiigi/go-actions-cache caused by missing request id
   setHeader(event, 'x-ms-request-id', randomUUID())

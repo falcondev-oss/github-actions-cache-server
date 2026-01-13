@@ -1,19 +1,87 @@
+/* eslint-disable no-shadow */
 import type { ResultPromise } from 'execa'
 
 import type { Nitro } from 'nitropack'
 import type { StartedTestContainer } from 'testcontainers'
-import type { DatabaseDriverName } from '~/lib/db/drivers'
-import type { StorageDriverName } from '~/lib/storage/drivers'
+import type { Env, envBaseSchema, envDbDriverSchema, envStorageDriverSchema } from '~/lib/schemas'
+
 import fs from 'node:fs/promises'
+import path from 'node:path'
+
 import { MySqlContainer } from '@testcontainers/mysql'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
-
-import { configDotenv } from 'dotenv'
+import { createEnv } from 'arkenv'
 import { execa } from 'execa'
-
 import { build, createNitro, prepare } from 'nitropack'
 import { GenericContainer } from 'testcontainers'
 import { match } from 'ts-pattern'
+import { envSchema } from '~/lib/schemas'
+
+export const TEST_TEMP_DIR = 'tests/temp'
+
+const env = createEnv({
+  VITEST_DB_DRIVER: envSchema.get('DB_DRIVER').default('sqlite'),
+  VITEST_STORAGE_DRIVER: envSchema.get('STORAGE_DRIVER').default('filesystem'),
+})
+
+const TESTING_ENV_BASE = {
+  API_BASE_URL: 'http://localhost:3000',
+  RUNNER_TEMP: path.join(TEST_TEMP_DIR, 'runner-temp'),
+  ACTIONS_RESULTS_URL: 'http://localhost:3000/',
+  ACTIONS_CACHE_URL: 'http://localhost:3000/',
+} satisfies Omit<typeof envBaseSchema.infer, 'CACHE_CLEANUP_OLDER_THAN_DAYS'> &
+  Record<string, string>
+
+const TESTING_ENV_BY_DB_DRIVER = {
+  mysql: {
+    DB_DRIVER: 'mysql',
+    DB_MYSQL_DATABASE: 'vitest',
+    DB_MYSQL_HOST: 'localhost',
+    DB_MYSQL_PASSWORD: 'root',
+    DB_MYSQL_PORT: 3306,
+    DB_MYSQL_USER: 'root',
+  },
+  postgres: {
+    DB_DRIVER: 'postgres',
+    DB_POSTGRES_HOST: 'localhost',
+    DB_POSTGRES_PORT: 5432,
+    DB_POSTGRES_DATABASE: 'vitest',
+    DB_POSTGRES_USER: 'postgres',
+    DB_POSTGRES_PASSWORD: 'postgres',
+  },
+  sqlite: {
+    DB_DRIVER: 'sqlite',
+    DB_SQLITE_PATH: `${TEST_TEMP_DIR}/vitest.sqlite`,
+  },
+} satisfies {
+  [K in Env['DB_DRIVER']]: Extract<(typeof envDbDriverSchema)['infer'], { DB_DRIVER: K }>
+}
+
+const TESTING_ENV_BY_STORAGE_DRIVER = {
+  filesystem: {
+    STORAGE_DRIVER: 'filesystem',
+    STORAGE_FILESYSTEM_PATH: `${TEST_TEMP_DIR}/storage-filesystem`,
+  },
+  s3: {
+    STORAGE_DRIVER: 's3',
+    AWS_REGION: 'us-east-1',
+    STORAGE_S3_BUCKET: 'vitest',
+    AWS_ACCESS_KEY_ID: 'minioadmin',
+    AWS_SECRET_ACCESS_KEY: 'minioadmin',
+    AWS_ENDPOINT_URL: 'http://localhost:9000',
+  },
+  gcs: {
+    STORAGE_DRIVER: 'gcs',
+    STORAGE_GCS_BUCKET: 'vitest',
+    STORAGE_GCS_ENDPOINT: 'http://localhost:9000',
+    STORAGE_GCS_SERVICE_ACCOUNT_KEY: 'tests/gcs-service-account-key.json',
+  },
+} satisfies {
+  [K in Env['STORAGE_DRIVER']]: Extract<
+    (typeof envStorageDriverSchema)['infer'],
+    { STORAGE_DRIVER: K }
+  >
+}
 
 let nitro: Nitro
 let server: ResultPromise<{
@@ -22,57 +90,63 @@ let server: ResultPromise<{
 }>
 const testContainers: (StartedTestContainer | undefined)[] = []
 export async function setup() {
-  // config
-  const dbDriver = process.env.VITEST_DB_DRIVER as DatabaseDriverName | undefined
-  const storageDriver = process.env.VITEST_STORAGE_DRIVER as StorageDriverName | undefined
-  if (!dbDriver || !storageDriver) {
-    throw new Error('VITEST_DB_DRIVER and VITEST_STORAGE_DRIVER must be set')
-  }
+  Object.assign(
+    process.env,
+    TESTING_ENV_BASE,
+    TESTING_ENV_BY_DB_DRIVER[env.VITEST_DB_DRIVER],
+    TESTING_ENV_BY_STORAGE_DRIVER[env.VITEST_STORAGE_DRIVER],
+  )
 
-  const result = configDotenv({
-    path: [`tests/.env.base`, `tests/.env.${storageDriver}.storage`, `tests/.env.${dbDriver}.db`],
-  })
-  if (result.error) throw result.error
-
-  await fs.rm('tests/temp', {
+  await fs.rm(TEST_TEMP_DIR, {
     force: true,
     recursive: true,
   })
+  await fs.mkdir(TEST_TEMP_DIR, { recursive: true })
 
   // eslint-disable-next-line no-console
-  console.log('Starting test containers for', dbDriver, storageDriver)
+  console.log('Starting test containers for', env.VITEST_DB_DRIVER, env.VITEST_STORAGE_DRIVER)
 
   // containers
   testContainers.push(
-    await match(dbDriver)
-      .with('mysql', () =>
-        new MySqlContainer('mysql:latest')
-          .withDatabase('mysql')
-          .withRootPassword('root')
+    await match(env.VITEST_DB_DRIVER)
+      .with('mysql', () => {
+        const env = TESTING_ENV_BY_DB_DRIVER.mysql
+
+        return new MySqlContainer('mysql:latest')
+          .withDatabase(env.DB_MYSQL_DATABASE)
+          .withRootPassword(env.DB_MYSQL_PASSWORD)
           .withExposedPorts({
             container: 3306,
-            host: 3306,
+            host: env.DB_MYSQL_PORT,
           })
-          .start(),
-      )
-      .with('postgres', () =>
-        new PostgreSqlContainer('postgres:latest')
-          .withDatabase('postgres')
-          .withPassword('postgres')
-          .withUsername('postgres')
+          .start()
+      })
+      .with('postgres', () => {
+        const env = TESTING_ENV_BY_DB_DRIVER.postgres
+
+        return new PostgreSqlContainer('postgres:latest')
+          .withDatabase(env.DB_POSTGRES_DATABASE)
+          .withPassword(env.DB_POSTGRES_PASSWORD)
+          .withUsername(env.DB_POSTGRES_USER)
           .withExposedPorts({
-            host: 5432,
+            host: env.DB_POSTGRES_PORT,
             container: 5432,
           })
-          .start(),
-      )
+          .start()
+      })
       .with('sqlite', () => undefined)
       .exhaustive(),
-    await match(storageDriver)
+
+    await match(env.VITEST_STORAGE_DRIVER)
       .with('s3', async () => {
-        const container = await new GenericContainer('quay.io/minio/minio:latest')
+        const env = TESTING_ENV_BY_STORAGE_DRIVER.s3
+
+        return new GenericContainer('quay.io/minio/minio:latest')
           .withEntrypoint(['sh'])
-          .withCommand([`-c`, `mkdir -p /data/test && /usr/bin/minio server /data`])
+          .withCommand([
+            `-c`,
+            `mkdir -p /data/${env.STORAGE_S3_BUCKET} && /usr/bin/minio server /data`,
+          ])
           .withExposedPorts({
             container: 9000,
             host: 9000,
@@ -84,16 +158,14 @@ export async function setup() {
             startPeriod: 1000,
           })
           .start()
-
-        return container
       })
-
       .with('gcs', async () => {
-        const container = await new GenericContainer('fsouza/fake-gcs-server:latest')
+        const env = TESTING_ENV_BY_STORAGE_DRIVER.gcs
+        return new GenericContainer('fsouza/fake-gcs-server:latest')
           .withEntrypoint(['sh'])
           .withCommand([
             `-c`,
-            `mkdir -p /data/test && /bin/fake-gcs-server -scheme http -port 9000 -data /data`,
+            `mkdir -p /data/${env.STORAGE_GCS_BUCKET} && /bin/fake-gcs-server -scheme http -port 9000 -data /data`,
           ])
           .withExposedPorts({
             container: 9000,
@@ -106,12 +178,8 @@ export async function setup() {
             startPeriod: 1000,
           })
           .start()
-
-        return container
       })
-
       .with('filesystem', () => undefined)
-
       .exhaustive(),
   )
 
@@ -143,5 +211,7 @@ export async function teardown() {
   await fs.rm('tests/temp', { recursive: true })
   await server?.kill()
   await nitro?.close()
-  await Promise.all(testContainers.map((container) => container?.stop()))
+  await Promise.all(
+    testContainers.map((container) => container?.stop({ remove: true, removeVolumes: true })),
+  )
 }
