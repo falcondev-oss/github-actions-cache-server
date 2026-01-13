@@ -24,7 +24,7 @@ export const envDbDriverSchema = type.or(
   {
     DB_DRIVER: type.unit('postgres'),
     DB_POSTGRES_DATABASE: 'string',
-    DB_POSTGRES_HOST: 'string.host',
+    DB_POSTGRES_HOST: 'string',
     DB_POSTGRES_PORT: 'number.port',
     DB_POSTGRES_USER: 'string',
     DB_POSTGRES_PASSWORD: 'string',
@@ -32,7 +32,7 @@ export const envDbDriverSchema = type.or(
   {
     DB_DRIVER: type.unit('mysql'),
     DB_MYSQL_DATABASE: 'string',
-    DB_MYSQL_HOST: 'string.host',
+    DB_MYSQL_HOST: 'string',
     DB_MYSQL_PORT: 'number.port',
     DB_MYSQL_USER: 'string',
     DB_MYSQL_PASSWORD: 'string',
