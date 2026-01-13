@@ -1,2 +1,4 @@
-shamefullyHoist: true
-strictPeerDependencies: false
+onlyBuiltDependencies:
+  - cpu-features
+  - protobufjs
+  - ssh2
