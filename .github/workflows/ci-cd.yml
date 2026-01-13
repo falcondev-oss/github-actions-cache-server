@@ -3,7 +3,8 @@ name: 🚥 CI/CD
 on:
   workflow_dispatch:
   push:
-    branches: '**'
+    branches:
+      - '**'
   pull_request:
     branches:
       - dev

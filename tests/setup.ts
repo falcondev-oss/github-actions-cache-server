@@ -96,10 +96,11 @@ export async function setup() {
     TESTING_ENV_BY_STORAGE_DRIVER[env.VITEST_STORAGE_DRIVER],
   )
 
-  await fs.rm('tests/temp', {
+  await fs.rm(TEST_TEMP_DIR, {
     force: true,
     recursive: true,
   })
+  await fs.mkdir(TEST_TEMP_DIR, { recursive: true })
 
   // eslint-disable-next-line no-console
   console.log('Starting test containers for', env.VITEST_DB_DRIVER, env.VITEST_STORAGE_DRIVER)
