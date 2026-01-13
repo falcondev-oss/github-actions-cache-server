@@ -8,7 +8,7 @@ import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
-  uploadId: z.string(),
+  uploadId: z.coerce.number(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -44,7 +44,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const storage = await getStorage()
-  await storage.uploadPart(uploadId.toString(), chunkIndex, stream as ReadableStream)
+  await storage.uploadPart(uploadId, chunkIndex, stream as ReadableStream)
 
   // prevent random EOF error with in tonistiigi/go-actions-cache caused by missing request id
   setHeader(event, 'x-ms-request-id', randomUUID())
