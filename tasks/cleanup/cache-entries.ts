@@ -12,7 +12,7 @@ export default defineTask({
   async run() {
     if (env.DISABLE_CLEANUP_JOBS) return {}
 
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
+    const xDaysAgo = Date.now() - env.CACHE_CLEANUP_OLDER_THAN_DAYS * 24 * 60 * 60 * 1000
     const db = await getDatabase()
     const storage = await getStorage()
 
@@ -22,7 +22,7 @@ export default defineTask({
       const storageLocations = await db
         .selectFrom('storage_locations')
         .select(['folderName', 'id'])
-        .where('lastDownloadedAt', '<', thirtyDaysAgo)
+        .where('lastDownloadedAt', '<', xDaysAgo)
         .limit(itemsPerPage)
         .offset(page * itemsPerPage)
         .execute()
