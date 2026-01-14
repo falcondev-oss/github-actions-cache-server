@@ -45,6 +45,7 @@ securityContext:
 service:
   type: ClusterIP
   port: 80
+  annotations: {}
 
 ingress:
   enabled: false
@@ -128,6 +129,7 @@ apiBaseUrl: ''
 env:
   - name: DEBUG
     value: 'false'
+envFrom: []
 
 topologySpreadConstraints: []
   # - topologyKey: topology.kubernetes.io/zone
