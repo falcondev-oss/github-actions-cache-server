@@ -19,6 +19,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { Storage as GcsClient } from '@google-cloud/storage'
 import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
@@ -262,7 +263,7 @@ class Storage {
     return { id: uploadId }
   }
 
-  async getCacheEntry({
+  private async getCacheEntryByKeys({
     keys: [primaryKey, ...restoreKeys],
     version,
   }: {
@@ -310,6 +311,35 @@ class Storage {
       if (prefixedMatch) return prefixedMatch
     }
   }
+
+  async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.getCacheEntryByKeys>[0]) {
+    const cacheEntry = await this.getCacheEntryByKeys(args)
+    if (!cacheEntry) return
+
+    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.id}`
+
+    if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl)
+      return {
+        downloadUrl: defaultUrl,
+        cacheEntry,
+      }
+
+    const location = await this.db
+      .selectFrom('storage_locations')
+      .where('id', '=', cacheEntry.locationId)
+      .select(['folderName', 'mergedAt'])
+      .executeTakeFirst()
+    if (!location) throw new Error('Storage location not found')
+
+    const downloadUrl = location.mergedAt
+      ? await this.adapter.createDownloadUrl(`${location.folderName}/merged`)
+      : defaultUrl
+
+    return {
+      downloadUrl,
+      cacheEntry,
+    }
+  }
 }
 
 export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
@@ -319,6 +349,7 @@ interface StorageAdapter {
   uploadStream(objectName: string, stream: ReadableStream): Promise<void>
   deleteFolder(folderName: string): Promise<void>
   countFilesInFolder(folderName: string): Promise<number>
+  createDownloadUrl?(objectName: string): Promise<string>
 }
 
 class S3Adapter implements StorageAdapter {
@@ -417,6 +448,19 @@ class S3Adapter implements StorageAdapter {
 
     return listResponse.KeyCount ?? 0
   }
+
+  async createDownloadUrl(objectName: string) {
+    return getSignedUrl(
+      this.s3,
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: `${this.keyPrefix}/${objectName}`,
+      }),
+      {
+        expiresIn: 10 * 60 * 1000, // 10min
+      },
+    )
+  }
 }
 
 class FileSystemAdapter implements StorageAdapter {
@@ -512,5 +556,15 @@ class GcsAdapter implements StorageAdapter {
         autoPaginate: true,
       })
       .then((res) => res[0].length)
+  }
+
+  async createDownloadUrl(objectName: string) {
+    return this.bucket
+      .file(`${this.keyPrefix}/${objectName}`)
+      .getSignedUrl({
+        action: 'read',
+        expires: Date.now() + 10 * 60 * 1000, // 10min
+      })
+      .then((res) => res[0])
   }
 }

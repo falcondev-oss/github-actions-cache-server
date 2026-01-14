@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
@@ -19,18 +18,18 @@ export default defineEventHandler(async (event) => {
   const { key, restore_keys, version } = parsedBody.data
 
   const storage = await getStorage()
-  const cacheEntry = await storage.getCacheEntry({
+  const match = await storage.getCacheEntryWithDownloadUrl({
     keys: [key, ...(restore_keys ?? [])],
     version,
   })
-  if (!cacheEntry)
+  if (!match)
     return {
       ok: false,
     }
 
   return {
     ok: true,
-    signed_download_url: `${env.API_BASE_URL}/download/${cacheEntry.id}`,
-    matched_key: cacheEntry.key,
+    signed_download_url: match.downloadUrl,
+    matched_key: match.cacheEntry.key,
   }
 })
