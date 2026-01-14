@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { ENV } from '~/lib/env'
-import { useStorageAdapter } from '~/lib/storage'
+import { env } from '~/lib/env'
+import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
   key: z.string(),
@@ -18,15 +18,15 @@ export default defineEventHandler(async (event) => {
 
   const { key, version } = parsedBody.data
 
-  const adapter = await useStorageAdapter()
-  const reservation = await adapter.reserveCache({ key, version })
-  if (!reservation.cacheId)
+  const storage = await getStorage()
+  const upload = await storage.createUpload(key, version)
+  if (!upload)
     return {
       ok: false,
     }
 
   return {
     ok: true,
-    signed_upload_url: `${ENV.API_BASE_URL}/upload/${reservation.cacheId}`,
+    signed_upload_url: `${env.API_BASE_URL}/upload/${upload.id}`,
   }
 })

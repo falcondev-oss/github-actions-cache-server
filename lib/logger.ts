@@ -1,11 +1,11 @@
 import cluster from 'node:cluster'
 
 import { createConsola, LogLevels } from 'consola'
-import { ENV } from '~/lib/env'
+import { env } from './env'
 
 export const logger = createConsola({
   defaults: {
     tag: cluster.isPrimary ? 'cache-server' : `cache-server-node-${cluster.worker?.id}`,
   },
-  level: ENV.DEBUG ? LogLevels.debug : LogLevels.info,
+  level: env.DEBUG ? LogLevels.debug : LogLevels.info,
 })

@@ -1,10 +1,8 @@
-import type { CacheFileName } from '~/lib/storage/storage-driver'
-
 import { z } from 'zod'
-import { useStorageAdapter } from '~/lib/storage'
+import { getStorage } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
-  cacheFileName: z.string(),
+  cacheEntryId: z.string(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -15,15 +13,15 @@ export default defineEventHandler(async (event) => {
       statusMessage: `Invalid path parameters: ${parsedPathParams.error.message}`,
     })
 
-  const { cacheFileName } = parsedPathParams.data
+  const { cacheEntryId } = parsedPathParams.data
 
-  const adapter = await useStorageAdapter()
-  const stream = await adapter.download(cacheFileName as CacheFileName)
+  const storage = await getStorage()
+  const stream = await storage.download(cacheEntryId)
   if (!stream)
     throw createError({
       statusCode: 404,
       message: 'Cache file not found',
     })
 
-  return sendStream(event, stream)
+  return sendStream(event, stream as globalThis.ReadableStream)
 })

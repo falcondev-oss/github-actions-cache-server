@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { useStorageAdapter } from '~/lib/storage'
+import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
   key: z.string(),
@@ -16,20 +16,20 @@ export default defineEventHandler(async (event) => {
     })
 
   const { key, restore_keys, version } = parsedBody.data
-  const adapter = await useStorageAdapter()
-  const storageEntry = await adapter.getCacheEntry({
+
+  const storage = await getStorage()
+  const match = await storage.getCacheEntryWithDownloadUrl({
     keys: [key, ...(restore_keys ?? [])],
     version,
   })
-
-  if (!storageEntry)
+  if (!match)
     return {
       ok: false,
     }
 
   return {
     ok: true,
-    signed_download_url: storageEntry.archiveLocation,
-    matched_key: storageEntry.cacheKey,
+    signed_download_url: match.downloadUrl,
+    matched_key: match.cacheEntry.key,
   }
 })

@@ -1,5 +1,5 @@
 // @ts-check
-import eslintConfig from '@louishaftmann/eslint-config'
+import eslintConfig from '@falcondev-oss/configs/eslint'
 
 export default eslintConfig({
   nuxt: false,

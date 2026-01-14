@@ -17,8 +17,12 @@ services:
       - '3000:3000'
     environment:
       API_BASE_URL: http://localhost:3000
+      STORAGE_DRIVER: filesystem
+      STORAGE_FILESYSTEM_PATH: /data/cache
+      DB_DRIVER: sqlite
+      DB_SQLITE_PATH: /data/cache-server.db
     volumes:
-      - cache-data:/app/.data
+      - cache-data:/data
 
 volumes:
   cache-data:
