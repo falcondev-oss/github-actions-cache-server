@@ -26,6 +26,6 @@ export default defineEventHandler(async (event) => {
 
   return {
     ok: true,
-    entry_id: upload.id,
+    entry_id: upload.id.toString(),
   }
 })
