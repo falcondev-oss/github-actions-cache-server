@@ -5,10 +5,11 @@ import type { ReadableStream, WritableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { TransformStream } from 'node:stream/web'
 import { createSingletonPromise } from '@antfu/utils'
 import {
@@ -435,6 +436,9 @@ class S3Adapter implements StorageAdapter {
         Key: `${this.keyPrefix}/${objectName}`,
         Body: stream as globalThis.ReadableStream,
       },
+      queueSize: 4,
+      partSize: 5 * 1024 * 1024, // 5MB
+      leavePartsOnError: false,
     }).done()
   }
 
@@ -497,7 +501,8 @@ class FileSystemAdapter implements StorageAdapter {
     await fs.mkdir(path.dirname(filePath), {
       recursive: true,
     })
-    await fs.writeFile(filePath, Readable.fromWeb(stream))
+
+    await pipeline(Readable.fromWeb(stream), createWriteStream(filePath))
   }
 
   async countFilesInFolder(folderName: string) {
@@ -546,7 +551,15 @@ class GcsAdapter implements StorageAdapter {
   }
 
   async uploadStream(objectName: string, stream: ReadableStream) {
-    await this.bucket.file(`${this.keyPrefix}/${objectName}`).save(stream)
+    const file = this.bucket.file(`${this.keyPrefix}/${objectName}`)
+
+    await pipeline(
+      Readable.fromWeb(stream),
+      file.createWriteStream({
+        resumable: false,
+        validation: false,
+      }),
+    )
   }
 
   async countFilesInFolder(folderName: string) {
