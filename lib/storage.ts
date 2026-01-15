@@ -5,10 +5,11 @@ import type { ReadableStream, WritableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { TransformStream } from 'node:stream/web'
 import { createSingletonPromise } from '@antfu/utils'
 import {
@@ -160,12 +161,28 @@ class Storage {
       .where('id', '=', storageLocation.id)
       .execute()
 
-    const { writable, readable } = new TransformStream()
-    const [uploadStream, responseStream] = readable.tee()
+    const { writable: uploadWritable, readable: uploadReadable } = new TransformStream()
+    const uploadWriter = uploadWritable.getWriter()
+
+    const { writable: sourceWritable, readable: responseReadable } = new TransformStream({
+      async transform(chunk, controller) {
+        // send to response
+        controller.enqueue(chunk)
+
+        // if upload is slow this will throttle the stream to avoid buffering too much in memory
+        await uploadWriter.write(chunk)
+      },
+      async flush() {
+        await uploadWriter.close()
+      },
+      async cancel(reason) {
+        await uploadWriter.abort(reason)
+      },
+    })
 
     try {
       this.adapter
-        .uploadStream(`${storageLocation.folderName}/merged`, uploadStream)
+        .uploadStream(`${storageLocation.folderName}/merged`, uploadReadable)
         .then(async () => {
           await this.db
             .updateTable('storage_locations')
@@ -196,7 +213,17 @@ class Storage {
             .execute()
         })
 
-      this.feedPartsToWritable(storageLocation, writable)
+      this.feedPartsToWritable(storageLocation, sourceWritable).catch(async (err) => {
+        await uploadWriter.abort(err)
+        await this.db
+          .updateTable('storage_locations')
+          .set({
+            mergedAt: null,
+            mergeStartedAt: null,
+          })
+          .where('id', '=', storageLocation.id)
+          .execute()
+      })
     } catch (err) {
       await this.db
         .updateTable('storage_locations')
@@ -209,7 +236,7 @@ class Storage {
       throw err
     }
 
-    return responseStream
+    return responseReadable
   }
 
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
@@ -435,6 +462,9 @@ class S3Adapter implements StorageAdapter {
         Key: `${this.keyPrefix}/${objectName}`,
         Body: stream as globalThis.ReadableStream,
       },
+      queueSize: 4,
+      partSize: 5 * 1024 * 1024, // 5MB
+      leavePartsOnError: false,
     }).done()
   }
 
@@ -497,7 +527,8 @@ class FileSystemAdapter implements StorageAdapter {
     await fs.mkdir(path.dirname(filePath), {
       recursive: true,
     })
-    await fs.writeFile(filePath, Readable.fromWeb(stream))
+
+    await pipeline(Readable.fromWeb(stream), createWriteStream(filePath))
   }
 
   async countFilesInFolder(folderName: string) {
@@ -546,7 +577,15 @@ class GcsAdapter implements StorageAdapter {
   }
 
   async uploadStream(objectName: string, stream: ReadableStream) {
-    await this.bucket.file(`${this.keyPrefix}/${objectName}`).save(stream)
+    const file = this.bucket.file(`${this.keyPrefix}/${objectName}`)
+
+    await pipeline(
+      Readable.fromWeb(stream),
+      file.createWriteStream({
+        resumable: false,
+        validation: false,
+      }),
+    )
   }
 
   async countFilesInFolder(folderName: string) {
