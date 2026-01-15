@@ -45,7 +45,7 @@ export const envDbDriverSchema = type.or(
 
 export const envBaseSchema = type({
   'API_BASE_URL': 'string.url',
-  'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 30',
+  'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 90',
   'DISABLE_CLEANUP_JOBS?': 'boolean',
   'DEBUG?': 'boolean',
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',
