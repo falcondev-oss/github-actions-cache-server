@@ -161,12 +161,28 @@ class Storage {
       .where('id', '=', storageLocation.id)
       .execute()
 
-    const { writable, readable } = new TransformStream()
-    const [uploadStream, responseStream] = readable.tee()
+    const { writable: uploadWritable, readable: uploadReadable } = new TransformStream()
+    const uploadWriter = uploadWritable.getWriter()
+
+    const { writable: sourceWritable, readable: responseReadable } = new TransformStream({
+      async transform(chunk, controller) {
+        // send to response
+        controller.enqueue(chunk)
+
+        // if upload is slow this will throttle the stream to avoid buffering too much in memory
+        await uploadWriter.write(chunk)
+      },
+      async flush() {
+        await uploadWriter.close()
+      },
+      async cancel(reason) {
+        await uploadWriter.abort(reason)
+      },
+    })
 
     try {
       this.adapter
-        .uploadStream(`${storageLocation.folderName}/merged`, uploadStream)
+        .uploadStream(`${storageLocation.folderName}/merged`, uploadReadable)
         .then(async () => {
           await this.db
             .updateTable('storage_locations')
@@ -197,7 +213,17 @@ class Storage {
             .execute()
         })
 
-      this.feedPartsToWritable(storageLocation, writable)
+      this.feedPartsToWritable(storageLocation, sourceWritable).catch(async (err) => {
+        await uploadWriter.abort(err)
+        await this.db
+          .updateTable('storage_locations')
+          .set({
+            mergedAt: null,
+            mergeStartedAt: null,
+          })
+          .where('id', '=', storageLocation.id)
+          .execute()
+      })
     } catch (err) {
       await this.db
         .updateTable('storage_locations')
@@ -210,7 +236,7 @@ class Storage {
       throw err
     }
 
-    return responseStream
+    return responseReadable
   }
 
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
