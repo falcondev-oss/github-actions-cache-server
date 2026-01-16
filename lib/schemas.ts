@@ -21,14 +21,26 @@ export const envStorageDriverSchema = type.or(
   },
 )
 export const envDbDriverSchema = type.or(
-  {
-    DB_DRIVER: type.unit('postgres'),
-    DB_POSTGRES_DATABASE: 'string',
-    DB_POSTGRES_HOST: 'string',
-    DB_POSTGRES_PORT: 'number.port',
-    DB_POSTGRES_USER: 'string',
-    DB_POSTGRES_PASSWORD: 'string',
-  },
+  type.or(
+    {
+      'DB_DRIVER': type.unit('postgres'),
+      'DB_POSTGRES_DATABASE': 'string',
+      'DB_POSTGRES_HOST': 'string',
+      'DB_POSTGRES_PORT': 'number.port',
+      'DB_POSTGRES_USER': 'string',
+      'DB_POSTGRES_PASSWORD': 'string',
+      'DB_POSTGRES_URL?': 'undefined',
+    },
+    {
+      'DB_DRIVER': type.unit('postgres'),
+      'DB_POSTGRES_URL': 'string',
+      'DB_POSTGRES_DATABASE?': 'undefined',
+      'DB_POSTGRES_HOST?': 'undefined',
+      'DB_POSTGRES_PORT?': 'undefined',
+      'DB_POSTGRES_USER?': 'undefined',
+      'DB_POSTGRES_PASSWORD?': 'undefined',
+    },
+  ),
   {
     DB_DRIVER: type.unit('mysql'),
     DB_MYSQL_DATABASE: 'string',

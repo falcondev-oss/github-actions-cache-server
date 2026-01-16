@@ -52,14 +52,21 @@ const dbLogger = logger.withTag('db')
 export const getDatabase = createSingletonPromise(async () => {
   const dialect = await match(env)
     .with({ DB_DRIVER: 'postgres' }, async (env) => {
-      const pool = new pg.Pool({
-        database: env.DB_POSTGRES_DATABASE,
-        host: env.DB_POSTGRES_HOST,
-        password: env.DB_POSTGRES_PASSWORD,
-        port: env.DB_POSTGRES_PORT,
-        user: env.DB_POSTGRES_USER,
-        max: 10,
-      })
+      const pool = new pg.Pool(
+        env.DB_POSTGRES_URL
+          ? {
+              connectionString: env.DB_POSTGRES_URL,
+              max: 10,
+            }
+          : {
+              database: env.DB_POSTGRES_DATABASE,
+              host: env.DB_POSTGRES_HOST,
+              password: env.DB_POSTGRES_PASSWORD,
+              port: env.DB_POSTGRES_PORT,
+              user: env.DB_POSTGRES_USER,
+              max: 10,
+            },
+      )
       await pool.connect()
 
       return new PostgresDialect({
