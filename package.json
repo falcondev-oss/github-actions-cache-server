@@ -26,6 +26,7 @@
     "@aws-sdk/lib-storage": "^3.967.0",
     "@aws-sdk/s3-request-presigner": "^3.967.0",
     "@google-cloud/storage": "^7.18.0",
+    "@smithy/node-http-handler": "^4.4.8",
     "@t3-oss/env-core": "^0.13.10",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.19.6",
@@ -55,8 +56,10 @@
     "@vitest/ui": "^4.0.17",
     "eslint": "^9.39.2",
     "execa": "^9.3.1",
+    "p-limit": "^7.2.0",
     "prettier": "^3.7.4",
     "testcontainers": "^11.11.0",
+    "tsx": "^4.21.0",
     "vitest": "^4.0.17"
   }
 }

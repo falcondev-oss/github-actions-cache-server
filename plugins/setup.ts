@@ -8,10 +8,12 @@ import { getStorage } from '~/lib/storage'
 
 export default defineNitroPlugin(async (nitro) => {
   const version = useRuntimeConfig().version
-  if (cluster.isPrimary) logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
+  if (cluster.isPrimary) {
+    logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
 
-  await getDatabase()
-  await getStorage()
+    await getDatabase()
+    await getStorage()
+  }
 
   nitro.hooks.hook('error', (error, { event }) => {
     if (!event) {

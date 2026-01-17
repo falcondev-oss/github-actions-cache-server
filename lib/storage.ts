@@ -1,16 +1,17 @@
 /* eslint-disable no-shadow */
 /* eslint-disable ts/method-signature-style */
 import type { Kysely } from 'kysely'
-import type { ReadableStream, WritableStream } from 'node:stream/web'
+import type { ReadableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
+import { once } from 'node:events'
 import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
+import { Agent } from 'node:https'
 import path from 'node:path'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { TransformStream } from 'node:stream/web'
 import { createSingletonPromise } from '@antfu/utils'
 import {
   DeleteObjectsCommand,
@@ -22,6 +23,7 @@ import {
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { Storage as GcsClient } from '@google-cloud/storage'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
 import { getDatabase } from './db'
@@ -56,7 +58,10 @@ class Storage {
       .executeTakeFirst()
     if (!upload) return
 
-    await this.adapter.uploadStream(`${upload.folderName}/parts/${partIndex}`, stream)
+    await this.adapter.uploadStream(
+      `${upload.folderName}/parts/${partIndex}`,
+      Readable.fromWeb(stream),
+    )
 
     void this.db
       .updateTable('uploads')
@@ -133,7 +138,7 @@ class Storage {
     return upload
   }
 
-  async download(cacheEntryId: string) {
+  async download(cacheEntryId: string): Promise<Readable | undefined> {
     const storageLocation = await this.db
       .selectFrom('storage_locations')
       .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
@@ -161,28 +166,12 @@ class Storage {
       .where('id', '=', storageLocation.id)
       .execute()
 
-    const { writable: uploadWritable, readable: uploadReadable } = new TransformStream()
-    const uploadWriter = uploadWritable.getWriter()
-
-    const { writable: sourceWritable, readable: responseReadable } = new TransformStream({
-      async transform(chunk, controller) {
-        // send to response
-        controller.enqueue(chunk)
-
-        // if upload is slow this will throttle the stream to avoid buffering too much in memory
-        await uploadWriter.write(chunk)
-      },
-      async flush() {
-        await uploadWriter.close()
-      },
-      async cancel(reason) {
-        await uploadWriter.abort(reason)
-      },
-    })
+    const responseStream = new PassThrough()
+    const mergerStream = new PassThrough()
 
     try {
       this.adapter
-        .uploadStream(`${storageLocation.folderName}/merged`, uploadReadable)
+        .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
         .then(async () => {
           await this.db
             .updateTable('storage_locations')
@@ -211,19 +200,8 @@ class Storage {
             })
             .where('id', '=', storageLocation.id)
             .execute()
+          mergerStream.destroy()
         })
-
-      this.feedPartsToWritable(storageLocation, sourceWritable).catch(async (err) => {
-        await uploadWriter.abort(err)
-        await this.db
-          .updateTable('storage_locations')
-          .set({
-            mergedAt: null,
-            mergeStartedAt: null,
-          })
-          .where('id', '=', storageLocation.id)
-          .execute()
-      })
     } catch (err) {
       await this.db
         .updateTable('storage_locations')
@@ -236,33 +214,62 @@ class Storage {
       throw err
     }
 
-    return responseReadable
+    this.pumpPartsToStreams(storageLocation, responseStream, mergerStream).catch((err) => {
+      responseStream.destroy(err)
+      mergerStream.destroy(err)
+    })
+
+    return responseStream
   }
 
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
     if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
 
-    const { writable, readable } = new TransformStream()
-    this.feedPartsToWritable(location, writable)
+    const responseStream = new PassThrough()
+    this.pumpPartsToResponse(location, responseStream).catch((err) => {
+      responseStream.destroy(err)
+    })
 
-    return readable
+    return responseStream
   }
 
-  async feedPartsToWritable(location: StorageLocation, writable: WritableStream) {
+  private async pumpPartsToStreams(
+    location: StorageLocation,
+    responseStream: PassThrough,
+    mergerStream: PassThrough,
+  ) {
+    if (location.partsDeletedAt) throw new Error('No parts to feed')
+
+    for (let i = 0; i < location.partCount; i++) {
+      const partStream = await this.adapter.createDownloadStream(
+        `${location.folderName}/parts/${i}`,
+      )
+
+      for await (const chunk of partStream) {
+        const responseWantsMore = responseStream.write(chunk)
+        const mergerWantsMore = mergerStream.write(chunk)
+
+        if (!responseWantsMore) await once(responseStream, 'drain')
+        if (!mergerWantsMore) await once(mergerStream, 'drain')
+      }
+    }
+
+    responseStream.end()
+    mergerStream.end()
+  }
+
+  private async pumpPartsToResponse(location: StorageLocation, responseStream: PassThrough) {
     if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
 
-    try {
-      for (let i = 0; i < location.partCount; i++) {
-        const partStream = await this.adapter.createDownloadStream(
-          `${location.folderName}/parts/${i}`,
-        )
-        await partStream.pipeTo(writable, { preventClose: true })
-      }
+    for (let i = 0; i < location.partCount; i++) {
+      const partStream = await this.adapter.createDownloadStream(
+        `${location.folderName}/parts/${i}`,
+      )
 
-      await writable.close()
-    } catch (err) {
-      await writable.abort(err)
+      await pipeline(partStream, responseStream, { end: false })
     }
+
+    responseStream.end()
   }
 
   async createUpload(key: string, version: string) {
@@ -372,8 +379,8 @@ class Storage {
 export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
 
 interface StorageAdapter {
-  createDownloadStream(objectName: string): Promise<ReadableStream>
-  uploadStream(objectName: string, stream: ReadableStream): Promise<void>
+  createDownloadStream(objectName: string): Promise<Readable>
+  uploadStream(objectName: string, stream: Readable): Promise<void>
   deleteFolder(folderName: string): Promise<void>
   countFilesInFolder(folderName: string): Promise<number>
   createDownloadUrl?(objectName: string): Promise<string>
@@ -391,9 +398,18 @@ class S3Adapter implements StorageAdapter {
 
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 's3' }>) {
     const bucket = env.STORAGE_S3_BUCKET
+    const agent = new Agent({
+      keepAlive: true,
+      maxSockets: 50,
+      keepAliveMsecs: 1000,
+    })
     const s3 = new S3Client({
       forcePathStyle: true,
       region: env.AWS_REGION,
+      requestHandler: new NodeHttpHandler({
+        httpsAgent: agent,
+        socketTimeout: 3000,
+      }),
     })
 
     try {
@@ -421,7 +437,7 @@ class S3Adapter implements StorageAdapter {
     )
     if (!response.Body) throw new Error('No body in S3 get object response')
 
-    return response.Body.transformToWebStream() as ReadableStream
+    return response.Body as Readable
   }
 
   async deleteFolder(folderName: string) {
@@ -454,15 +470,15 @@ class S3Adapter implements StorageAdapter {
     )
   }
 
-  async uploadStream(objectName: string, stream: ReadableStream) {
+  async uploadStream(objectName: string, iterator: AsyncIterable<Uint8Array>) {
     await new S3Upload({
       client: this.s3,
       params: {
         Bucket: this.bucket,
         Key: `${this.keyPrefix}/${objectName}`,
-        Body: stream as globalThis.ReadableStream,
+        Body: iterator as Readable,
       },
-      queueSize: 4,
+      queueSize: 1,
       partSize: 5 * 1024 * 1024, // 5MB
       leavePartsOnError: false,
     }).done()
@@ -512,7 +528,9 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    return Readable.toWeb(createReadStream(path.join(this.rootFolder, objectName)))
+    return createReadStream(path.join(this.rootFolder, objectName), {
+      highWaterMark: 64 * 1024,
+    })
   }
 
   async deleteFolder(folderName: string) {
@@ -522,13 +540,10 @@ class FileSystemAdapter implements StorageAdapter {
     })
   }
 
-  async uploadStream(objectName: string, stream: ReadableStream) {
+  async uploadStream(objectName: string, stream: Readable) {
     const filePath = path.join(this.rootFolder, objectName)
-    await fs.mkdir(path.dirname(filePath), {
-      recursive: true,
-    })
-
-    await pipeline(Readable.fromWeb(stream), createWriteStream(filePath))
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await pipeline(stream, createWriteStream(filePath))
   }
 
   async countFilesInFolder(folderName: string) {
@@ -566,8 +581,7 @@ class GcsAdapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    const stream = this.bucket.file(`${this.keyPrefix}/${objectName}`).createReadStream()
-    return Readable.toWeb(stream)
+    return this.bucket.file(`${this.keyPrefix}/${objectName}`).createReadStream()
   }
 
   async deleteFolder(folderName: string) {
@@ -576,11 +590,11 @@ class GcsAdapter implements StorageAdapter {
     })
   }
 
-  async uploadStream(objectName: string, stream: ReadableStream) {
+  async uploadStream(objectName: string, iterator: AsyncIterable<Uint8Array>) {
     const file = this.bucket.file(`${this.keyPrefix}/${objectName}`)
 
     await pipeline(
-      Readable.fromWeb(stream),
+      iterator,
       file.createWriteStream({
         resumable: false,
         validation: false,
