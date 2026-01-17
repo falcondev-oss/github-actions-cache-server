@@ -12,3 +12,4 @@ data/
 .DS_Store
 tests/temp/
 actions-runner/
+benchmark.csv

@@ -31,7 +31,7 @@ const TESTING_ENV_BASE = {
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
 } satisfies Omit<
   typeof envBaseSchema.infer,
-  'CACHE_CLEANUP_OLDER_THAN_DAYS' | 'ENABLE_DIRECT_DOWNLOADS'
+  'CACHE_CLEANUP_OLDER_THAN_DAYS' | 'ENABLE_DIRECT_DOWNLOADS' | 'BENCHMARK'
 > &
   Record<string, string>
 
