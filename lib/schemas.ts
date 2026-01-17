@@ -61,6 +61,7 @@ export const envBaseSchema = type({
   'DISABLE_CLEANUP_JOBS?': 'boolean',
   'DEBUG?': 'boolean',
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',
+  'BENCHMARK': 'boolean = false',
 })
 
 export const envSchema = envBaseSchema.and(envStorageDriverSchema).and(envDbDriverSchema)

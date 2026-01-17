@@ -23,6 +23,9 @@ importers:
       '@google-cloud/storage':
         specifier: ^7.18.0
         version: 7.18.0
+      '@smithy/node-http-handler':
+        specifier: ^4.4.8
+        version: 4.4.8
       '@t3-oss/env-core':
         specifier: ^0.13.10
         version: 0.13.10(arktype@2.1.29)(typescript@5.9.3)(zod@4.3.5)
@@ -102,15 +105,21 @@ importers:
       eslint:
         specifier: ^9.39.2
         version: 9.39.2(jiti@2.6.1)
+      p-limit:
+        specifier: ^7.2.0
+        version: 7.2.0
       prettier:
         specifier: ^3.7.4
         version: 3.7.4
       testcontainers:
         specifier: ^11.11.0
         version: 11.11.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       vitest:
         specifier: ^4.0.17
-        version: 4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2)
+        version: 4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
 packages:
 
@@ -4203,6 +4212,10 @@ packages:
     resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
     engines: {node: '>=10'}
 
+  p-limit@7.2.0:
+    resolution: {integrity: sha512-ATHLtwoTNDloHRFFxFJdHnG6n2WUeFjaR8XQMFdKIv0xkXjrER8/iG9iu265jOM95zXHAfv9oTkqhrfbIzosrQ==}
+    engines: {node: '>=20'}
+
   p-locate@5.0.0:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
@@ -5046,6 +5059,11 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
+  tsx@4.21.0:
+    resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
+    engines: {node: '>=18.0.0'}
+    hasBin: true
+
   tunnel-agent@0.6.0:
     resolution: {integrity: sha512-McnNiV1l8RYeY8tBgEpuodCC1mLUdbSN+CYBL7kJsJNInOP8UjDDEwdk6Mw60vdLLrr5NHKZhMAOSrR2NZuQ+w==}
 
@@ -5436,6 +5454,10 @@ packages:
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
+
+  yocto-queue@1.2.2:
+    resolution: {integrity: sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ==}
+    engines: {node: '>=12.20'}
 
   yoctocolors@2.1.2:
     resolution: {integrity: sha512-CzhO+pFNo8ajLM2d2IW/R93ipy99LWjtwblvC1RsoSUMZgyLbYFr221TnSNT7GjGdYui6P459mw9JH/g/zW2ug==}
@@ -7732,7 +7754,7 @@ snapshots:
       eslint: 9.39.2(jiti@2.6.1)
     optionalDependencies:
       typescript: 5.9.3
-      vitest: 4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2)
+      vitest: 4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -7745,13 +7767,13 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.0.3
 
-  '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2))':
+  '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))':
     dependencies:
       '@vitest/spy': 4.0.17
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2)
+      vite: 7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   '@vitest/pretty-format@4.0.17':
     dependencies:
@@ -7779,7 +7801,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2)
+      vitest: 4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   '@vitest/utils@4.0.17':
     dependencies:
@@ -10854,6 +10876,10 @@ snapshots:
     dependencies:
       yocto-queue: 0.1.0
 
+  p-limit@7.2.0:
+    dependencies:
+      yocto-queue: 1.2.2
+
   p-locate@5.0.0:
     dependencies:
       p-limit: 3.1.0
@@ -11770,6 +11796,13 @@ snapshots:
 
   tslib@2.8.1: {}
 
+  tsx@4.21.0:
+    dependencies:
+      esbuild: 0.27.2
+      get-tsconfig: 4.13.0
+    optionalDependencies:
+      fsevents: 2.3.3
+
   tunnel-agent@0.6.0:
     dependencies:
       safe-buffer: 5.2.1
@@ -12010,7 +12043,7 @@ snapshots:
 
   uuid@9.0.1: {}
 
-  vite@7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2):
+  vite@7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       esbuild: 0.27.2
       fdir: 6.5.0(picomatch@4.0.3)
@@ -12023,12 +12056,13 @@ snapshots:
       fsevents: 2.3.3
       jiti: 2.6.1
       terser: 5.44.1
+      tsx: 4.21.0
       yaml: 2.8.2
 
-  vitest@4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2):
+  vitest@4.0.17(@types/node@22.19.6)(@vitest/ui@4.0.17)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.0.17
-      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2))
+      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
       '@vitest/pretty-format': 4.0.17
       '@vitest/runner': 4.0.17
       '@vitest/snapshot': 4.0.17
@@ -12045,7 +12079,7 @@ snapshots:
       tinyexec: 1.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vite: 7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(yaml@2.8.2)
+      vite: 7.3.1(@types/node@22.19.6)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 22.19.6
@@ -12178,6 +12212,8 @@ snapshots:
       yargs-parser: 21.1.1
 
   yocto-queue@0.1.0: {}
+
+  yocto-queue@1.2.2: {}
 
   yoctocolors@2.1.2: {}
 

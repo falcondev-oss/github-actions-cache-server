@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream'
 import { z } from 'zod'
 import { getStorage } from '~/lib/storage'
 
@@ -23,5 +24,5 @@ export default defineEventHandler(async (event) => {
       message: 'Cache file not found',
     })
 
-  return sendStream(event, stream as globalThis.ReadableStream)
+  return Readable.toWeb(stream)
 })
