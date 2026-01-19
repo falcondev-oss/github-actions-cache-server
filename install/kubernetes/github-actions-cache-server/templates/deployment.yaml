@@ -62,6 +62,9 @@ spec:
             - name: cache-data
               mountPath: "/app/.data"
           {{- end }}
+          {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: PORT
               value: "3000"
@@ -80,6 +83,9 @@ spec:
         - name: cache-data
           persistentVolumeClaim:
             claimName: {{ .Values.persistentVolumeClaim.template.metadata.name }}
+      {{- end }}
+      {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
