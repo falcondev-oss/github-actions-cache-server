@@ -50,8 +50,7 @@ service:
 ingress:
   enabled: false
   className: ''
-  annotations:
-    {}
+  annotations: {}
     # kubernetes.io/ingress.class: nginx
     # kubernetes.io/tls-acme: "true"
   hosts:
@@ -74,11 +73,11 @@ resources:
 
 livenessProbe:
   httpGet:
-    path: /
+    path: /health
     port: cache
 readinessProbe:
   httpGet:
-    path: /
+    path: /health
     port: cache
 
 autoscaling:
@@ -138,3 +137,23 @@ topologySpreadConstraints: []
   #   labelSelector:
   #     matchLabels:
   #       app.kubernetes.io/instance: example-release
+
+# Extra volumes to add to the pod
+extraVolumes: []
+  # - name: trusted-certs-bundle
+  #   configMap:
+  #     name: trusted-certs-bundle
+  #     defaultMode: 0644
+  # - name: custom-secret
+  #   secret:
+  #     secretName: my-secret
+
+# Extra volume mounts to add to the container
+extraVolumeMounts: []
+  # - name: trusted-certs-bundle
+  #   mountPath: /etc/ssl/certs/ca-certificates.crt
+  #   subPath: ca-certificates.crt
+  #   readOnly: true
+  # - name: custom-secret
+  #   mountPath: /etc/secrets
+  #   readOnly: true
