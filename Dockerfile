@@ -24,4 +24,4 @@ WORKDIR /app
 
 COPY --from=builder /app/.output ./
 
-CMD ["node", "/app/server/index.mjs"]
+CMD ["node", "--expose-gc", "/app/server/index.mjs"]

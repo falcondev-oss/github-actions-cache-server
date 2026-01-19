@@ -11,6 +11,11 @@ export default defineNitroPlugin(async (nitro) => {
   if (cluster.isPrimary) {
     logger.info(`🚀 Starting GitHub Actions Cache Server (${version})`)
 
+    if (!globalThis.gc)
+      logger.warn(
+        'Garbage collection is not exposed. Start the process with `node --expose-gc` for improved memory usage under high load.',
+      )
+
     await getDatabase()
     await getStorage()
   }

@@ -17,9 +17,7 @@ export default defineNitroPlugin(async () => {
       logFile,
       `${Date.now()},${toMB(mem.rss)},${toMB(mem.heapTotal)},${toMB(mem.heapUsed)},${toMB(mem.external)}\n`,
     )
-
-    if (globalThis.gc) globalThis.gc()
-  }, 500)
+  }, 250)
 })
 
 function toMB(bytes: number) {

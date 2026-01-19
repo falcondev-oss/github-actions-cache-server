@@ -225,12 +225,7 @@ class Storage {
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
     if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
 
-    const responseStream = new PassThrough()
-    this.pumpPartsToResponse(location, responseStream).catch((err) => {
-      responseStream.destroy(err)
-    })
-
-    return responseStream
+    return Readable.from(this.streamParts(location))
   }
 
   private async pumpPartsToStreams(
@@ -240,25 +235,21 @@ class Storage {
   ) {
     if (location.partsDeletedAt) throw new Error('No parts to feed')
 
-    for (let i = 0; i < location.partCount; i++) {
-      const partStream = await this.adapter.createDownloadStream(
-        `${location.folderName}/parts/${i}`,
-      )
+    for await (const chunk of this.streamParts(location)) {
+      const responseWantsMore = responseStream.write(chunk)
+      const mergerWantsMore = mergerStream.write(chunk)
 
-      for await (const chunk of partStream) {
-        const responseWantsMore = responseStream.write(chunk)
-        const mergerWantsMore = mergerStream.write(chunk)
-
-        if (!responseWantsMore) await once(responseStream, 'drain')
-        if (!mergerWantsMore) await once(mergerStream, 'drain')
-      }
+      if (!responseWantsMore) await once(responseStream, 'drain')
+      if (!mergerWantsMore) await once(mergerStream, 'drain')
     }
 
     responseStream.end()
     mergerStream.end()
+
+    await globalThis.gc?.()
   }
 
-  private async pumpPartsToResponse(location: StorageLocation, responseStream: PassThrough) {
+  private async *streamParts(location: StorageLocation) {
     if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
 
     for (let i = 0; i < location.partCount; i++) {
@@ -266,10 +257,10 @@ class Storage {
         `${location.folderName}/parts/${i}`,
       )
 
-      await pipeline(partStream, responseStream, { end: false })
-    }
+      for await (const chunk of partStream) yield chunk
 
-    responseStream.end()
+      await globalThis.gc?.()
+    }
   }
 
   async createUpload(key: string, version: string) {
@@ -528,9 +519,7 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    return createReadStream(path.join(this.rootFolder, objectName), {
-      highWaterMark: 64 * 1024,
-    })
+    return createReadStream(path.join(this.rootFolder, objectName))
   }
 
   async deleteFolder(folderName: string) {
