@@ -73,11 +73,11 @@ resources:
 
 livenessProbe:
   httpGet:
-    path: /
+    path: /health
     port: cache
 readinessProbe:
   httpGet:
-    path: /
+    path: /health
     port: cache
 
 autoscaling:
