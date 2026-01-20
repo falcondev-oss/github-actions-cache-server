@@ -24,5 +24,5 @@ export default defineEventHandler(async (event) => {
       message: 'Cache file not found',
     })
 
-  return Readable.toWeb(stream)
+  return sendStream(event, Readable.toWeb(stream) as ReadableStream)
 })
