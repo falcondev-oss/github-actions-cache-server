@@ -36,6 +36,6 @@ const start = Date.now()
 await Promise.all(Array.from({ length: TOTAL_REQUESTS }, (_, i) => limiter(() => run(i))))
 const duration = Date.now() - start
 
-console.log(`Completed ${TOTAL_REQUESTS} requests in ${duration}ms`)
+console.debug(`Completed ${TOTAL_REQUESTS} requests in ${duration}ms`)
 
 await fs.rm(TEMP_DIR, { recursive: true, force: true })
