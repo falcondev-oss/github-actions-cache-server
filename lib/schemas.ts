@@ -17,7 +17,7 @@ export const envStorageDriverSchema = type.or(
     'STORAGE_DRIVER': type.unit('gcs'),
     'STORAGE_GCS_BUCKET': 'string',
     'STORAGE_GCS_SERVICE_ACCOUNT_KEY?': 'string',
-    'STORAGE_GCS_ENDPOINT': 'string.url',
+    'STORAGE_GCS_ENDPOINT?': 'string.url',
   },
 )
 export const envDbDriverSchema = type.or(
