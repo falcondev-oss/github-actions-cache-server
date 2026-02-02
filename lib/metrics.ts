@@ -51,6 +51,17 @@ export const getMetrics = createSingletonPromise(async () => {
     description: 'Total database queries',
   })
 
+  // Byte Transfer Metrics
+  const cacheBytesUploadedTotal = meter.createCounter('cache_bytes_uploaded_total', {
+    description: 'Total cache data uploaded in bytes',
+    unit: 'By',
+  })
+
+  const cacheBytesDownloadedTotal = meter.createCounter('cache_bytes_downloaded_total', {
+    description: 'Total cache data downloaded in bytes',
+    unit: 'By',
+  })
+
   return {
     exporter,
     meter,
@@ -61,6 +72,8 @@ export const getMetrics = createSingletonPromise(async () => {
     storageOperationDuration,
     dbQueryDuration,
     dbQueriesTotal,
+    cacheBytesUploadedTotal,
+    cacheBytesDownloadedTotal,
   }
 })
 
