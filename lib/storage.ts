@@ -3,6 +3,7 @@
 import type { Kysely } from 'kysely'
 import type { ReadableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
+import type { Metrics } from './metrics'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
@@ -29,7 +30,7 @@ import { match } from 'ts-pattern'
 import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
-import { getMetrics, type Metrics } from './metrics'
+import { getMetrics } from './metrics'
 
 function createByteCountingTransform(
   metrics: Metrics,
@@ -101,20 +102,13 @@ class Storage {
     const nodeStream = Readable.fromWeb(stream)
 
     if (metrics) {
-      const countingTransform = createByteCountingTransform(
-        metrics,
-        'upload',
-        env.STORAGE_DRIVER,
-      )
+      const countingTransform = createByteCountingTransform(metrics, 'upload', env.STORAGE_DRIVER)
       await this.adapter.uploadStream(
         `${upload.folderName}/parts/${partIndex}`,
         nodeStream.pipe(countingTransform),
       )
     } else {
-      await this.adapter.uploadStream(
-        `${upload.folderName}/parts/${partIndex}`,
-        nodeStream,
-      )
+      await this.adapter.uploadStream(`${upload.folderName}/parts/${partIndex}`, nodeStream)
     }
 
     if (metrics) {
