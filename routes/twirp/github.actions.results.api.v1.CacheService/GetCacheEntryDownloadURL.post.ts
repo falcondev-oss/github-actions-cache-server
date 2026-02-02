@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { getMetrics } from '~/lib/metrics'
 import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
@@ -18,14 +19,21 @@ export default defineEventHandler(async (event) => {
   const { key, restore_keys, version } = parsedBody.data
 
   const storage = await getStorage()
+  const metrics = await getMetrics()
+
   const match = await storage.getCacheEntryWithDownloadUrl({
     keys: [key, ...(restore_keys ?? [])],
     version,
   })
-  if (!match)
+
+  if (!match) {
+    metrics?.cacheOperationsTotal.add(1, { operation: 'lookup', result: 'miss' })
     return {
       ok: false,
     }
+  }
+
+  metrics?.cacheOperationsTotal.add(1, { operation: 'lookup', result: 'hit' })
 
   return {
     ok: true,

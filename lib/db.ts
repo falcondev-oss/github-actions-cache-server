@@ -9,6 +9,7 @@ import pg from 'pg'
 import { match } from 'ts-pattern'
 import { env } from './env'
 import { logger } from './logger'
+import { getMetrics } from './metrics'
 import { migrations } from './migrations'
 
 interface CacheEntry {
@@ -48,6 +49,23 @@ export interface Database {
 }
 
 const dbLogger = logger.withTag('db')
+
+function extractTableName(sql: string): string {
+  // Match common SQL patterns to extract table name
+  const patterns = [
+    /\bFROM\s+["'`]?(\w+)["'`]?/i,
+    /\bINTO\s+["'`]?(\w+)["'`]?/i,
+    /\bUPDATE\s+["'`]?(\w+)["'`]?/i,
+    /\bJOIN\s+["'`]?(\w+)["'`]?/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = sql.match(pattern)
+    if (match) return match[1]
+  }
+
+  return 'unknown'
+}
 
 export const getDatabase = createSingletonPromise(async () => {
   const dialect = await match(env)
@@ -105,6 +123,8 @@ export const getDatabase = createSingletonPromise(async () => {
     )
     .exhaustive()
 
+  const metrics = await getMetrics()
+
   const db = new Kysely<Database>({
     dialect,
     log: (event) => {
@@ -121,6 +141,15 @@ export const getDatabase = createSingletonPromise(async () => {
           sql: event.query.sql,
           params: event.query.parameters,
         })
+
+      // Record metrics for all queries
+      if (metrics && event.level === 'query') {
+        const table = extractTableName(event.query.sql)
+        const durationSeconds = event.queryDurationMillis / 1000
+
+        metrics.dbQueryDuration.record(durationSeconds, { table })
+        metrics.dbQueriesTotal.add(1, { table })
+      }
     },
   })
 

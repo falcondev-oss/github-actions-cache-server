@@ -29,6 +29,7 @@ import { match } from 'ts-pattern'
 import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
+import { getMetrics } from './metrics'
 
 class Storage {
   adapter
@@ -58,10 +59,25 @@ class Storage {
       .executeTakeFirst()
     if (!upload) return
 
+    const metrics = await getMetrics()
+    const startTime = performance.now()
+
     await this.adapter.uploadStream(
       `${upload.folderName}/parts/${partIndex}`,
       Readable.fromWeb(stream),
     )
+
+    if (metrics) {
+      const duration = (performance.now() - startTime) / 1000
+      metrics.storageOperationDuration.record(duration, {
+        operation: 'uploadPart',
+        adapter: env.STORAGE_DRIVER,
+      })
+      metrics.storageOperationsTotal.add(1, {
+        operation: 'uploadPart',
+        adapter: env.STORAGE_DRIVER,
+      })
+    }
 
     void this.db
       .updateTable('uploads')
@@ -146,6 +162,12 @@ class Storage {
       .selectAll('storage_locations')
       .executeTakeFirst()
     if (!storageLocation) return
+
+    const metrics = await getMetrics()
+    metrics?.storageOperationsTotal.add(1, {
+      operation: 'download',
+      adapter: env.STORAGE_DRIVER,
+    })
 
     void this.db
       .updateTable('storage_locations')

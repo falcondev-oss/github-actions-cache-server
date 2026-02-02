@@ -29,9 +29,10 @@ const TESTING_ENV_BASE = {
   RUNNER_TEMP: path.join(TEST_TEMP_DIR, 'runner-temp'),
   ACTIONS_RESULTS_URL: 'http://localhost:3000/',
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
+  METRICS_ENABLED: 'false',
 } satisfies Omit<
   typeof envBaseSchema.infer,
-  'CACHE_CLEANUP_OLDER_THAN_DAYS' | 'ENABLE_DIRECT_DOWNLOADS' | 'BENCHMARK'
+  'CACHE_CLEANUP_OLDER_THAN_DAYS' | 'ENABLE_DIRECT_DOWNLOADS' | 'BENCHMARK' | 'METRICS_ENABLED'
 > &
   Record<string, string>
 
