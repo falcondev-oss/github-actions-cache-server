@@ -57,6 +57,8 @@ export const envDbDriverSchema = type.or(
 
 export const envBaseSchema = type({
   'API_BASE_URL': 'string.url',
+  'DEFAULT_ACTIONS_RESULTS_URL':
+    "string.url = 'https://results-receiver.actions.githubusercontent.com'",
   'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 90',
   'DISABLE_CLEANUP_JOBS?': 'boolean',
   'DEBUG?': 'boolean',

@@ -26,6 +26,7 @@ const env = createEnv({
 
 const TESTING_ENV_BASE = {
   API_BASE_URL: 'http://localhost:3000',
+  DEFAULT_ACTIONS_RESULTS_URL: 'https://results-receiver.actions.xxxxxx.ghe.com',
   RUNNER_TEMP: path.join(TEST_TEMP_DIR, 'runner-temp'),
   ACTIONS_RESULTS_URL: 'http://localhost:3000/',
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
