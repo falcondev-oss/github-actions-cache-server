@@ -3,6 +3,7 @@
 import type { Kysely } from 'kysely'
 import type { ReadableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
+import type { Metrics } from './metrics'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
@@ -10,7 +11,7 @@ import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import { Agent } from 'node:https'
 import path from 'node:path'
-import { PassThrough, Readable } from 'node:stream'
+import { PassThrough, Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createSingletonPromise } from '@antfu/utils'
 import {
@@ -29,6 +30,43 @@ import { match } from 'ts-pattern'
 import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
+import { getMetrics } from './metrics'
+
+function createByteCountingTransform(
+  metrics: Metrics,
+  operation: 'upload' | 'download',
+  adapter: string,
+): Transform {
+  let bytesTransferred = 0
+
+  return new Transform({
+    transform(chunk: any, _encoding, callback) {
+      bytesTransferred += chunk.length
+      callback(null, chunk)
+    },
+
+    flush(callback) {
+      try {
+        if (operation === 'upload') {
+          metrics.cacheBytesUploadedTotal.add(bytesTransferred, {
+            operation,
+            adapter,
+            route: '/upload/:uploadId',
+          })
+        } else {
+          metrics.cacheBytesDownloadedTotal.add(bytesTransferred, {
+            operation,
+            adapter,
+            route: '/download/:cacheEntryId',
+          })
+        }
+      } catch (err) {
+        console.error('Failed to record byte transfer metrics:', err)
+      }
+      callback()
+    },
+  })
+}
 
 class Storage {
   adapter
@@ -58,10 +96,32 @@ class Storage {
       .executeTakeFirst()
     if (!upload) return
 
-    await this.adapter.uploadStream(
-      `${upload.folderName}/parts/${partIndex}`,
-      Readable.fromWeb(stream),
-    )
+    const metrics = await getMetrics()
+    const startTime = performance.now()
+
+    const nodeStream = Readable.fromWeb(stream)
+
+    if (metrics) {
+      const countingTransform = createByteCountingTransform(metrics, 'upload', env.STORAGE_DRIVER)
+      await this.adapter.uploadStream(
+        `${upload.folderName}/parts/${partIndex}`,
+        nodeStream.pipe(countingTransform),
+      )
+    } else {
+      await this.adapter.uploadStream(`${upload.folderName}/parts/${partIndex}`, nodeStream)
+    }
+
+    if (metrics) {
+      const duration = (performance.now() - startTime) / 1000
+      metrics.storageOperationDuration.record(duration, {
+        operation: 'uploadPart',
+        adapter: env.STORAGE_DRIVER,
+      })
+      metrics.storageOperationsTotal.add(1, {
+        operation: 'uploadPart',
+        adapter: env.STORAGE_DRIVER,
+      })
+    }
 
     void this.db
       .updateTable('uploads')
@@ -147,6 +207,12 @@ class Storage {
       .executeTakeFirst()
     if (!storageLocation) return
 
+    const metrics = await getMetrics()
+    metrics?.storageOperationsTotal.add(1, {
+      operation: 'download',
+      adapter: env.STORAGE_DRIVER,
+    })
+
     void this.db
       .updateTable('storage_locations')
       .set({
@@ -223,7 +289,21 @@ class Storage {
   }
 
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
-    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
+    if (location.mergedAt) {
+      const stream = await this.adapter.createDownloadStream(`${location.folderName}/merged`)
+      const metrics = await getMetrics()
+
+      if (metrics) {
+        const countingTransform = createByteCountingTransform(
+          metrics,
+          'download',
+          env.STORAGE_DRIVER,
+        )
+        return stream.pipe(countingTransform)
+      }
+
+      return stream
+    }
 
     return Readable.from(this.streamParts(location))
   }
@@ -252,12 +332,31 @@ class Storage {
   private async *streamParts(location: StorageLocation) {
     if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
 
+    const metrics = await getMetrics()
+
     for (let i = 0; i < location.partCount; i++) {
       const partStream = await this.adapter.createDownloadStream(
         `${location.folderName}/parts/${i}`,
       )
 
-      for await (const chunk of partStream) yield chunk
+      let bytesInPart = 0
+      for await (const chunk of partStream) {
+        bytesInPart += chunk.length
+        yield chunk
+      }
+
+      // Record bytes for this part
+      if (metrics) {
+        try {
+          metrics.cacheBytesDownloadedTotal.add(bytesInPart, {
+            operation: 'download',
+            adapter: env.STORAGE_DRIVER,
+            route: '/download/:cacheEntryId',
+          })
+        } catch (err) {
+          console.error('Failed to record download bytes:', err)
+        }
+      }
 
       await globalThis.gc?.()
     }

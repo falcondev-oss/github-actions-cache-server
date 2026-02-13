@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { env } from '~/lib/env'
+import { getMetrics } from '~/lib/metrics'
 import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
@@ -19,11 +20,15 @@ export default defineEventHandler(async (event) => {
   const { key, version } = parsedBody.data
 
   const storage = await getStorage()
+  const metrics = await getMetrics()
+
   const upload = await storage.createUpload(key, version)
   if (!upload)
     return {
       ok: false,
     }
+
+  metrics?.cacheOperationsTotal.add(1, { operation: 'create', result: 'success' })
 
   return {
     ok: true,
