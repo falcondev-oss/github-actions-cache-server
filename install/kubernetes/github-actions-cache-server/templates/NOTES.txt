@@ -9,4 +9,12 @@ GitHub Actions Cache Server has been deployed!
   API URL:   {{ .Values.config.apiBaseUrl }}
 {{- end }}
 
+{{- if eq (.Values.image.variant | default "") "caged" }}
+
+⚠️  EXPERIMENTAL: You are using the "caged" image variant (V8 pointer compression).
+   Each V8 isolate is limited to a 4 GB heap.
+   Test in staging first and monitor memory/latency.
+   More info: https://blog.platformatic.dev/we-cut-nodejs-memory-in-half
+{{- end }}
+
 Docs: https://gha-cache-server.falcondev.io/getting-started

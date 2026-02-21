@@ -1,4 +1,5 @@
 node_modules/
+.git/
 .github/
 .nitro/
 .output/
@@ -6,5 +7,13 @@ node_modules/
 data/
 .env*
 .eslintcache
-test/
+tests/
 certs/
+install/
+benchmark.ts
+docker-compose.yml
+vitest.config.ts
+prettier.config.js
+eslint.config.js
+README.md
+LICENSE

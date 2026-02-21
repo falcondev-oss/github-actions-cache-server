@@ -104,3 +104,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_HASH=${{ steps.build_hash.outputs.COMMIT_SHA }}
+
+      - name: Extract metadata (tags, labels) for Docker (caged)
+        id: meta-caged
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            dev-caged
+
+      - name: Build and push (caged)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-caged.outputs.tags }}
+          labels: ${{ steps.meta-caged.outputs.labels }}
+          build-args: |
+            BUILD_HASH=${{ steps.build_hash.outputs.COMMIT_SHA }}
+            BASE_IMAGE=platformatic/node-caged:25-alpine

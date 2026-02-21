@@ -9,6 +9,17 @@ image:
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: ''
+  # -- (experimental) Image variant to use. Set to "caged" to use the platformatic/node-caged
+  # based image, which enables V8 pointer compression for ~50% lower memory usage.
+  # See: https://blog.platformatic.dev/we-cut-nodejs-memory-in-half
+  #
+  # Caveats:
+  # - Each V8 isolate is limited to a 4 GB heap. Not suitable for workloads that
+  #   require more than 4 GB per isolate.
+  # - Expect ~2-4% higher average latency, though p99/max latency may improve due
+  #   to reduced GC pressure.
+  # When set, "-caged" is appended to the resolved image tag.
+  variant: ''
 
 imagePullSecrets: []
 nameOverride: ''

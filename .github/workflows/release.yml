@@ -137,6 +137,29 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Extract metadata (tags, labels) for Docker (caged)
+        id: meta-caged
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
+            type=semver,pattern={{major}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
+            latest-caged
+            dev-caged
+
+      - name: Build and push (caged)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-caged.outputs.tags }}
+          labels: ${{ steps.meta-caged.outputs.labels }}
+          build-args: |
+            BASE_IMAGE=platformatic/node-caged:25-alpine
+
   deploy-chart:
     name: 🚀 Build and push Helm chart
     permissions:
