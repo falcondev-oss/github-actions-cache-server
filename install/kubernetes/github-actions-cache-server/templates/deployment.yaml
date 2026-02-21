@@ -1,5 +1,6 @@
 {{ $name := include "github-actions-cache-server.fullname" . }}
 {{ $pvcEnabled := include "github-actions-cache-server.pvcEnabled" . }}
+{{- include "github-actions-cache-server.validate" . -}}
 ---
 apiVersion: apps/v1
 kind: Deployment

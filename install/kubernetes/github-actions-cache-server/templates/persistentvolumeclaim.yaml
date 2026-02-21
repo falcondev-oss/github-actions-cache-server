@@ -16,7 +16,7 @@ metadata:
   {{- end }}
 spec:
   accessModes:
-    {{- toYaml .Values.persistentVolumeClaim.accessModes | nindent 4 }}
+    {{- include "github-actions-cache-server.pvcAccessModes" . | nindent 4 }}
   resources:
     requests:
       storage: {{ .Values.persistentVolumeClaim.storage }}

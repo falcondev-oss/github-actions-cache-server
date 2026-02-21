@@ -203,10 +203,19 @@ autoscaling:
 # -- Persistent volume claim for data storage.
 # Automatically enabled when using filesystem storage or sqlite database driver.
 # Can be manually overridden with persistentVolumeClaim.enabled = true/false.
+#
+# NOTE: When using autoscaling (or replicaCount > 1) with the filesystem storage
+# driver, accessModes is automatically switched to ReadWriteMany so that multiple
+# pods can attach to the same volume. If you need a different access mode, set it
+# explicitly below.
+#
+# SQLite cannot be used with multiple replicas and will produce an install error.
 persistentVolumeClaim:
   # -- Set to true/false to explicitly enable/disable. If not set, automatically
   # enabled when storage.driver is "filesystem" or db.driver is "sqlite".
   enabled: null
+  # -- Access modes for the PVC. Automatically changed to ReadWriteMany when
+  # the filesystem storage driver is used with multiple replicas.
   accessModes:
     - ReadWriteOnce
   storage: 20Gi

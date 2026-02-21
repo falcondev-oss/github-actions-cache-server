@@ -82,6 +82,40 @@ Otherwise, auto-enable when storage driver is "filesystem" or db driver is "sqli
 {{- end }}
 
 {{/*
+Check if multiple replicas are possible (autoscaling enabled or replicaCount > 1).
+*/}}
+{{- define "github-actions-cache-server.multipleReplicas" -}}
+{{- if or (and .Values.autoscaling.enabled (gt (.Values.autoscaling.maxReplicas | int) 1)) (gt (.Values.replicaCount | int) 1) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end }}
+
+{{/*
+Effective PVC access modes.
+Automatically switches to ReadWriteMany when multiple replicas are possible
+and the filesystem storage driver is used, to prevent errors when multiple
+pods attach to the same volume.
+*/}}
+{{- define "github-actions-cache-server.pvcAccessModes" -}}
+{{- if and (eq (include "github-actions-cache-server.multipleReplicas" .) "true") (eq .Values.config.storage.driver "filesystem") -}}
+- ReadWriteMany
+{{- else -}}
+{{ toYaml .Values.persistentVolumeClaim.accessModes }}
+{{- end -}}
+{{- end }}
+
+{{/*
+Validate configuration. Fails if incompatible settings are detected.
+*/}}
+{{- define "github-actions-cache-server.validate" -}}
+{{- if and (eq .Values.config.db.driver "sqlite") (eq (include "github-actions-cache-server.multipleReplicas" .) "true") -}}
+{{- fail "SQLite database driver cannot be used with multiple replicas (autoscaling enabled or replicaCount > 1). SQLite does not support concurrent access from multiple pods. Please switch to 'postgres' or 'mysql' database driver." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Generate environment variables from config values.
 */}}
 {{- define "github-actions-cache-server.env" -}}
