@@ -34,6 +34,7 @@ import { generateNumberId } from './helpers'
 export class Storage {
   adapter
   private db
+  private mergeStreamPromises = new Set<Promise<void>>()
 
   private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
     this.adapter = adapter
@@ -53,6 +54,10 @@ export class Storage {
       adapter: await Storage.getAdapterFromEnv(),
       db: await getDatabase(),
     })
+  }
+
+  waitForOngoingMerges() {
+    return Promise.all(this.mergeStreamPromises)
   }
 
   async uploadPart(uploadId: number, partIndex: number, stream: ReadableStream) {
@@ -205,7 +210,7 @@ export class Storage {
     const mergerStream = new PassThrough()
 
     try {
-      this.adapter
+      const promise = this.adapter
         .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
         .then(async () => {
           await this.db
@@ -237,6 +242,8 @@ export class Storage {
             .execute()
           mergerStream.destroy()
         })
+      this.mergeStreamPromises.add(promise)
+      promise.finally(() => this.mergeStreamPromises.delete(promise))
     } catch (err) {
       await this.db
         .updateTable('storage_locations')

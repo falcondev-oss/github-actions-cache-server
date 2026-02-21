@@ -218,7 +218,6 @@ export async function setup() {
 export async function teardown() {
   await server?.kill()
   await nitro?.close()
-  await new Promise((resolve) => setTimeout(resolve, 1000)) // wait a bit for the server to close properly before stopping containers
   await Promise.all(
     testContainers.map((container) => container?.stop({ remove: true, removeVolumes: true })),
   )

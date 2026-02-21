@@ -1,7 +1,6 @@
 import cluster from 'node:cluster'
 
 import { H3Error } from 'h3'
-import { getDatabase } from '~/lib/db'
 import { env } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
@@ -17,10 +16,11 @@ export default defineNitroPlugin(async (nitro) => {
       )
   }
 
-  await getStorage()
-  const db = await getDatabase()
+  const storage = await getStorage()
 
-  nitro.hooks.hook('close', async () => db.destroy())
+  nitro.hooks.hook('close', async () => {
+    await storage.waitForOngoingMerges()
+  })
 
   nitro.hooks.hook('error', (error, { event }) => {
     if (!event) {
