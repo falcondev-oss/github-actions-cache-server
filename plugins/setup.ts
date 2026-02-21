@@ -14,6 +14,14 @@ export default defineNitroPlugin(async (nitro) => {
       logger.warn(
         'Garbage collection is not exposed. Start the process with `node --expose-gc` for improved memory usage under high load.',
       )
+
+    for (const signal of ['SIGTERM', 'SIGINT'] satisfies NodeJS.Signals[]) {
+      process.on(signal, () => {
+        for (const worker of Object.values(cluster.workers ?? {})) {
+          worker?.process.kill(signal)
+        }
+      })
+    }
   }
 
   const storage = await getStorage()
