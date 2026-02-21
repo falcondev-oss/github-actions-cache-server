@@ -60,5 +60,21 @@ export function migrations(driver: Env['DB_DRIVER']) {
         await db.schema.dropTable('storage_locations').execute()
       },
     },
+    $1_upload_part_counts: {
+      async up(db) {
+        await db.schema
+          .alterTable('uploads')
+          .addColumn('finishedPartUploadCount', 'integer', (col) => col.notNull().defaultTo(0))
+          .execute()
+        await db.schema
+          .alterTable('uploads')
+          .addColumn('startedPartUploadCount', 'integer', (col) => col.notNull().defaultTo(0))
+          .execute()
+      },
+      async down(db) {
+        await db.schema.alterTable('uploads').dropColumn('startedPartUploadCount').execute()
+        await db.schema.alterTable('uploads').dropColumn('finishedPartUploadCount').execute()
+      },
+    },
   } satisfies Record<string, Migration>
 }

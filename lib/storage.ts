@@ -24,6 +24,7 @@ import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { sql } from 'kysely'
 import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
 import { getDatabase } from './db'
@@ -58,15 +59,24 @@ class Storage {
       .executeTakeFirst()
     if (!upload) return
 
+    await this.db
+      .updateTable('uploads')
+      .set({
+        startedPartUploadCount: sql`${sql.ref('startedPartUploadCount')} + 1`,
+      })
+      .where('id', '=', uploadId)
+      .execute()
+
     await this.adapter.uploadStream(
       `${upload.folderName}/parts/${partIndex}`,
       Readable.fromWeb(stream),
     )
 
-    void this.db
+    await this.db
       .updateTable('uploads')
       .set({
         lastPartUploadedAt: Date.now(),
+        finishedPartUploadCount: sql`${sql.ref('finishedPartUploadCount')} + 1`,
       })
       .where('id', '=', uploadId)
       .execute()
@@ -81,8 +91,25 @@ class Storage {
       .executeTakeFirst()
     if (!upload) return
 
+    if (upload.finishedPartUploadCount === 0) {
+      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+      throw new Error('No parts have been uploaded')
+    }
+
+    if (upload.startedPartUploadCount !== upload.finishedPartUploadCount) {
+      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+      throw new Error(
+        `Not all parts have been uploaded (only ${upload.finishedPartUploadCount} of ${upload.startedPartUploadCount} parts uploaded)`,
+      )
+    }
+
     const partCount = await this.adapter.countFilesInFolder(`${upload.folderName}/parts`)
-    if (!partCount) throw new Error('No parts found for upload')
+    if (partCount !== upload.finishedPartUploadCount) {
+      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+      throw new Error(
+        `Uploaded part count does not match actual part count in storage (expected ${upload.finishedPartUploadCount} but found ${partCount})`,
+      )
+    }
 
     await this.db.transaction().execute(async (tx) => {
       const locationId = randomUUID()
@@ -282,6 +309,8 @@ class Storage {
         key,
         version,
         lastPartUploadedAt: null,
+        finishedPartUploadCount: 0,
+        startedPartUploadCount: 0,
       })
       .execute()
 

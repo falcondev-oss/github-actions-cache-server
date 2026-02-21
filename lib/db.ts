@@ -38,6 +38,8 @@ interface Upload {
   version: string
   createdAt: number
   lastPartUploadedAt: number | null
+  startedPartUploadCount: number
+  finishedPartUploadCount: number
   folderName: string
 }
 
