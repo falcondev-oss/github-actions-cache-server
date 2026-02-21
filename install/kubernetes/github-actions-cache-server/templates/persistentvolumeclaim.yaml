@@ -1,6 +1,27 @@
-{{- if .Values.persistentVolumeClaim.enabled -}}
+{{- if eq (include "github-actions-cache-server.pvcEnabled" .) "true" -}}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
-{{ .Values.persistentVolumeClaim.template | toYaml }}
+metadata:
+  name: {{ include "github-actions-cache-server.pvcName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "github-actions-cache-server.labels" . | nindent 4 }}
+    {{- with .Values.persistentVolumeClaim.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.persistentVolumeClaim.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistentVolumeClaim.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistentVolumeClaim.storage }}
+  volumeMode: Filesystem
+  {{- if .Values.persistentVolumeClaim.storageClassName }}
+  storageClassName: {{ .Values.persistentVolumeClaim.storageClassName }}
+  {{- end }}
 {{- end }}
