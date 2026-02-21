@@ -30,9 +30,13 @@ const TESTING_ENV_BASE = {
   RUNNER_TEMP: path.join(TEST_TEMP_DIR, 'runner-temp'),
   ACTIONS_RESULTS_URL: 'http://localhost:3000/',
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
+  SKIP_TOKEN_VALIDATION: 'true',
 } satisfies Omit<
   typeof envBaseSchema.infer,
-  'CACHE_CLEANUP_OLDER_THAN_DAYS' | 'ENABLE_DIRECT_DOWNLOADS' | 'BENCHMARK'
+  | 'CACHE_CLEANUP_OLDER_THAN_DAYS'
+  | 'ENABLE_DIRECT_DOWNLOADS'
+  | 'BENCHMARK'
+  | 'SKIP_TOKEN_VALIDATION'
 > &
   Record<string, string>
 
@@ -212,10 +216,11 @@ export async function setup() {
 }
 
 export async function teardown() {
-  await fs.rm('tests/temp', { recursive: true })
   await server?.kill()
   await nitro?.close()
+  await new Promise((resolve) => setTimeout(resolve, 1000)) // wait a bit for the server to close properly before stopping containers
   await Promise.all(
     testContainers.map((container) => container?.stop({ remove: true, removeVolumes: true })),
   )
+  await fs.rm('tests/temp', { recursive: true })
 }

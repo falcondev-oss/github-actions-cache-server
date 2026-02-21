@@ -31,7 +31,7 @@ import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
 
-class Storage {
+export class Storage {
   adapter
   private db
 
@@ -40,13 +40,17 @@ class Storage {
     this.db = db
   }
 
+  static async getAdapterFromEnv() {
+    return await match(env)
+      .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
+      .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
+      .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
+      .exhaustive()
+  }
+
   static async fromEnv() {
     return new Storage({
-      adapter: await match(env)
-        .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
-        .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
-        .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
-        .exhaustive(),
+      adapter: await Storage.getAdapterFromEnv(),
       db: await getDatabase(),
     })
   }
@@ -82,11 +86,12 @@ class Storage {
       .execute()
   }
 
-  async completeUpload(key: string, version: string) {
+  async completeUpload(key: string, version: string, scope: string) {
     const upload = await this.db
       .selectFrom('uploads')
       .where('key', '=', key)
       .where('version', '=', version)
+      .where('scope', '=', scope)
       .selectAll()
       .executeTakeFirst()
     if (!upload) return
@@ -130,9 +135,11 @@ class Storage {
         .selectFrom('cache_entries')
         .where('key', '=', key)
         .where('version', '=', version)
+        .where('scope', '=', scope)
         .innerJoin('storage_locations', 'storage_locations.id', 'cache_entries.locationId')
         .select(['cache_entries.id', 'cache_entries.locationId', 'storage_locations.folderName'])
         .executeTakeFirst()
+
       if (existingCacheEntry) {
         await tx
           .updateTable('cache_entries')
@@ -156,6 +163,7 @@ class Storage {
             id: randomUUID(),
             updatedAt: Date.now(),
             locationId,
+            scope,
           })
           .execute()
 
@@ -290,7 +298,7 @@ class Storage {
     }
   }
 
-  async createUpload(key: string, version: string) {
+  async createUpload(key: string, version: string, scope: string) {
     const existingUpload = await this.db
       .selectFrom('uploads')
       .where('key', '=', key)
@@ -308,6 +316,7 @@ class Storage {
         createdAt: Date.now(),
         key,
         version,
+        scope,
         lastPartUploadedAt: null,
         finishedPartUploadCount: 0,
         startedPartUploadCount: 0,
@@ -320,49 +329,57 @@ class Storage {
   private async getCacheEntryByKeys({
     keys: [primaryKey, ...restoreKeys],
     version,
+    scopes,
   }: {
     keys: [string, ...string[]]
     version: string
+    scopes: string[]
   }) {
-    const exactPrimaryMatch = await this.db
-      .selectFrom('cache_entries')
-      .where('key', '=', primaryKey)
-      .where('version', '=', version)
-      .selectAll()
-      .executeTakeFirst()
-    if (exactPrimaryMatch) return exactPrimaryMatch
-
-    const prefixedPrimaryMatch = await this.db
-      .selectFrom('cache_entries')
-      .where('key', 'like', `${primaryKey}%`)
-      .where('version', '=', version)
-      .orderBy('cache_entries.updatedAt', 'desc')
-      .selectAll()
-      .executeTakeFirst()
-
-    if (prefixedPrimaryMatch) return prefixedPrimaryMatch
-
-    if (restoreKeys.length === 0) return
-
-    for (const key of restoreKeys) {
-      const exactMatch = await this.db
+    for (const scope of scopes) {
+      const exactPrimaryMatch = await this.db
         .selectFrom('cache_entries')
-        .where('key', '=', key)
+        .where('key', '=', primaryKey)
         .where('version', '=', version)
-        .orderBy('updatedAt', 'desc')
+        .where('scope', '=', scope)
         .selectAll()
         .executeTakeFirst()
-      if (exactMatch) return exactMatch
+      if (exactPrimaryMatch) return exactPrimaryMatch
 
-      const prefixedMatch = await this.db
+      const prefixedPrimaryMatch = await this.db
         .selectFrom('cache_entries')
-        .where('key', 'like', `${key}%`)
+        .where('key', 'like', `${primaryKey}%`)
         .where('version', '=', version)
-        .orderBy('updatedAt', 'desc')
+        .where('scope', '=', scope)
+        .orderBy('cache_entries.updatedAt', 'desc')
         .selectAll()
         .executeTakeFirst()
 
-      if (prefixedMatch) return prefixedMatch
+      if (prefixedPrimaryMatch) return prefixedPrimaryMatch
+
+      if (restoreKeys.length === 0) return
+
+      for (const key of restoreKeys) {
+        const exactMatch = await this.db
+          .selectFrom('cache_entries')
+          .where('key', '=', key)
+          .where('version', '=', version)
+          .where('scope', '=', scope)
+          .orderBy('updatedAt', 'desc')
+          .selectAll()
+          .executeTakeFirst()
+        if (exactMatch) return exactMatch
+
+        const prefixedMatch = await this.db
+          .selectFrom('cache_entries')
+          .where('key', 'like', `${key}%`)
+          .where('version', '=', version)
+          .where('scope', '=', scope)
+          .orderBy('updatedAt', 'desc')
+          .selectAll()
+          .executeTakeFirst()
+
+        if (prefixedMatch) return prefixedMatch
+      }
     }
   }
 
@@ -404,6 +421,7 @@ interface StorageAdapter {
   deleteFolder(folderName: string): Promise<void>
   countFilesInFolder(folderName: string): Promise<number>
   createDownloadUrl?(objectName: string): Promise<string>
+  clear(): Promise<void>
 }
 
 class S3Adapter implements StorageAdapter {
@@ -461,10 +479,18 @@ class S3Adapter implements StorageAdapter {
   }
 
   async deleteFolder(folderName: string) {
+    return this.deleteByPrefix(`${this.keyPrefix}/${folderName}/`)
+  }
+
+  async clear() {
+    return this.deleteByPrefix(this.keyPrefix)
+  }
+
+  private async deleteByPrefix(prefix: string) {
     const listResponse = await this.s3.send(
       new ListObjectsV2Command({
         Bucket: this.bucket,
-        Prefix: `${this.keyPrefix}/${folderName}/`,
+        Prefix: prefix,
       }),
     )
 
@@ -558,6 +584,16 @@ class FileSystemAdapter implements StorageAdapter {
     })
   }
 
+  async clear() {
+    await fs.rm(this.rootFolder, {
+      recursive: true,
+      force: true,
+    })
+    await fs.mkdir(this.rootFolder, {
+      recursive: true,
+    })
+  }
+
   async uploadStream(objectName: string, stream: Readable) {
     const filePath = path.join(this.rootFolder, objectName)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
@@ -605,6 +641,12 @@ class GcsAdapter implements StorageAdapter {
   async deleteFolder(folderName: string) {
     await this.bucket.deleteFiles({
       prefix: `${this.keyPrefix}/${folderName}/`,
+    })
+  }
+
+  async clear() {
+    await this.bucket.deleteFiles({
+      prefix: this.keyPrefix,
     })
   }
 

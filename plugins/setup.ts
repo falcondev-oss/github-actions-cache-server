@@ -15,10 +15,12 @@ export default defineNitroPlugin(async (nitro) => {
       logger.warn(
         'Garbage collection is not exposed. Start the process with `node --expose-gc` for improved memory usage under high load.',
       )
-
-    await getDatabase()
-    await getStorage()
   }
+
+  await getStorage()
+  const db = await getDatabase()
+
+  nitro.hooks.hook('close', async () => db.destroy())
 
   nitro.hooks.hook('error', (error, { event }) => {
     if (!event) {

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { getCacheScopes } from '~/lib/scope'
 import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
@@ -7,6 +8,8 @@ const bodySchema = z.object({
 })
 
 export default defineEventHandler(async (event) => {
+  const scopes = await getCacheScopes(event)
+
   const parsedBody = bodySchema.safeParse(await readBody(event))
   if (!parsedBody.success)
     throw createError({
@@ -17,7 +20,11 @@ export default defineEventHandler(async (event) => {
   const { key, version } = parsedBody.data
 
   const storage = await getStorage()
-  const upload = await storage.completeUpload(key, version)
+  const writeScope = scopes.find((s) => s.Permission >= 2)
+  if (!writeScope)
+    throw createError({ statusCode: 403, message: 'No scope with write permission found' })
+
+  const upload = await storage.completeUpload(key, version, writeScope.Scope)
   if (!upload)
     throw createError({
       statusCode: 404,

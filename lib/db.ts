@@ -15,6 +15,7 @@ interface CacheEntry {
   id: string
   key: string
   version: string
+  scope: string
   updatedAt: number
   locationId: string
 }
@@ -36,6 +37,7 @@ interface Upload {
   id: number
   key: string
   version: string
+  scope: string
   createdAt: number
   lastPartUploadedAt: number | null
   startedPartUploadCount: number
