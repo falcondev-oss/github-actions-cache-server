@@ -135,6 +135,10 @@ Generate environment variables from config values.
 - name: DEBUG
   value: "true"
 {{- end }}
+{{- if .Values.config.managementApiKey }}
+- name: MANAGEMENT_API_KEY
+  value: {{ .Values.config.managementApiKey | quote }}
+{{- end }}
 {{/* Storage driver */}}
 - name: STORAGE_DRIVER
   value: {{ .Values.config.storage.driver | quote }}

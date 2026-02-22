@@ -48,6 +48,11 @@ config:
   # -- Enable debug logging.
   # debug: false
 
+  # -- API key for the management API. When set, the management API is enabled
+  # and protected with this key (passed via the X-Api-Key header).
+  # Can also be provided via existingSecret (key: MANAGEMENT_API_KEY).
+  managementApiKey: ''
+
   # -- Storage driver configuration
   # See https://gha-cache-server.falcondev.io/storage-drivers
   storage:

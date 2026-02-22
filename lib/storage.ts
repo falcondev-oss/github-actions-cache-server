@@ -333,7 +333,7 @@ export class Storage {
     return { id: uploadId }
   }
 
-  private async getCacheEntryByKeys({
+  async matchCacheEntry({
     keys: [primaryKey, ...restoreKeys],
     version,
     scopes,
@@ -350,7 +350,11 @@ export class Storage {
         .where('scope', '=', scope)
         .selectAll()
         .executeTakeFirst()
-      if (exactPrimaryMatch) return exactPrimaryMatch
+      if (exactPrimaryMatch)
+        return {
+          match: exactPrimaryMatch,
+          type: 'exact-primary' as const,
+        }
 
       const prefixedPrimaryMatch = await this.db
         .selectFrom('cache_entries')
@@ -361,7 +365,11 @@ export class Storage {
         .selectAll()
         .executeTakeFirst()
 
-      if (prefixedPrimaryMatch) return prefixedPrimaryMatch
+      if (prefixedPrimaryMatch)
+        return {
+          match: prefixedPrimaryMatch,
+          type: 'prefixed-primary' as const,
+        }
 
       if (restoreKeys.length === 0) return
 
@@ -374,7 +382,11 @@ export class Storage {
           .orderBy('updatedAt', 'desc')
           .selectAll()
           .executeTakeFirst()
-        if (exactMatch) return exactMatch
+        if (exactMatch)
+          return {
+            match: exactMatch,
+            type: 'exact-restore' as const,
+          }
 
         const prefixedMatch = await this.db
           .selectFrom('cache_entries')
@@ -385,26 +397,30 @@ export class Storage {
           .selectAll()
           .executeTakeFirst()
 
-        if (prefixedMatch) return prefixedMatch
+        if (prefixedMatch)
+          return {
+            match: prefixedMatch,
+            type: 'prefixed-restore' as const,
+          }
       }
     }
   }
 
-  async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.getCacheEntryByKeys>[0]) {
-    const cacheEntry = await this.getCacheEntryByKeys(args)
+  async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.matchCacheEntry>[0]) {
+    const cacheEntry = await this.matchCacheEntry(args)
     if (!cacheEntry) return
 
-    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.id}`
+    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
 
     if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl)
       return {
         downloadUrl: defaultUrl,
-        cacheEntry,
+        cacheEntry: cacheEntry.match,
       }
 
     const location = await this.db
       .selectFrom('storage_locations')
-      .where('id', '=', cacheEntry.locationId)
+      .where('id', '=', cacheEntry.match.locationId)
       .select(['folderName', 'mergedAt'])
       .executeTakeFirst()
     if (!location) throw new Error('Storage location not found')
@@ -415,7 +431,7 @@ export class Storage {
 
     return {
       downloadUrl,
-      cacheEntry,
+      cacheEntry: cacheEntry.match,
     }
   }
 }
