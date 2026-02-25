@@ -1,7 +1,7 @@
 {
   "name": "@falcondev-oss/github-actions-cache-server",
   "type": "module",
-  "version": "9.2.0",
+  "version": "9.3.0",
   "private": true,
   "engines": {
     "node": "25",
