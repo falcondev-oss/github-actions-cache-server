@@ -4,18 +4,138 @@
 
 replicaCount: 1
 
-strategy:
-  type: Recreate
-
 image:
   repository: ghcr.io/falcondev-oss/github-actions-cache-server
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: ''
+  # -- (experimental) Image variant to use. Set to "caged" to use the platformatic/node-caged
+  # based image, which enables V8 pointer compression for ~50% lower memory usage.
+  # See: https://blog.platformatic.dev/we-cut-nodejs-memory-in-half
+  #
+  # Caveats:
+  # - Each V8 isolate is limited to a 4 GB heap. Not suitable for workloads that
+  #   require more than 4 GB per isolate.
+  # - Expect ~2-4% higher average latency, though p99/max latency may improve due
+  #   to reduced GC pressure.
+  # When set, "-caged" is appended to the resolved image tag.
+  variant: ''
 
 imagePullSecrets: []
 nameOverride: ''
 fullnameOverride: ''
+
+# -- Cache server configuration
+# These values are mapped to the application's environment variables.
+# See https://gha-cache-server.falcondev.io/getting-started for more details.
+config:
+  # -- The base URL of your cache server. Must be accessible by your runners.
+  # If empty, defaults to the internal Kubernetes service URL.
+  apiBaseUrl: ''
+
+  # -- Enable direct downloads from the storage provider.
+  # When true, the server sends a signed URL to the runner which downloads
+  # directly from the storage provider instead of proxying through the server.
+  # The runner must be able to reach the storage provider directly.
+  enableDirectDownloads: false
+
+  # -- Number of days to keep stale cache data before deleting it. Set to 0 to disable.
+  cacheCleanupOlderThanDays: 90
+
+  # -- Disable all periodic cleanup jobs.
+  # disableCleanupJobs: false
+
+  # -- Enable debug logging.
+  # debug: false
+
+  # -- API key for the management API. When set, the management API is enabled
+  # and protected with this key (passed via the X-Api-Key header).
+  # Can also be provided via existingSecret (key: MANAGEMENT_API_KEY).
+  managementApiKey: ''
+
+  # -- Storage driver configuration
+  # See https://gha-cache-server.falcondev.io/storage-drivers
+  storage:
+    # -- Storage driver to use: "filesystem", "s3", or "gcs"
+    driver: filesystem
+
+    # -- Filesystem storage driver settings
+    # See https://gha-cache-server.falcondev.io/storage-drivers/file-system
+    filesystem:
+      # -- Path to store cache files
+      path: /data/cache
+
+    # -- S3 / MinIO storage driver settings
+    # See https://gha-cache-server.falcondev.io/storage-drivers/s3
+    s3:
+      # -- S3 bucket name (required when driver is "s3")
+      bucket: ''
+      # -- AWS region (defaults to "us-east-1")
+      region: us-east-1
+      # -- Custom S3 endpoint URL (e.g. for MinIO: "http://minio:9000")
+      endpointUrl: ''
+      # -- AWS access key ID. Can also be provided via existingSecret.
+      accessKeyId: ''
+      # -- AWS secret access key. Can also be provided via existingSecret.
+      secretAccessKey: ''
+
+    # -- Google Cloud Storage driver settings
+    # See https://gha-cache-server.falcondev.io/storage-drivers/google-cloud-storage
+    gcs:
+      # -- GCS bucket name (required when driver is "gcs")
+      bucket: ''
+      # -- Path to service account key file (optional, uses ADC if not set)
+      serviceAccountKey: ''
+      # -- Custom GCS API endpoint
+      endpoint: ''
+
+  # -- Database driver configuration
+  # See https://gha-cache-server.falcondev.io/database-drivers
+  db:
+    # -- Database driver to use: "sqlite", "postgres", or "mysql"
+    driver: sqlite
+
+    # -- SQLite database driver settings
+    # See https://gha-cache-server.falcondev.io/database-drivers/sqlite
+    sqlite:
+      # -- Path to the SQLite database file
+      path: /data/cache-server.db
+
+    # -- PostgreSQL database driver settings
+    # Use either `url` OR individual connection settings (host, port, etc.)
+    # See https://gha-cache-server.falcondev.io/database-drivers/postgres
+    postgres:
+      # -- Full PostgreSQL connection URL (alternative to individual settings)
+      url: ''
+      # -- PostgreSQL database name
+      database: ''
+      # -- PostgreSQL host
+      host: ''
+      # -- PostgreSQL port
+      port: 5432
+      # -- PostgreSQL user
+      user: ''
+      # -- PostgreSQL password. Can also be provided via existingSecret.
+      password: ''
+
+    # -- MySQL database driver settings
+    # See https://gha-cache-server.falcondev.io/database-drivers/mysql
+    mysql:
+      # -- MySQL database name
+      database: ''
+      # -- MySQL host
+      host: ''
+      # -- MySQL port
+      port: 3306
+      # -- MySQL user
+      user: ''
+      # -- MySQL password. Can also be provided via existingSecret.
+      password: ''
+
+# -- Name of an existing Kubernetes Secret containing sensitive environment variables.
+# Use this to avoid storing secrets in values.yaml. The secret keys should match
+# the env var names (e.g., AWS_SECRET_ACCESS_KEY, DB_POSTGRES_PASSWORD, DB_POSTGRES_URL, etc.)
+existingSecret: ''
 
 serviceAccount:
   # Specifies whether a service account should be created
@@ -38,13 +158,12 @@ securityContext:
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 1000
 
 service:
   type: ClusterIP
-  port: 80
+  port: 3000
   annotations: {}
 
 ingress:
@@ -65,11 +184,10 @@ ingress:
 
 resources:
   limits:
-    cpu: 500m
-    memory: 640Mi
+    memory: 4Gi
   requests:
     cpu: 500m
-    memory: 640Mi
+    memory: 1Gi
 
 livenessProbe:
   httpGet:
@@ -81,41 +199,34 @@ readinessProbe:
     port: cache
 
 autoscaling:
-  enabled: true
+  enabled: false
   minReplicas: 1
-  maxReplicas: 100
+  maxReplicas: 10
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 70
 
+# -- Persistent volume claim for data storage.
+# Automatically enabled when using filesystem storage or sqlite database driver.
+# Can be manually overridden with persistentVolumeClaim.enabled = true/false.
+#
+# NOTE: When using autoscaling (or replicaCount > 1) with the filesystem storage
+# driver, accessModes is automatically switched to ReadWriteMany so that multiple
+# pods can attach to the same volume. If you need a different access mode, set it
+# explicitly below.
+#
+# SQLite cannot be used with multiple replicas and will produce an install error.
 persistentVolumeClaim:
-  enabled: true
-  template:
-    metadata:
-      name: cache-data
-      labels: {}
-      annotations: {}
-    spec:
-      accessModes:
-        - ReadWriteOnce
-      resources:
-        requests:
-          storage: 20Gi
-      volumeMode: Filesystem
-      # storageClassName: standard
-
-tmpVolume:
-  ephemeral:
-    volumeClaimTemplate:
-      metadata:
-        labels:
-          type: github-actions-cache-server-tmp
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        # storageClassName: standard
-        resources:
-          requests:
-            storage: 2Gi
+  # -- Set to true/false to explicitly enable/disable. If not set, automatically
+  # enabled when storage.driver is "filesystem" or db.driver is "sqlite".
+  enabled: null
+  # -- Access modes for the PVC. Automatically changed to ReadWriteMany when
+  # the filesystem storage driver is used with multiple replicas.
+  accessModes:
+    - ReadWriteOnce
+  storage: 20Gi
+  # storageClassName: standard
+  annotations: {}
+  labels: {}
 
 nodeSelector: {}
 
@@ -123,12 +234,18 @@ tolerations: []
 
 affinity: {}
 
-apiBaseUrl: ''
+# -- Additional environment variables to set on the container.
+# These are added after the config-generated env vars and can override them.
+extraEnv: []
+  # - name: MY_VAR
+  #   value: "my-value"
 
-env:
-  - name: DEBUG
-    value: 'false'
-envFrom: []
+# -- Additional envFrom sources to add to the container.
+extraEnvFrom: []
+  # - secretRef:
+  #     name: my-secret
+  # - configMapRef:
+  #     name: my-config
 
 topologySpreadConstraints: []
   # - topologyKey: topology.kubernetes.io/zone

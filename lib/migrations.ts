@@ -1,5 +1,6 @@
 import type { Migration } from 'kysely'
 import type { Env } from './schemas'
+import { Storage } from './storage'
 
 export function migrations(driver: Env['DB_DRIVER']) {
   return {
@@ -58,6 +59,59 @@ export function migrations(driver: Env['DB_DRIVER']) {
         await db.schema.dropTable('uploads').execute()
         await db.schema.dropTable('cache_entries').execute()
         await db.schema.dropTable('storage_locations').execute()
+      },
+    },
+    $1_upload_part_counts: {
+      async up(db) {
+        await db.schema
+          .alterTable('uploads')
+          .addColumn('finishedPartUploadCount', 'integer', (col) => col.notNull().defaultTo(0))
+          .execute()
+        await db.schema
+          .alterTable('uploads')
+          .addColumn('startedPartUploadCount', 'integer', (col) => col.notNull().defaultTo(0))
+          .execute()
+      },
+      async down(db) {
+        await db.schema.alterTable('uploads').dropColumn('startedPartUploadCount').execute()
+        await db.schema.alterTable('uploads').dropColumn('finishedPartUploadCount').execute()
+      },
+    },
+    $2_scopes: {
+      async up(db) {
+        const scopeColumnType = driver === 'mysql' ? 'varchar(255)' : 'text'
+
+        // clear all existing entries
+        const adapter = await Storage.getAdapterFromEnv()
+
+        await Promise.all([
+          db.deleteFrom('cache_entries').execute(),
+          db.deleteFrom('storage_locations').execute(),
+          db.deleteFrom('uploads').execute(),
+          adapter.clear(),
+        ])
+
+        await db.schema
+          .alterTable('cache_entries')
+          .addColumn('scope', scopeColumnType, (col) => col.notNull())
+          .execute()
+        await db.schema
+          .createIndex('idx_cache_entries_scope')
+          .on('cache_entries')
+          .columns(['scope'])
+          .execute()
+
+        await db.schema
+          .alterTable('uploads')
+          .addColumn('scope', scopeColumnType, (col) => col.notNull())
+          .execute()
+        await db.schema.createIndex('idx_uploads_scope').on('uploads').columns(['scope']).execute()
+      },
+      async down(db) {
+        await db.schema.dropIndex('idx_cache_entries_scope').execute()
+        await db.schema.alterTable('cache_entries').dropColumn('scope').execute()
+        await db.schema.dropIndex('idx_uploads_scope').execute()
+        await db.schema.alterTable('uploads').dropColumn('scope').execute()
       },
     },
   } satisfies Record<string, Migration>

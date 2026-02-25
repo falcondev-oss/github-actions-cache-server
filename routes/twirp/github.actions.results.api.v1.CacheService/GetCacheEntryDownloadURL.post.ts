@@ -1,4 +1,6 @@
+import { map, pipe, prop, sortBy } from 'remeda'
 import { z } from 'zod'
+import { getCacheScopes } from '~/lib/scope'
 import { getStorage } from '~/lib/storage'
 
 const bodySchema = z.object({
@@ -8,6 +10,8 @@ const bodySchema = z.object({
 })
 
 export default defineEventHandler(async (event) => {
+  const scopes = await getCacheScopes(event)
+
   const parsedBody = bodySchema.safeParse(await readBody(event))
   if (!parsedBody.success)
     throw createError({
@@ -21,6 +25,7 @@ export default defineEventHandler(async (event) => {
   const match = await storage.getCacheEntryWithDownloadUrl({
     keys: [key, ...(restore_keys ?? [])],
     version,
+    scopes: pipe(scopes, sortBy([prop('Permission'), 'desc']), map(prop('Scope'))),
   })
   if (!match)
     return {

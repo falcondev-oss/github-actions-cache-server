@@ -7,39 +7,44 @@ import { Kysely, Migrator, MysqlDialect, PostgresDialect, SqliteDialect } from '
 import { createPool } from 'mysql2'
 import pg from 'pg'
 import { match } from 'ts-pattern'
+import z from 'zod'
 import { env } from './env'
 import { logger } from './logger'
 import { migrations } from './migrations'
 
-interface CacheEntry {
-  id: string
-  key: string
-  version: string
-  updatedAt: number
-  locationId: string
-}
+export const cacheEntrySchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  version: z.string(),
+  scope: z.string(),
+  updatedAt: z.number(),
+  locationId: z.string(),
+})
+type CacheEntry = z.infer<typeof cacheEntrySchema>
 
-export interface StorageLocation {
-  id: string
-  folderName: string
-  /**
-   * Number of parts uploaded for this entry or null if parts have already been combined
-   */
-  partCount: number
-  mergeStartedAt: number | null
-  mergedAt: number | null
-  partsDeletedAt: number | null
-  lastDownloadedAt: number | null
-}
+export const storageLocationSchema = z.object({
+  id: z.string(),
+  folderName: z.string(),
+  partCount: z.number(),
+  mergeStartedAt: z.number().nullable(),
+  mergedAt: z.number().nullable(),
+  partsDeletedAt: z.number().nullable(),
+  lastDownloadedAt: z.number().nullable(),
+})
+export type StorageLocation = z.infer<typeof storageLocationSchema>
 
-interface Upload {
-  id: number
-  key: string
-  version: string
-  createdAt: number
-  lastPartUploadedAt: number | null
-  folderName: string
-}
+export const uploadSchema = z.object({
+  id: z.number(),
+  key: z.string(),
+  version: z.string(),
+  scope: z.string(),
+  createdAt: z.number(),
+  lastPartUploadedAt: z.number().nullable(),
+  startedPartUploadCount: z.number(),
+  finishedPartUploadCount: z.number(),
+  folderName: z.string(),
+})
+type Upload = z.infer<typeof uploadSchema>
 
 export interface Database {
   cache_entries: CacheEntry

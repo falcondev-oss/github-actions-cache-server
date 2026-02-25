@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { restoreCache, saveCache } from '@actions/cache'
+import { SignJWT } from 'jose'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { TEST_TEMP_DIR } from './setup'
 
@@ -11,9 +12,13 @@ const testFilePath = path.join(TEST_TEMP_DIR, 'test.bin')
 const MB = 1024 * 1024
 
 describe(`save and restore cache with @actions/cache package`, () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ACTIONS_CACHE_SERVICE_V2 = 'true'
-    process.env.ACTIONS_RUNTIME_TOKEN = 'mock-runtime-token'
+    process.env.ACTIONS_RUNTIME_TOKEN = await new SignJWT({
+      ac: JSON.stringify([{ Scope: 'refs/heads/main', Permission: 3 }]),
+    })
+      .setProtectedHeader({ alg: 'HS256' })
+      .sign(crypto.createSecretKey('mock-secret-key', 'ascii'))
   })
   afterAll(() => {
     delete process.env.ACTIONS_CACHE_SERVICE_V2

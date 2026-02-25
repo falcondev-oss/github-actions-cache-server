@@ -24,30 +24,40 @@ import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { sql } from 'kysely'
 import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
 import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
 
-class Storage {
+export class Storage {
   adapter
   private db
+  private mergeStreamPromises = new Set<Promise<void>>()
 
   private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
     this.adapter = adapter
     this.db = db
   }
 
+  static async getAdapterFromEnv() {
+    return await match(env)
+      .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
+      .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
+      .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
+      .exhaustive()
+  }
+
   static async fromEnv() {
     return new Storage({
-      adapter: await match(env)
-        .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
-        .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
-        .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
-        .exhaustive(),
+      adapter: await Storage.getAdapterFromEnv(),
       db: await getDatabase(),
     })
+  }
+
+  waitForOngoingMerges() {
+    return Promise.all(this.mergeStreamPromises)
   }
 
   async uploadPart(uploadId: number, partIndex: number, stream: ReadableStream) {
@@ -58,31 +68,58 @@ class Storage {
       .executeTakeFirst()
     if (!upload) return
 
+    await this.db
+      .updateTable('uploads')
+      .set({
+        startedPartUploadCount: sql`${sql.ref('startedPartUploadCount')} + 1`,
+      })
+      .where('id', '=', uploadId)
+      .execute()
+
     await this.adapter.uploadStream(
       `${upload.folderName}/parts/${partIndex}`,
       Readable.fromWeb(stream),
     )
 
-    void this.db
+    await this.db
       .updateTable('uploads')
       .set({
         lastPartUploadedAt: Date.now(),
+        finishedPartUploadCount: sql`${sql.ref('finishedPartUploadCount')} + 1`,
       })
       .where('id', '=', uploadId)
       .execute()
   }
 
-  async completeUpload(key: string, version: string) {
+  async completeUpload(key: string, version: string, scope: string) {
     const upload = await this.db
       .selectFrom('uploads')
       .where('key', '=', key)
       .where('version', '=', version)
+      .where('scope', '=', scope)
       .selectAll()
       .executeTakeFirst()
     if (!upload) return
 
+    if (upload.finishedPartUploadCount === 0) {
+      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+      throw new Error('No parts have been uploaded')
+    }
+
+    if (upload.startedPartUploadCount !== upload.finishedPartUploadCount) {
+      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+      throw new Error(
+        `Not all parts have been uploaded (only ${upload.finishedPartUploadCount} of ${upload.startedPartUploadCount} parts uploaded)`,
+      )
+    }
+
     const partCount = await this.adapter.countFilesInFolder(`${upload.folderName}/parts`)
-    if (!partCount) throw new Error('No parts found for upload')
+    if (partCount !== upload.finishedPartUploadCount) {
+      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+      throw new Error(
+        `Uploaded part count does not match actual part count in storage (expected ${upload.finishedPartUploadCount} but found ${partCount})`,
+      )
+    }
 
     await this.db.transaction().execute(async (tx) => {
       const locationId = randomUUID()
@@ -103,9 +140,11 @@ class Storage {
         .selectFrom('cache_entries')
         .where('key', '=', key)
         .where('version', '=', version)
+        .where('scope', '=', scope)
         .innerJoin('storage_locations', 'storage_locations.id', 'cache_entries.locationId')
         .select(['cache_entries.id', 'cache_entries.locationId', 'storage_locations.folderName'])
         .executeTakeFirst()
+
       if (existingCacheEntry) {
         await tx
           .updateTable('cache_entries')
@@ -129,6 +168,7 @@ class Storage {
             id: randomUUID(),
             updatedAt: Date.now(),
             locationId,
+            scope,
           })
           .execute()
 
@@ -170,7 +210,7 @@ class Storage {
     const mergerStream = new PassThrough()
 
     try {
-      this.adapter
+      const promise = this.adapter
         .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
         .then(async () => {
           await this.db
@@ -202,6 +242,8 @@ class Storage {
             .execute()
           mergerStream.destroy()
         })
+      this.mergeStreamPromises.add(promise)
+      promise.finally(() => this.mergeStreamPromises.delete(promise))
     } catch (err) {
       await this.db
         .updateTable('storage_locations')
@@ -263,7 +305,7 @@ class Storage {
     }
   }
 
-  async createUpload(key: string, version: string) {
+  async createUpload(key: string, version: string, scope: string) {
     const existingUpload = await this.db
       .selectFrom('uploads')
       .where('key', '=', key)
@@ -281,77 +323,104 @@ class Storage {
         createdAt: Date.now(),
         key,
         version,
+        scope,
         lastPartUploadedAt: null,
+        finishedPartUploadCount: 0,
+        startedPartUploadCount: 0,
       })
       .execute()
 
     return { id: uploadId }
   }
 
-  private async getCacheEntryByKeys({
+  async matchCacheEntry({
     keys: [primaryKey, ...restoreKeys],
     version,
+    scopes,
   }: {
     keys: [string, ...string[]]
     version: string
+    scopes: string[]
   }) {
-    const exactPrimaryMatch = await this.db
-      .selectFrom('cache_entries')
-      .where('key', '=', primaryKey)
-      .where('version', '=', version)
-      .selectAll()
-      .executeTakeFirst()
-    if (exactPrimaryMatch) return exactPrimaryMatch
-
-    const prefixedPrimaryMatch = await this.db
-      .selectFrom('cache_entries')
-      .where('key', 'like', `${primaryKey}%`)
-      .where('version', '=', version)
-      .orderBy('cache_entries.updatedAt', 'desc')
-      .selectAll()
-      .executeTakeFirst()
-
-    if (prefixedPrimaryMatch) return prefixedPrimaryMatch
-
-    if (restoreKeys.length === 0) return
-
-    for (const key of restoreKeys) {
-      const exactMatch = await this.db
+    for (const scope of scopes) {
+      const exactPrimaryMatch = await this.db
         .selectFrom('cache_entries')
-        .where('key', '=', key)
+        .where('key', '=', primaryKey)
         .where('version', '=', version)
-        .orderBy('updatedAt', 'desc')
+        .where('scope', '=', scope)
         .selectAll()
         .executeTakeFirst()
-      if (exactMatch) return exactMatch
+      if (exactPrimaryMatch)
+        return {
+          match: exactPrimaryMatch,
+          type: 'exact-primary' as const,
+        }
 
-      const prefixedMatch = await this.db
+      const prefixedPrimaryMatch = await this.db
         .selectFrom('cache_entries')
-        .where('key', 'like', `${key}%`)
+        .where('key', 'like', `${primaryKey}%`)
         .where('version', '=', version)
-        .orderBy('updatedAt', 'desc')
+        .where('scope', '=', scope)
+        .orderBy('cache_entries.updatedAt', 'desc')
         .selectAll()
         .executeTakeFirst()
 
-      if (prefixedMatch) return prefixedMatch
+      if (prefixedPrimaryMatch)
+        return {
+          match: prefixedPrimaryMatch,
+          type: 'prefixed-primary' as const,
+        }
+
+      if (restoreKeys.length === 0) return
+
+      for (const key of restoreKeys) {
+        const exactMatch = await this.db
+          .selectFrom('cache_entries')
+          .where('key', '=', key)
+          .where('version', '=', version)
+          .where('scope', '=', scope)
+          .orderBy('updatedAt', 'desc')
+          .selectAll()
+          .executeTakeFirst()
+        if (exactMatch)
+          return {
+            match: exactMatch,
+            type: 'exact-restore' as const,
+          }
+
+        const prefixedMatch = await this.db
+          .selectFrom('cache_entries')
+          .where('key', 'like', `${key}%`)
+          .where('version', '=', version)
+          .where('scope', '=', scope)
+          .orderBy('updatedAt', 'desc')
+          .selectAll()
+          .executeTakeFirst()
+
+        if (prefixedMatch)
+          return {
+            match: prefixedMatch,
+            type: 'prefixed-restore' as const,
+          }
+      }
     }
   }
 
-  async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.getCacheEntryByKeys>[0]) {
-    const cacheEntry = await this.getCacheEntryByKeys(args)
+  async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.matchCacheEntry>[0]) {
+    const cacheEntry = await this.matchCacheEntry(args)
     if (!cacheEntry) return
 
-    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.id}`
+    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
 
     if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl)
       return {
         downloadUrl: defaultUrl,
-        cacheEntry,
+        cacheEntry: cacheEntry.match,
       }
 
     const location = await this.db
       .selectFrom('storage_locations')
-      .where('id', '=', cacheEntry.locationId)
+      .where('id', '=', cacheEntry.match.locationId)
       .select(['folderName', 'mergedAt'])
       .executeTakeFirst()
     if (!location) throw new Error('Storage location not found')
@@ -362,7 +431,7 @@ class Storage {
 
     return {
       downloadUrl,
-      cacheEntry,
+      cacheEntry: cacheEntry.match,
     }
   }
 }
@@ -375,6 +444,7 @@ interface StorageAdapter {
   deleteFolder(folderName: string): Promise<void>
   countFilesInFolder(folderName: string): Promise<number>
   createDownloadUrl?(objectName: string): Promise<string>
+  clear(): Promise<void>
 }
 
 class S3Adapter implements StorageAdapter {
@@ -432,10 +502,18 @@ class S3Adapter implements StorageAdapter {
   }
 
   async deleteFolder(folderName: string) {
+    return this.deleteByPrefix(`${this.keyPrefix}/${folderName}/`)
+  }
+
+  async clear() {
+    return this.deleteByPrefix(this.keyPrefix)
+  }
+
+  private async deleteByPrefix(prefix: string) {
     const listResponse = await this.s3.send(
       new ListObjectsV2Command({
         Bucket: this.bucket,
-        Prefix: `${this.keyPrefix}/${folderName}/`,
+        Prefix: prefix,
       }),
     )
 
@@ -529,6 +607,16 @@ class FileSystemAdapter implements StorageAdapter {
     })
   }
 
+  async clear() {
+    await fs.rm(this.rootFolder, {
+      recursive: true,
+      force: true,
+    })
+    await fs.mkdir(this.rootFolder, {
+      recursive: true,
+    })
+  }
+
   async uploadStream(objectName: string, stream: Readable) {
     const filePath = path.join(this.rootFolder, objectName)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
@@ -576,6 +664,12 @@ class GcsAdapter implements StorageAdapter {
   async deleteFolder(folderName: string) {
     await this.bucket.deleteFiles({
       prefix: `${this.keyPrefix}/${folderName}/`,
+    })
+  }
+
+  async clear() {
+    await this.bucket.deleteFiles({
+      prefix: this.keyPrefix,
     })
   }
 

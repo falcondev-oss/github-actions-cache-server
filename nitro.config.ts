@@ -18,7 +18,7 @@ export default defineNitroConfig({
       },
     },
   },
-  compatibilityDate: '2025-02-01',
+  compatibilityDate: '2026-02-21',
   experimental: {
     tasks: true,
   },

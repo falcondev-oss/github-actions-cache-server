@@ -64,6 +64,8 @@ export const envBaseSchema = type({
   'DEBUG?': 'boolean',
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',
   'BENCHMARK': 'boolean = false',
+  'SKIP_TOKEN_VALIDATION': 'boolean = false',
+  'MANAGEMENT_API_KEY?': 'string',
 })
 
 export const envSchema = envBaseSchema.and(envStorageDriverSchema).and(envDbDriverSchema)

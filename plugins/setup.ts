@@ -1,7 +1,6 @@
 import cluster from 'node:cluster'
 
 import { H3Error } from 'h3'
-import { getDatabase } from '~/lib/db'
 import { env } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
@@ -16,9 +15,20 @@ export default defineNitroPlugin(async (nitro) => {
         'Garbage collection is not exposed. Start the process with `node --expose-gc` for improved memory usage under high load.',
       )
 
-    await getDatabase()
-    await getStorage()
+    for (const signal of ['SIGTERM', 'SIGINT'] satisfies NodeJS.Signals[]) {
+      process.on(signal, () => {
+        for (const worker of Object.values(cluster.workers ?? {})) {
+          worker?.process.kill(signal)
+        }
+      })
+    }
   }
+
+  const storage = await getStorage()
+
+  nitro.hooks.hook('close', async () => {
+    await storage.waitForOngoingMerges()
+  })
 
   nitro.hooks.hook('error', (error, { event }) => {
     if (!event) {
