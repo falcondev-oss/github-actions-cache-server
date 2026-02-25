@@ -142,6 +142,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
             type=semver,pattern={{major}}.{{minor}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
