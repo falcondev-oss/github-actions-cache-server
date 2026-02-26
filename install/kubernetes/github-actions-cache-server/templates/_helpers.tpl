@@ -147,7 +147,7 @@ Generate environment variables from config values.
   value: {{ .Values.config.storage.filesystem.path | quote }}
 {{- else if eq .Values.config.storage.driver "s3" }}
 - name: STORAGE_S3_BUCKET
-  value: {{ required "config.storage.s3.bucket is required when storage driver is s3" .Values.config.storage.s3.bucket | quote }}
+  value: {{ .Values.config.storage.s3.bucket | quote }}
 {{- if .Values.config.storage.s3.region }}
 - name: AWS_REGION
   value: {{ .Values.config.storage.s3.region | quote }}
@@ -166,7 +166,7 @@ Generate environment variables from config values.
 {{- end }}
 {{- else if eq .Values.config.storage.driver "gcs" }}
 - name: STORAGE_GCS_BUCKET
-  value: {{ required "config.storage.gcs.bucket is required when storage driver is gcs" .Values.config.storage.gcs.bucket | quote }}
+  value: {{ .Values.config.storage.gcs.bucket | quote }}
 {{- if .Values.config.storage.gcs.serviceAccountKey }}
 - name: STORAGE_GCS_SERVICE_ACCOUNT_KEY
   value: {{ .Values.config.storage.gcs.serviceAccountKey | quote }}
@@ -188,13 +188,13 @@ Generate environment variables from config values.
   value: {{ .Values.config.db.postgres.url | quote }}
 {{- else }}
 - name: DB_POSTGRES_DATABASE
-  value: {{ required "config.db.postgres.database is required when using postgres without url" .Values.config.db.postgres.database | quote }}
+  value: {{ .Values.config.db.postgres.database | quote }}
 - name: DB_POSTGRES_HOST
-  value: {{ required "config.db.postgres.host is required when using postgres without url" .Values.config.db.postgres.host | quote }}
+  value: {{ .Values.config.db.postgres.host | quote }}
 - name: DB_POSTGRES_PORT
   value: {{ .Values.config.db.postgres.port | quote }}
 - name: DB_POSTGRES_USER
-  value: {{ required "config.db.postgres.user is required when using postgres without url" .Values.config.db.postgres.user | quote }}
+  value: {{ .Values.config.db.postgres.user | quote }}
 {{- if .Values.config.db.postgres.password }}
 - name: DB_POSTGRES_PASSWORD
   value: {{ .Values.config.db.postgres.password | quote }}
@@ -202,13 +202,13 @@ Generate environment variables from config values.
 {{- end }}
 {{- else if eq .Values.config.db.driver "mysql" }}
 - name: DB_MYSQL_DATABASE
-  value: {{ required "config.db.mysql.database is required when db driver is mysql" .Values.config.db.mysql.database | quote }}
+  value: {{ .Values.config.db.mysql.database | quote }}
 - name: DB_MYSQL_HOST
-  value: {{ required "config.db.mysql.host is required when db driver is mysql" .Values.config.db.mysql.host | quote }}
+  value: {{ .Values.config.db.mysql.host | quote }}
 - name: DB_MYSQL_PORT
   value: {{ .Values.config.db.mysql.port | quote }}
 - name: DB_MYSQL_USER
-  value: {{ required "config.db.mysql.user is required when db driver is mysql" .Values.config.db.mysql.user | quote }}
+  value: {{ .Values.config.db.mysql.user | quote }}
 {{- if .Values.config.db.mysql.password }}
 - name: DB_MYSQL_PASSWORD
   value: {{ .Values.config.db.mysql.password | quote }}
