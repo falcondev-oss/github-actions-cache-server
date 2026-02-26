@@ -55,6 +55,8 @@ export interface Database {
 const dbLogger = logger.withTag('db')
 
 export const getDatabase = createSingletonPromise(async () => {
+  if(process.env.NODE_CAGED === 'true' && env.DB_DRIVER === 'sqlite') throw new Error('SQLite is not supported with `caged` image variant.')
+
   const dialect = await match(env)
     .with({ DB_DRIVER: 'postgres' }, async (env) => {
       const pool = new pg.Pool(

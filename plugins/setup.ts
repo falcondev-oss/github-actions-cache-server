@@ -1,6 +1,8 @@
+/* eslint-disable unicorn/no-process-exit */
 import cluster from 'node:cluster'
 
 import { H3Error } from 'h3'
+import { getDatabase } from '~/lib/db'
 import { env } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
@@ -24,7 +26,14 @@ export default defineNitroPlugin(async (nitro) => {
     }
   }
 
-  const storage = await getStorage()
+  await getDatabase().catch(err => {
+    logger.error('Failed to initialize database:', err)
+    process.exit(1)
+  })
+  const storage = await getStorage().catch(err => {
+    logger.error('Failed to initialize storage:', err)
+    process.exit(1)
+  })
 
   nitro.hooks.hook('close', async () => {
     await storage.waitForOngoingMerges()
