@@ -146,34 +146,42 @@ Generate environment variables from config values.
 - name: STORAGE_FILESYSTEM_PATH
   value: {{ .Values.config.storage.filesystem.path | quote }}
 {{- else if eq .Values.config.storage.driver "s3" }}
+{{- with .Values.config.storage.s3 }}
+{{- if .bucket }}
 - name: STORAGE_S3_BUCKET
-  value: {{ .Values.config.storage.s3.bucket | quote }}
-{{- if .Values.config.storage.s3.region }}
+  value: {{ .bucket | quote }}
+{{- end }}
+{{- if .region }}
 - name: AWS_REGION
-  value: {{ .Values.config.storage.s3.region | quote }}
+  value: {{ .region | quote }}
 {{- end }}
-{{- if .Values.config.storage.s3.endpointUrl }}
+{{- if .endpointUrl }}
 - name: AWS_ENDPOINT_URL
-  value: {{ .Values.config.storage.s3.endpointUrl | quote }}
+  value: {{ .endpointUrl | quote }}
 {{- end }}
-{{- if .Values.config.storage.s3.accessKeyId }}
+{{- if .accessKeyId }}
 - name: AWS_ACCESS_KEY_ID
-  value: {{ .Values.config.storage.s3.accessKeyId | quote }}
+  value: {{ .accessKeyId | quote }}
 {{- end }}
-{{- if .Values.config.storage.s3.secretAccessKey }}
+{{- if .secretAccessKey }}
 - name: AWS_SECRET_ACCESS_KEY
-  value: {{ .Values.config.storage.s3.secretAccessKey | quote }}
+  value: {{ .secretAccessKey | quote }}
+{{- end }}
 {{- end }}
 {{- else if eq .Values.config.storage.driver "gcs" }}
+{{- with .Values.config.storage.gcs }}
+{{- if .bucket }}
 - name: STORAGE_GCS_BUCKET
-  value: {{ .Values.config.storage.gcs.bucket | quote }}
-{{- if .Values.config.storage.gcs.serviceAccountKey }}
-- name: STORAGE_GCS_SERVICE_ACCOUNT_KEY
-  value: {{ .Values.config.storage.gcs.serviceAccountKey | quote }}
+  value: {{ .bucket | quote }}
 {{- end }}
-{{- if .Values.config.storage.gcs.endpoint }}
+{{- if .serviceAccountKey }}
+- name: STORAGE_GCS_SERVICE_ACCOUNT_KEY
+  value: {{ .serviceAccountKey | quote }}
+{{- end }}
+{{- if .endpoint }}
 - name: STORAGE_GCS_ENDPOINT
-  value: {{ .Values.config.storage.gcs.endpoint | quote }}
+  value: {{ .endpoint | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{/* Database driver */}}
@@ -183,35 +191,55 @@ Generate environment variables from config values.
 - name: DB_SQLITE_PATH
   value: {{ .Values.config.db.sqlite.path | quote }}
 {{- else if eq .Values.config.db.driver "postgres" }}
-{{- if .Values.config.db.postgres.url }}
+{{- with .Values.config.db.postgres }}
+{{- if .url }}
 - name: DB_POSTGRES_URL
-  value: {{ .Values.config.db.postgres.url | quote }}
+  value: {{ .url | quote }}
 {{- else }}
+{{- if .database }}
 - name: DB_POSTGRES_DATABASE
-  value: {{ .Values.config.db.postgres.database | quote }}
+  value: {{ .database | quote }}
+{{- end }}
+{{- if .host }}
 - name: DB_POSTGRES_HOST
-  value: {{ .Values.config.db.postgres.host | quote }}
+  value: {{ .host | quote }}
+{{- end }}
+{{- if .port }}
 - name: DB_POSTGRES_PORT
-  value: {{ .Values.config.db.postgres.port | quote }}
+  value: {{ .port | quote }}
+{{- end }}
+{{- if .user }}
 - name: DB_POSTGRES_USER
-  value: {{ .Values.config.db.postgres.user | quote }}
-{{- if .Values.config.db.postgres.password }}
+  value: {{ .user | quote }}
+{{- end }}
+{{- if .password }}
 - name: DB_POSTGRES_PASSWORD
-  value: {{ .Values.config.db.postgres.password | quote }}
+  value: {{ .password | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- else if eq .Values.config.db.driver "mysql" }}
+{{- with .Values.config.db.mysql }}
+{{- if .database }}
 - name: DB_MYSQL_DATABASE
-  value: {{ .Values.config.db.mysql.database | quote }}
+  value: {{ .database | quote }}
+{{- end }}
+{{- if .host }}
 - name: DB_MYSQL_HOST
-  value: {{ .Values.config.db.mysql.host | quote }}
+  value: {{ .host | quote }}
+{{- end }}
+{{- if .port }}
 - name: DB_MYSQL_PORT
-  value: {{ .Values.config.db.mysql.port | quote }}
+  value: {{ .port | quote }}
+{{- end }}
+{{- if .user }}
 - name: DB_MYSQL_USER
-  value: {{ .Values.config.db.mysql.user | quote }}
-{{- if .Values.config.db.mysql.password }}
+  value: {{ .user | quote }}
+{{- end }}
+{{- if .password }}
 - name: DB_MYSQL_PASSWORD
-  value: {{ .Values.config.db.mysql.password | quote }}
+  value: {{ .password | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
