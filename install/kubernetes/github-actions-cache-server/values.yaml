@@ -69,25 +69,25 @@ config:
     # See https://gha-cache-server.falcondev.io/storage-drivers/s3
     s3:
       # -- S3 bucket name (required when driver is "s3")
-      bucket: ''
+      # bucket: ''
       # -- AWS region (defaults to "us-east-1")
-      region: us-east-1
+      # region: us-east-1
       # -- Custom S3 endpoint URL (e.g. for MinIO: "http://minio:9000")
-      endpointUrl: ''
+      # endpointUrl: ''
       # -- AWS access key ID. Can also be provided via existingSecret.
-      accessKeyId: ''
+      # accessKeyId: ''
       # -- AWS secret access key. Can also be provided via existingSecret.
-      secretAccessKey: ''
+      # secretAccessKey: ''
 
     # -- Google Cloud Storage driver settings
     # See https://gha-cache-server.falcondev.io/storage-drivers/google-cloud-storage
     gcs:
       # -- GCS bucket name (required when driver is "gcs")
-      bucket: ''
+      # bucket: ''
       # -- Path to service account key file (optional, uses ADC if not set)
-      serviceAccountKey: ''
+      # serviceAccountKey: ''
       # -- Custom GCS API endpoint
-      endpoint: ''
+      # endpoint: ''
 
   # -- Database driver configuration
   # See https://gha-cache-server.falcondev.io/database-drivers
@@ -106,31 +106,31 @@ config:
     # See https://gha-cache-server.falcondev.io/database-drivers/postgres
     postgres:
       # -- Full PostgreSQL connection URL (alternative to individual settings)
-      url: ''
+      # url: ''
       # -- PostgreSQL database name
-      database: ''
+      # database: ''
       # -- PostgreSQL host
-      host: ''
+      # host: ''
       # -- PostgreSQL port
-      port: 5432
+      # port: 5432
       # -- PostgreSQL user
-      user: ''
+      # user: ''
       # -- PostgreSQL password. Can also be provided via existingSecret.
-      password: ''
+      # password: ''
 
     # -- MySQL database driver settings
     # See https://gha-cache-server.falcondev.io/database-drivers/mysql
     mysql:
       # -- MySQL database name
-      database: ''
+      # database: ''
       # -- MySQL host
-      host: ''
+      # host: ''
       # -- MySQL port
-      port: 3306
+      # port: 3306
       # -- MySQL user
-      user: ''
+      # user: ''
       # -- MySQL password. Can also be provided via existingSecret.
-      password: ''
+      # password: ''
 
 # -- Name of an existing Kubernetes Secret containing sensitive environment variables.
 # Use this to avoid storing secrets in values.yaml. The secret keys should match
