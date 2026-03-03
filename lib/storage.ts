@@ -91,12 +91,23 @@ export class Storage {
       .execute()
   }
 
-  async completeUpload(key: string, version: string, scope: string) {
+  async completeUpload({
+    key,
+    version,
+    scope,
+    repoId,
+  }: {
+    key: string
+    version: string
+    scope: string
+    repoId: string
+  }) {
     const upload = await this.db
       .selectFrom('uploads')
       .where('key', '=', key)
       .where('version', '=', version)
       .where('scope', '=', scope)
+      .where('repoId', '=', repoId)
       .selectAll()
       .executeTakeFirst()
     if (!upload) return
@@ -141,6 +152,7 @@ export class Storage {
         .where('key', '=', key)
         .where('version', '=', version)
         .where('scope', '=', scope)
+        .where('repoId', '=', repoId)
         .innerJoin('storage_locations', 'storage_locations.id', 'cache_entries.locationId')
         .select(['cache_entries.id', 'cache_entries.locationId', 'storage_locations.folderName'])
         .executeTakeFirst()
@@ -169,6 +181,7 @@ export class Storage {
             updatedAt: Date.now(),
             locationId,
             scope,
+            repoId,
           })
           .execute()
 
@@ -305,11 +318,23 @@ export class Storage {
     }
   }
 
-  async createUpload(key: string, version: string, scope: string) {
+  async createUpload({
+    key,
+    version,
+    scope,
+    repoId,
+  }: {
+    key: string
+    version: string
+    scope: string
+    repoId: string
+  }) {
     const existingUpload = await this.db
       .selectFrom('uploads')
       .where('key', '=', key)
       .where('version', '=', version)
+      .where('scope', '=', scope)
+      .where('repoId', '=', repoId)
       .select('id')
       .executeTakeFirst()
     if (existingUpload) return
@@ -324,6 +349,7 @@ export class Storage {
         key,
         version,
         scope,
+        repoId,
         lastPartUploadedAt: null,
         finishedPartUploadCount: 0,
         startedPartUploadCount: 0,
@@ -337,10 +363,12 @@ export class Storage {
     keys: [primaryKey, ...restoreKeys],
     version,
     scopes,
+    repoId,
   }: {
     keys: [string, ...string[]]
     version: string
     scopes: string[]
+    repoId: string
   }) {
     for (const scope of scopes) {
       const exactPrimaryMatch = await this.db
@@ -348,6 +376,7 @@ export class Storage {
         .where('key', '=', primaryKey)
         .where('version', '=', version)
         .where('scope', '=', scope)
+        .where('repoId', '=', repoId)
         .selectAll()
         .executeTakeFirst()
       if (exactPrimaryMatch)
@@ -361,6 +390,7 @@ export class Storage {
         .where('key', 'like', `${primaryKey}%`)
         .where('version', '=', version)
         .where('scope', '=', scope)
+        .where('repoId', '=', repoId)
         .orderBy('cache_entries.updatedAt', 'desc')
         .selectAll()
         .executeTakeFirst()
@@ -379,6 +409,7 @@ export class Storage {
           .where('key', '=', key)
           .where('version', '=', version)
           .where('scope', '=', scope)
+          .where('repoId', '=', repoId)
           .orderBy('updatedAt', 'desc')
           .selectAll()
           .executeTakeFirst()
@@ -393,6 +424,7 @@ export class Storage {
           .where('key', 'like', `${key}%`)
           .where('version', '=', version)
           .where('scope', '=', scope)
+          .where('repoId', '=', repoId)
           .orderBy('updatedAt', 'desc')
           .selectAll()
           .executeTakeFirst()

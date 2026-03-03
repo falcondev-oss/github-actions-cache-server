@@ -114,5 +114,46 @@ export function migrations(driver: Env['DB_DRIVER']) {
         await db.schema.alterTable('uploads').dropColumn('scope').execute()
       },
     },
+    $3_repoId: {
+      async up(db) {
+        const repoIdColumnType = driver === 'mysql' ? 'varchar(255)' : 'text'
+
+        // clear all existing entries
+        const adapter = await Storage.getAdapterFromEnv()
+
+        await Promise.all([
+          db.deleteFrom('cache_entries').execute(),
+          db.deleteFrom('storage_locations').execute(),
+          db.deleteFrom('uploads').execute(),
+          adapter.clear(),
+        ])
+
+        await db.schema
+          .alterTable('cache_entries')
+          .addColumn('repoId', repoIdColumnType, (col) => col.notNull())
+          .execute()
+        await db.schema
+          .createIndex('idx_cache_entries_repoId')
+          .on('cache_entries')
+          .columns(['repoId'])
+          .execute()
+
+        await db.schema
+          .alterTable('uploads')
+          .addColumn('repoId', repoIdColumnType, (col) => col.notNull())
+          .execute()
+        await db.schema
+          .createIndex('idx_uploads_repoId')
+          .on('uploads')
+          .columns(['repoId'])
+          .execute()
+      },
+      async down(db) {
+        await db.schema.dropIndex('idx_cache_entries_repoId').execute()
+        await db.schema.alterTable('cache_entries').dropColumn('repoId').execute()
+        await db.schema.dropIndex('idx_uploads_repoId').execute()
+        await db.schema.alterTable('uploads').dropColumn('repoId').execute()
+      },
+    },
   } satisfies Record<string, Migration>
 }
