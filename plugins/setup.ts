@@ -26,11 +26,11 @@ export default defineNitroPlugin(async (nitro) => {
     }
   }
 
-  await getDatabase().catch(err => {
+  await getDatabase().catch((err) => {
     logger.error('Failed to initialize database:', err)
     process.exit(1)
   })
-  const storage = await getStorage().catch(err => {
+  const storage = await getStorage().catch((err) => {
     logger.error('Failed to initialize storage:', err)
     process.exit(1)
   })
