@@ -16,6 +16,7 @@ describe(`save and restore cache with @actions/cache package`, () => {
     process.env.ACTIONS_CACHE_SERVICE_V2 = 'true'
     process.env.ACTIONS_RUNTIME_TOKEN = await new SignJWT({
       ac: JSON.stringify([{ Scope: 'refs/heads/main', Permission: 3 }]),
+      repository_id: '123',
     })
       .setProtectedHeader({ alg: 'HS256' })
       .sign(crypto.createSecretKey('mock-secret-key', 'ascii'))

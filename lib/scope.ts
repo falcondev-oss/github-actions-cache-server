@@ -40,7 +40,7 @@ function parseJsonScopes(json: string) {
   }
 }
 
-export async function getCacheScopes(event: H3Event) {
+export async function getCacheScope(event: H3Event) {
   const token = getBearerToken(event)
   if (!token)
     throw createError({ statusCode: 401, message: 'Authorization header missing or malformed' })
@@ -61,5 +61,12 @@ export async function getCacheScopes(event: H3Event) {
   if (!hasAtLeast(scopes, 1))
     throw createError({ statusCode: 401, message: 'Token does not contain any cache scopes' })
 
-  return scopes
+  const repoId = decoded.repository_id
+  if (!repoId || typeof repoId !== 'string')
+    throw createError({ statusCode: 401, message: 'Token does not contain repository id' })
+
+  return {
+    scopes,
+    repoId,
+  }
 }

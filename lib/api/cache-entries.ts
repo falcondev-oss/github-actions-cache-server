@@ -47,6 +47,7 @@ export const cacheEntriesRouter = base
             .optional()
             .describe('Optional fallback keys to try if the primary key does not match'),
           scopes: z.array(z.string()).describe('Scopes to search within, checked in order'),
+          repoId: z.string().describe('Repository id to match the cache entry against'),
           version: z.string().describe('Cache version identifier'),
         }),
       )
@@ -67,6 +68,7 @@ export const cacheEntriesRouter = base
           keys: [input.primaryKey, ...(input.restoreKeys ?? [])],
           scopes: input.scopes,
           version: input.version,
+          repoId: input.repoId,
         })
 
         return cacheEntry ?? null
@@ -84,6 +86,7 @@ export const cacheEntriesRouter = base
           key: z.string().optional().describe('Filter by exact cache key'),
           version: z.string().optional().describe('Filter by exact cache version'),
           scope: z.string().optional().describe('Filter by exact cache scope'),
+          repoId: z.string().optional().describe('Filter by exact repository id'),
           itemsPerPage: z
             .number()
             .int()
@@ -106,6 +109,7 @@ export const cacheEntriesRouter = base
         if (input.key) query.where('key', '=', input.key)
         if (input.version) query.where('version', '=', input.version)
         if (input.scope) query.where('scope', '=', input.scope)
+        if (input.repoId) query.where('repoId', '=', input.repoId)
 
         const [cacheEntries, countResult] = await Promise.all([
           query
@@ -151,6 +155,7 @@ export const cacheEntriesRouter = base
           key: z.string().optional().describe('Filter by exact cache key'),
           version: z.string().optional().describe('Filter by exact cache version'),
           scope: z.string().optional().describe('Filter by exact cache scope'),
+          repoId: z.string().optional().describe('Filter by exact repository id'),
         }),
       )
       .handler(async ({ input, context }) => {

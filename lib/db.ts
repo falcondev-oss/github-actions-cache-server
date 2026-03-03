@@ -17,6 +17,7 @@ export const cacheEntrySchema = z.object({
   key: z.string(),
   version: z.string(),
   scope: z.string(),
+  repoId: z.string(),
   updatedAt: z.number(),
   locationId: z.string(),
 })
@@ -38,6 +39,7 @@ export const uploadSchema = z.object({
   key: z.string(),
   version: z.string(),
   scope: z.string(),
+  repoId: z.string(),
   createdAt: z.number(),
   lastPartUploadedAt: z.number().nullable(),
   startedPartUploadCount: z.number(),
@@ -55,6 +57,9 @@ export interface Database {
 const dbLogger = logger.withTag('db')
 
 export const getDatabase = createSingletonPromise(async () => {
+  if (process.env.NODE_CAGED === 'true' && env.DB_DRIVER === 'sqlite')
+    throw new Error('SQLite is not supported with `caged` image variant.')
+
   const dialect = await match(env)
     .with({ DB_DRIVER: 'postgres' }, async (env) => {
       const pool = new pg.Pool(

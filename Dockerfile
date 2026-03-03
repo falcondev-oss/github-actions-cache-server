@@ -21,10 +21,19 @@ RUN pnpm run build
 
 FROM ${BASE_IMAGE} AS runner
 
+ARG BASE_IMAGE
+
 ENV NITRO_CLUSTER_WORKERS=1
+ENV NODE_CAGED=false
 
 WORKDIR /app
 
 COPY --from=builder /app/.output ./
 
-CMD ["node", "--expose-gc", "/app/server/index.mjs"]
+RUN if echo "$BASE_IMAGE" | grep -q "node-caged"; then \
+			echo "export NODE_CAGED=true" > /app/.runtime-env; \
+		else \
+			echo "export NODE_CAGED=false" > /app/.runtime-env; \
+		fi
+
+CMD ["sh", "-c", ". /app/.runtime-env && exec node --expose-gc /app/server/index.mjs"]
