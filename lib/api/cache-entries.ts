@@ -43,10 +43,11 @@ export const cacheEntriesRouter = base
         z.object({
           primaryKey: z.string().describe('The primary cache key to match against'),
           restoreKeys: z
-            .array(z.string())
-            .optional()
+            .preprocess((val) => (Array.isArray(val) ? val : [val]), z.array(z.string()).optional())
             .describe('Optional fallback keys to try if the primary key does not match'),
-          scopes: z.array(z.string()).describe('Scopes to search within, checked in order'),
+          scopes: z
+            .preprocess((val) => (Array.isArray(val) ? val : [val]), z.array(z.string()))
+            .describe('Scopes to search within, checked in order'),
           repoId: z.string().describe('Repository id to match the cache entry against'),
           version: z.string().describe('Cache version identifier'),
         }),
@@ -66,7 +67,7 @@ export const cacheEntriesRouter = base
       .handler(async ({ input, context }) => {
         const cacheEntry = await context.storage.matchCacheEntry({
           keys: [input.primaryKey, ...(input.restoreKeys ?? [])],
-          scopes: input.scopes,
+          scopes: Array.isArray(input.scopes) ? input.scopes : [input.scopes],
           version: input.version,
           repoId: input.repoId,
         })
