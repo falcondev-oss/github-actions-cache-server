@@ -26,6 +26,9 @@ importers:
       '@orpc/client':
         specifier: ^1.13.6
         version: 1.13.6
+      '@orpc/json-schema':
+        specifier: ^1.13.6
+        version: 1.13.6(crossws@0.3.5)
       '@orpc/openapi':
         specifier: ^1.13.6
         version: 1.13.6(crossws@0.3.5)

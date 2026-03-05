@@ -1,4 +1,5 @@
 import { onError } from '@orpc/client'
+import { SmartCoercionPlugin } from '@orpc/json-schema'
 import { OpenAPIHandler } from '@orpc/openapi/fetch'
 import { OpenAPIReferencePlugin } from '@orpc/openapi/plugins'
 import { CORSPlugin } from '@orpc/server/plugins'
@@ -45,6 +46,9 @@ const handler = new OpenAPIHandler(router, {
       },
       docsPath: '/_docs',
       specPath: '/_docs/spec.json',
+    }),
+    new SmartCoercionPlugin({
+      schemaConverters: [new ZodToJsonSchemaConverter()],
     }),
   ],
   interceptors: [
