@@ -26,6 +26,7 @@ export default defineTask({
             exists((eb) =>
               eb
                 .selectFrom('cache_entries')
+                .select('id')
                 .where('cache_entries.locationId', '=', eb.ref('storage_locations.id')),
             ),
           ),
