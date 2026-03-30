@@ -34,6 +34,6 @@ export default defineEventHandler(async (event) => {
 
   return {
     ok: true,
-    signed_upload_url: `${env.API_BASE_URL}/upload/${upload.id}`,
+    signed_upload_url: `${env.API_BASE_URL}/devstoreaccount1/upload/${upload.id}`,
   }
 })
