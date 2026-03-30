@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { createSingletonPromise } from '@antfu/utils'
 import SQLite from 'better-sqlite3'
+import { createHooks } from 'hookable'
 import { Kysely, Migrator, MysqlDialect, PostgresDialect, SqliteDialect } from 'kysely'
 import { createPool } from 'mysql2'
 import pg from 'pg'
@@ -135,11 +136,14 @@ export const getDatabase = createSingletonPromise(async () => {
   })
 
   logger.info('Migrating database...')
+  const hooks = createHooks<{
+    afterMigrate: () => Promise<void>
+  }>()
   const migrator = new Migrator({
     db,
     provider: {
       async getMigrations() {
-        return migrations(env.DB_DRIVER)
+        return migrations(env.DB_DRIVER, hooks)
       },
     },
   })
@@ -149,6 +153,7 @@ export const getDatabase = createSingletonPromise(async () => {
     // eslint-disable-next-line unicorn/no-process-exit
     process.exit(1)
   }
+  await hooks.callHook('afterMigrate')
   logger.debug('Migration results', results)
   logger.success('Database migrated')
 
