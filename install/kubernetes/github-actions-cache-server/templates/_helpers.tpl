@@ -122,7 +122,7 @@ Generate environment variables from config values.
 - name: PORT
   value: "3000"
 - name: API_BASE_URL
-  value: {{ default (printf "http://%s.%s.svc.cluster.local" (include "github-actions-cache-server.fullname" .) .Release.Namespace) .Values.config.apiBaseUrl | quote }}
+  value: {{ default (printf "http://%s.%s.svc.cluster.local:%v" (include "github-actions-cache-server.fullname" .) .Release.Namespace .Values.service.port) .Values.config.apiBaseUrl | quote }}
 - name: ENABLE_DIRECT_DOWNLOADS
   value: {{ .Values.config.enableDirectDownloads | quote }}
 - name: CACHE_CLEANUP_OLDER_THAN_DAYS
