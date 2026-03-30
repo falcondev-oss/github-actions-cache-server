@@ -1,8 +1,14 @@
+import type { Hookable } from 'hookable'
 import type { Migration } from 'kysely'
 import type { Env } from './schemas'
 import { Storage } from './storage'
 
-export function migrations(driver: Env['DB_DRIVER']) {
+export function migrations(
+  driver: Env['DB_DRIVER'],
+  hooks: Hookable<{
+    afterMigrate: () => Promise<void>
+  }>,
+) {
   return {
     $0_init: {
       async up(db) {
@@ -81,14 +87,10 @@ export function migrations(driver: Env['DB_DRIVER']) {
       async up(db) {
         const scopeColumnType = driver === 'mysql' ? 'varchar(255)' : 'text'
 
-        // clear all existing entries
-        const adapter = await Storage.getAdapterFromEnv()
-
         await Promise.all([
           db.deleteFrom('cache_entries').execute(),
           db.deleteFrom('storage_locations').execute(),
           db.deleteFrom('uploads').execute(),
-          adapter.clear(),
         ])
 
         await db.schema
@@ -118,15 +120,16 @@ export function migrations(driver: Env['DB_DRIVER']) {
       async up(db) {
         const repoIdColumnType = driver === 'mysql' ? 'varchar(255)' : 'text'
 
-        // clear all existing entries
-        const adapter = await Storage.getAdapterFromEnv()
-
         await Promise.all([
           db.deleteFrom('cache_entries').execute(),
           db.deleteFrom('storage_locations').execute(),
           db.deleteFrom('uploads').execute(),
-          adapter.clear(),
         ])
+
+        hooks.hook('afterMigrate', async () => {
+          const adapter = await Storage.getAdapterFromEnv()
+          await adapter.clear()
+        })
 
         await db.schema
           .alterTable('cache_entries')
