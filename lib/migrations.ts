@@ -1,4 +1,4 @@
-import type { Hookable, Hooks } from 'hookable'
+import type { Hookable } from 'hookable'
 import type { Migration } from 'kysely'
 import type { Env } from './schemas'
 import { Storage } from './storage'
