@@ -30,6 +30,14 @@ import { match } from 'ts-pattern'
 import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
+import { logger } from './logger'
+
+export class ObjectNotFoundError extends Error {
+  constructor(objectName: string) {
+    super(`Object not found in storage: ${objectName}`)
+    this.name = 'ObjectNotFoundError'
+  }
+}
 
 export class Storage {
   adapter
@@ -208,22 +216,24 @@ export class Storage {
       .where('id', '=', storageLocation.id)
       .execute()
 
-    if (storageLocation.mergedAt || storageLocation.mergeStartedAt)
-      return this.downloadFromCacheEntryLocation(storageLocation)
-
-    await this.db
-      .updateTable('storage_locations')
-      .set({
-        mergeStartedAt: Date.now(),
-      })
-      .where('id', '=', storageLocation.id)
-      .execute()
-
-    const responseStream = new PassThrough()
-    const mergerStream = new PassThrough()
-
     try {
-      const promise = this.adapter
+      if (storageLocation.mergedAt || storageLocation.mergeStartedAt)
+        return await this.downloadFromCacheEntryLocation(storageLocation)
+
+      await this.ensurePartsExist(storageLocation)
+
+      await this.db
+        .updateTable('storage_locations')
+        .set({
+          mergeStartedAt: Date.now(),
+        })
+        .where('id', '=', storageLocation.id)
+        .execute()
+
+      const responseStream = new PassThrough()
+      const mergerStream = new PassThrough()
+
+      const mergePromise = this.adapter
         .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
         .then(async () => {
           await this.db
@@ -255,31 +265,36 @@ export class Storage {
             .execute()
           mergerStream.destroy()
         })
-      this.mergeStreamPromises.add(promise)
-      promise.finally(() => this.mergeStreamPromises.delete(promise))
+      this.mergeStreamPromises.add(mergePromise)
+      mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
+
+      this.pumpPartsToStreams(storageLocation, responseStream, mergerStream).catch((err) => {
+        responseStream.destroy(err)
+        mergerStream.destroy(err)
+        if (err instanceof ObjectNotFoundError)
+          logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
+      })
+
+      return responseStream
     } catch (err) {
-      await this.db
-        .updateTable('storage_locations')
-        .set({
-          mergedAt: null,
-          mergeStartedAt: null,
-        })
-        .where('id', '=', storageLocation.id)
-        .execute()
+      if (err instanceof ObjectNotFoundError) {
+        logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
+        return
+      }
       throw err
     }
+  }
 
-    this.pumpPartsToStreams(storageLocation, responseStream, mergerStream).catch((err) => {
-      responseStream.destroy(err)
-      mergerStream.destroy(err)
-    })
-
-    return responseStream
+  private async ensurePartsExist(location: StorageLocation) {
+    const partsFolder = `${location.folderName}/parts`
+    const actualPartCount = await this.adapter.countFilesInFolder(partsFolder)
+    if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
   }
 
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
     if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
 
+    await this.ensurePartsExist(location)
     return Readable.from(this.streamParts(location))
   }
 
@@ -522,15 +537,20 @@ class S3Adapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    const response = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: `${this.keyPrefix}/${objectName}`,
-      }),
-    )
-    if (!response.Body) throw new Error('No body in S3 get object response')
+    try {
+      const response = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: `${this.keyPrefix}/${objectName}`,
+        }),
+      )
+      if (!response.Body) throw new Error('No body in S3 get object response')
 
-    return response.Body as Readable
+      return response.Body as Readable
+    } catch (err: any) {
+      if (err.name === 'NoSuchKey') throw new ObjectNotFoundError(objectName)
+      throw err
+    }
   }
 
   async deleteFolder(folderName: string) {
@@ -629,7 +649,13 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    return createReadStream(path.join(this.rootFolder, objectName))
+    const filePath = path.join(this.rootFolder, objectName)
+    try {
+      await fs.access(filePath)
+    } catch {
+      throw new ObjectNotFoundError(objectName)
+    }
+    return createReadStream(filePath)
   }
 
   async deleteFolder(folderName: string) {
@@ -656,11 +682,15 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async countFilesInFolder(folderName: string) {
-    const dir = await fs.readdir(path.join(this.rootFolder, folderName), {
-      withFileTypes: true,
-    })
-
-    return dir.filter((item) => item.isFile()).length
+    try {
+      const dir = await fs.readdir(path.join(this.rootFolder, folderName), {
+        withFileTypes: true,
+      })
+      return dir.filter((item) => item.isFile()).length
+    } catch (err: any) {
+      if (err.code === 'ENOENT') return 0
+      throw err
+    }
   }
 }
 
@@ -690,7 +720,10 @@ class GcsAdapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    return this.bucket.file(`${this.keyPrefix}/${objectName}`).createReadStream()
+    const file = this.bucket.file(`${this.keyPrefix}/${objectName}`)
+    const [exists] = await file.exists()
+    if (!exists) throw new ObjectNotFoundError(objectName)
+    return file.createReadStream()
   }
 
   async deleteFolder(folderName: string) {

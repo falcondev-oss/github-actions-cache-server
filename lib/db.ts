@@ -13,6 +13,8 @@ import { env } from './env'
 import { logger } from './logger'
 import { migrations } from './migrations'
 
+pg.types.setTypeParser(20, Number)
+
 export const cacheEntrySchema = z.object({
   id: z.string(),
   key: z.string(),
