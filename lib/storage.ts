@@ -634,7 +634,14 @@ class FileSystemAdapter implements StorageAdapter {
   private rootFolder
 
   constructor({ rootFolder }: { rootFolder: string }) {
-    this.rootFolder = rootFolder
+    this.rootFolder = path.resolve(rootFolder)
+  }
+
+  private safePath(name: string) {
+    const resolved = path.resolve(this.rootFolder, name)
+    if (!resolved.startsWith(this.rootFolder + path.sep) && resolved !== this.rootFolder)
+      throw new Error(`Invalid object name`)
+    return resolved
   }
 
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'filesystem' }>) {
@@ -649,7 +656,7 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    const filePath = path.join(this.rootFolder, objectName)
+    const filePath = this.safePath(objectName)
     try {
       await fs.access(filePath)
     } catch {
@@ -659,7 +666,7 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async deleteFolder(folderName: string) {
-    await fs.rm(path.join(this.rootFolder, folderName), {
+    await fs.rm(this.safePath(folderName), {
       recursive: true,
       force: true,
     })
@@ -676,14 +683,14 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async uploadStream(objectName: string, stream: Readable) {
-    const filePath = path.join(this.rootFolder, objectName)
+    const filePath = this.safePath(objectName)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await pipeline(stream, createWriteStream(filePath))
   }
 
   async countFilesInFolder(folderName: string) {
     try {
-      const dir = await fs.readdir(path.join(this.rootFolder, folderName), {
+      const dir = await fs.readdir(this.safePath(folderName), {
         withFileTypes: true,
       })
       return dir.filter((item) => item.isFile()).length
