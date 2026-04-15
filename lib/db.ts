@@ -13,6 +13,7 @@ import { env } from './env'
 import { logger } from './logger'
 import { migrations } from './migrations'
 
+// we only really use bigint for timestamps, so we can safely parse them as numbers
 pg.types.setTypeParser(20, Number)
 
 export const cacheEntrySchema = z.object({

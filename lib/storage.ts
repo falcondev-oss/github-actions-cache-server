@@ -32,6 +32,13 @@ import { env } from './env'
 import { generateNumberId } from './helpers'
 import { logger } from './logger'
 
+function escapeLikePattern(value: string) {
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('%', String.raw`\%`)
+    .replaceAll('_', String.raw`\_`)
+}
+
 export class ObjectNotFoundError extends Error {
   constructor(objectName: string) {
     super(`Object not found in storage: ${objectName}`)
@@ -402,7 +409,9 @@ export class Storage {
 
       const prefixedPrimaryMatch = await this.db
         .selectFrom('cache_entries')
-        .where('key', 'like', `${primaryKey}%`)
+        .where(
+          sql<boolean>`${sql.ref('key')} like ${`${escapeLikePattern(primaryKey)}%`} escape ${'\\'}`,
+        )
         .where('version', '=', version)
         .where('scope', '=', scope)
         .where('repoId', '=', repoId)
@@ -436,7 +445,9 @@ export class Storage {
 
         const prefixedMatch = await this.db
           .selectFrom('cache_entries')
-          .where('key', 'like', `${key}%`)
+          .where(
+            sql<boolean>`${sql.ref('key')} like ${`${escapeLikePattern(key)}%`} escape ${'\\'}`,
+          )
           .where('version', '=', version)
           .where('scope', '=', scope)
           .where('repoId', '=', repoId)
