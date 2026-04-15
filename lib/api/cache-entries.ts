@@ -106,11 +106,11 @@ export const cacheEntriesRouter = base
         }),
       )
       .handler(async ({ input, context }) => {
-        const query = context.db.selectFrom('cache_entries')
-        if (input.key) query.where('key', '=', input.key)
-        if (input.version) query.where('version', '=', input.version)
-        if (input.scope) query.where('scope', '=', input.scope)
-        if (input.repoId) query.where('repoId', '=', input.repoId)
+        let query = context.db.selectFrom('cache_entries')
+        if (input.key) query = query.where('key', '=', input.key)
+        if (input.version) query = query.where('version', '=', input.version)
+        if (input.scope) query = query.where('scope', '=', input.scope)
+        if (input.repoId) query = query.where('repoId', '=', input.repoId)
 
         const [cacheEntries, countResult] = await Promise.all([
           query
@@ -160,10 +160,10 @@ export const cacheEntriesRouter = base
         }),
       )
       .handler(async ({ input, context }) => {
-        const query = context.db.deleteFrom('cache_entries')
-        if (input.key) query.where('key', '=', input.key)
-        if (input.version) query.where('version', '=', input.version)
-        if (input.scope) query.where('scope', '=', input.scope)
+        let query = context.db.deleteFrom('cache_entries')
+        if (input.key) query = query.where('key', '=', input.key)
+        if (input.version) query = query.where('version', '=', input.version)
+        if (input.scope) query = query.where('scope', '=', input.scope)
 
         await query.execute()
         context.event.waitUntil(runTask('cleanup:storage-locations'))
