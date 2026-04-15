@@ -32,6 +32,13 @@ import { env } from './env'
 import { generateNumberId } from './helpers'
 import { logger } from './logger'
 
+function escapeLikePattern(value: string) {
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('%', String.raw`\%`)
+    .replaceAll('_', String.raw`\_`)
+}
+
 export class ObjectNotFoundError extends Error {
   constructor(objectName: string) {
     super(`Object not found in storage: ${objectName}`)
@@ -402,7 +409,9 @@ export class Storage {
 
       const prefixedPrimaryMatch = await this.db
         .selectFrom('cache_entries')
-        .where('key', 'like', `${primaryKey}%`)
+        .where(
+          sql<boolean>`${sql.ref('key')} like ${`${escapeLikePattern(primaryKey)}%`} escape ${'\\'}`,
+        )
         .where('version', '=', version)
         .where('scope', '=', scope)
         .where('repoId', '=', repoId)
@@ -436,7 +445,9 @@ export class Storage {
 
         const prefixedMatch = await this.db
           .selectFrom('cache_entries')
-          .where('key', 'like', `${key}%`)
+          .where(
+            sql<boolean>`${sql.ref('key')} like ${`${escapeLikePattern(key)}%`} escape ${'\\'}`,
+          )
           .where('version', '=', version)
           .where('scope', '=', scope)
           .where('repoId', '=', repoId)
@@ -634,7 +645,14 @@ class FileSystemAdapter implements StorageAdapter {
   private rootFolder
 
   constructor({ rootFolder }: { rootFolder: string }) {
-    this.rootFolder = rootFolder
+    this.rootFolder = path.resolve(rootFolder)
+  }
+
+  private safePath(name: string) {
+    const resolved = path.resolve(this.rootFolder, name)
+    if (!resolved.startsWith(this.rootFolder + path.sep) && resolved !== this.rootFolder)
+      throw new Error(`Invalid object name`)
+    return resolved
   }
 
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'filesystem' }>) {
@@ -649,7 +667,7 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async createDownloadStream(objectName: string) {
-    const filePath = path.join(this.rootFolder, objectName)
+    const filePath = this.safePath(objectName)
     try {
       await fs.access(filePath)
     } catch {
@@ -659,7 +677,7 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async deleteFolder(folderName: string) {
-    await fs.rm(path.join(this.rootFolder, folderName), {
+    await fs.rm(this.safePath(folderName), {
       recursive: true,
       force: true,
     })
@@ -676,14 +694,14 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async uploadStream(objectName: string, stream: Readable) {
-    const filePath = path.join(this.rootFolder, objectName)
+    const filePath = this.safePath(objectName)
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await pipeline(stream, createWriteStream(filePath))
   }
 
   async countFilesInFolder(folderName: string) {
     try {
-      const dir = await fs.readdir(path.join(this.rootFolder, folderName), {
+      const dir = await fs.readdir(this.safePath(folderName), {
         withFileTypes: true,
       })
       return dir.filter((item) => item.isFile()).length
