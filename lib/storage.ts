@@ -425,7 +425,7 @@ export class Storage {
           type: 'prefixed-primary' as const,
         }
 
-      if (restoreKeys.length === 0) return
+      if (restoreKeys.length === 0) continue
 
       for (const key of restoreKeys) {
         const exactMatch = await this.db
