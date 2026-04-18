@@ -73,4 +73,37 @@ describe('stale cache entry handling (missing storage objects)', () => {
       expect(missKey2).toBeUndefined()
     },
   )
+
+  test(
+    'falls back to a valid restore key when the best match has missing storage',
+    { timeout: 30_000 },
+    async () => {
+      // Seed an entry we will later wipe from storage (keeping the DB row).
+      const staleContents = crypto.randomBytes(1024)
+      await fs.writeFile(testFilePath, staleContents)
+      await saveCache([testFilePath], 'restore-fallback-stale')
+      await fs.rm(testFilePath)
+
+      // Let any background merge settle before wiping storage.
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      await adapter.clear()
+
+      // Seed a second entry whose storage is intact. Because this row is the
+      // most recently updated, matchCacheEntry prefers 'restore-fallback-stale'
+      // (our first restore key) only if we put it first; to force the stale
+      // row to win we list it ahead of the valid one in restoreKeys.
+      const validContents = crypto.randomBytes(1024)
+      await fs.writeFile(testFilePath, validContents)
+      await saveCache([testFilePath], 'restore-fallback-valid')
+      await fs.rm(testFilePath)
+
+      // Primary miss, restore keys: stale first (DB row but no storage), then valid.
+      // The fix must purge the stale row and fall through to the valid one.
+      const hitKey = await restoreCache([testFilePath], 'restore-fallback-missing-primary', [
+        'restore-fallback-stale',
+        'restore-fallback-valid',
+      ])
+      expect(hitKey).toBe('restore-fallback-valid')
+    },
+  )
 })
