@@ -17,6 +17,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -465,32 +466,59 @@ export class Storage {
   }
 
   async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.matchCacheEntry>[0]) {
-    const cacheEntry = await this.matchCacheEntry(args)
-    if (!cacheEntry) return
+    // Retry matching: if the best match points at missing storage (e.g. the
+    // backend was wiped, or an upload never finalized), purge that entry and
+    // fall back to the next candidate. Without this, BuildKit gets a download
+    // URL that 404s mid-build instead of a clean cache miss.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const cacheEntry = await this.matchCacheEntry(args)
+      if (!cacheEntry) return
 
-    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
+      const location = await this.db
+        .selectFrom('storage_locations')
+        .where('id', '=', cacheEntry.match.locationId)
+        .select(['folderName', 'mergedAt', 'partCount', 'partsDeletedAt'])
+        .executeTakeFirst()
 
-    if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl)
-      return {
-        downloadUrl: defaultUrl,
-        cacheEntry: cacheEntry.match,
+      if (!location || !(await this.storageHasData(location))) {
+        logger.warn(
+          `Cache entry ${cacheEntry.match.id} (${cacheEntry.match.key}) points at missing storage, purging.`,
+        )
+        await this.db.deleteFrom('cache_entries').where('id', '=', cacheEntry.match.id).execute()
+        continue
       }
 
-    const location = await this.db
-      .selectFrom('storage_locations')
-      .where('id', '=', cacheEntry.match.locationId)
-      .select(['folderName', 'mergedAt'])
-      .executeTakeFirst()
-    if (!location) throw new Error('Storage location not found')
+      const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
 
-    const downloadUrl = location.mergedAt
-      ? await this.adapter.createDownloadUrl(`${location.folderName}/merged`)
-      : defaultUrl
+      if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl)
+        return {
+          downloadUrl: defaultUrl,
+          cacheEntry: cacheEntry.match,
+        }
 
-    return {
-      downloadUrl,
-      cacheEntry: cacheEntry.match,
+      const downloadUrl = location.mergedAt
+        ? await this.adapter.createDownloadUrl(`${location.folderName}/merged`)
+        : defaultUrl
+
+      return {
+        downloadUrl,
+        cacheEntry: cacheEntry.match,
+      }
     }
+  }
+
+  private async storageHasData(location: {
+    folderName: string
+    mergedAt: number | null
+    partCount: number
+    partsDeletedAt: number | null
+  }) {
+    if (location.mergedAt) return this.adapter.objectExists(`${location.folderName}/merged`)
+
+    if (location.partsDeletedAt) return false
+
+    const actualPartCount = await this.adapter.countFilesInFolder(`${location.folderName}/parts`)
+    return actualPartCount >= location.partCount
   }
 }
 
@@ -501,6 +529,7 @@ interface StorageAdapter {
   uploadStream(objectName: string, stream: Readable): Promise<void>
   deleteFolder(folderName: string): Promise<void>
   countFilesInFolder(folderName: string): Promise<number>
+  objectExists(objectName: string): Promise<boolean>
   createDownloadUrl?(objectName: string): Promise<string>
   clear(): Promise<void>
 }
@@ -627,6 +656,26 @@ class S3Adapter implements StorageAdapter {
     return listResponse.KeyCount ?? 0
   }
 
+  async objectExists(objectName: string) {
+    try {
+      await this.s3.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: `${this.keyPrefix}/${objectName}`,
+        }),
+      )
+      return true
+    } catch (err: any) {
+      if (
+        err.name === 'NotFound' ||
+        err.name === 'NoSuchKey' ||
+        err.$metadata?.httpStatusCode === 404
+      )
+        return false
+      throw err
+    }
+  }
+
   async createDownloadUrl(objectName: string) {
     return getSignedUrl(
       this.s3,
@@ -710,6 +759,15 @@ class FileSystemAdapter implements StorageAdapter {
       throw err
     }
   }
+
+  async objectExists(objectName: string) {
+    try {
+      await fs.access(this.safePath(objectName))
+      return true
+    } catch {
+      return false
+    }
+  }
 }
 
 class GcsAdapter implements StorageAdapter {
@@ -775,6 +833,11 @@ class GcsAdapter implements StorageAdapter {
         autoPaginate: true,
       })
       .then((res) => res[0].length)
+  }
+
+  async objectExists(objectName: string) {
+    const [exists] = await this.bucket.file(`${this.keyPrefix}/${objectName}`).exists()
+    return exists
   }
 
   async createDownloadUrl(objectName: string) {
