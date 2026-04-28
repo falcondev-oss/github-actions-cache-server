@@ -1,5 +1,6 @@
 import { Readable } from 'node:stream'
 import { z } from 'zod'
+import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
@@ -24,5 +25,19 @@ export default defineEventHandler(async (event) => {
       message: 'Cache file not found',
     })
 
-  return sendStream(event, Readable.toWeb(stream) as ReadableStream)
+  try {
+    await sendStream(event, Readable.toWeb(stream) as ReadableStream)
+  } catch (err) {
+    // Once the response has started flushing, we can't surface stream errors
+    // as an HTTP error — Nitro's default error handler would call
+    // `setResponseHeaders` after headers were already sent and crash with
+    // ERR_HTTP_HEADERS_SENT (logged as an unhandled error). Client aborts on
+    // long downloads are expected (cancelled jobs, parallel runners), so we
+    // log and swallow once headers are out.
+    if (event.node.res.headersSent) {
+      logger.debug(`Client aborted /download/${cacheEntryId}: ${(err as Error).message}`)
+      return
+    }
+    throw err
+  }
 })
