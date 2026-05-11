@@ -77,6 +77,7 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     AWS_ACCESS_KEY_ID: 'minioadmin',
     AWS_SECRET_ACCESS_KEY: 'minioadmin',
     AWS_ENDPOINT_URL: 'http://localhost:9000',
+    STORAGE_S3_SOCKET_TIMEOUT_MS: 10000,
   },
   gcs: {
     STORAGE_DRIVER: 'gcs',
