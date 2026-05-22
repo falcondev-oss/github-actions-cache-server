@@ -17,6 +17,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -45,6 +46,8 @@ export class ObjectNotFoundError extends Error {
     this.name = 'ObjectNotFoundError'
   }
 }
+
+export const PARTS_DELETE_GRACE_MS = 15 * 60 * 1000
 
 export class Storage {
   adapter
@@ -250,16 +253,6 @@ export class Storage {
             })
             .where('id', '=', storageLocation.id)
             .execute()
-          await this.db.transaction().execute(async (tx) => {
-            await tx
-              .updateTable('storage_locations')
-              .set({
-                partsDeletedAt: Date.now(),
-              })
-              .where('id', '=', storageLocation.id)
-              .execute()
-            await this.adapter.deleteFolder(`${storageLocation.folderName}/parts`)
-          })
         })
         .catch(async () => {
           await this.db
@@ -278,14 +271,19 @@ export class Storage {
       this.pumpPartsToStreams(storageLocation, responseStream, mergerStream).catch((err) => {
         responseStream.destroy(err)
         mergerStream.destroy(err)
-        if (err instanceof ObjectNotFoundError)
+        if (err instanceof ObjectNotFoundError) {
           logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
+          void this.deleteStaleCacheEntry(cacheEntryId).catch((deleteErr) => {
+            logger.error(`Failed to delete stale cache entry ${cacheEntryId}`, deleteErr)
+          })
+        }
       })
 
       return responseStream
     } catch (err) {
       if (err instanceof ObjectNotFoundError) {
         logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
+        await this.deleteStaleCacheEntry(cacheEntryId)
         return
       }
       throw err
@@ -294,8 +292,17 @@ export class Storage {
 
   private async ensurePartsExist(location: StorageLocation) {
     const partsFolder = `${location.folderName}/parts`
-    const actualPartCount = await this.adapter.countFilesInFolder(partsFolder)
-    if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
+    const partExists = await Promise.all(
+      Array.from({ length: location.partCount }, (_, i) =>
+        this.adapter.fileExists(`${partsFolder}/${i}`),
+      ),
+    )
+    const missingPartIndex = partExists.findIndex((exists) => !exists)
+    if (missingPartIndex !== -1) throw new ObjectNotFoundError(`${partsFolder}/${missingPartIndex}`)
+  }
+
+  private async deleteStaleCacheEntry(cacheEntryId: string) {
+    await this.db.deleteFrom('cache_entries').where('id', '=', cacheEntryId).execute()
   }
 
   private async downloadFromCacheEntryLocation(location: StorageLocation) {
@@ -500,6 +507,7 @@ interface StorageAdapter {
   createDownloadStream(objectName: string): Promise<Readable>
   uploadStream(objectName: string, stream: Readable): Promise<void>
   deleteFolder(folderName: string): Promise<void>
+  fileExists(objectName: string): Promise<boolean>
   countFilesInFolder(folderName: string): Promise<number>
   createDownloadUrl?(objectName: string): Promise<string>
   clear(): Promise<void>
@@ -560,6 +568,26 @@ class S3Adapter implements StorageAdapter {
       return response.Body as Readable
     } catch (err: any) {
       if (err.name === 'NoSuchKey') throw new ObjectNotFoundError(objectName)
+      throw err
+    }
+  }
+
+  async fileExists(objectName: string) {
+    try {
+      await this.s3.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: `${this.keyPrefix}/${objectName}`,
+        }),
+      )
+      return true
+    } catch (err: any) {
+      if (
+        err.name === 'NoSuchKey' ||
+        err.name === 'NotFound' ||
+        err.$metadata?.httpStatusCode === 404
+      )
+        return false
       throw err
     }
   }
@@ -676,6 +704,16 @@ class FileSystemAdapter implements StorageAdapter {
     return createReadStream(filePath)
   }
 
+  async fileExists(objectName: string) {
+    try {
+      await fs.access(this.safePath(objectName))
+      return true
+    } catch (err: any) {
+      if (err.code === 'ENOENT') return false
+      throw err
+    }
+  }
+
   async deleteFolder(folderName: string) {
     await fs.rm(this.safePath(folderName), {
       recursive: true,
@@ -742,6 +780,11 @@ class GcsAdapter implements StorageAdapter {
     const [exists] = await file.exists()
     if (!exists) throw new ObjectNotFoundError(objectName)
     return file.createReadStream()
+  }
+
+  async fileExists(objectName: string) {
+    const [exists] = await this.bucket.file(`${this.keyPrefix}/${objectName}`).exists()
+    return exists
   }
 
   async deleteFolder(folderName: string) {

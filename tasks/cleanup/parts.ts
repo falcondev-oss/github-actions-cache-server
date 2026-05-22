@@ -1,6 +1,6 @@
 import { getDatabase } from '~/lib/db'
 import { env } from '~/lib/env'
-import { getStorage } from '~/lib/storage'
+import { getStorage, PARTS_DELETE_GRACE_MS } from '~/lib/storage'
 
 const itemsPerPage = 10
 
@@ -17,10 +17,12 @@ export default defineTask({
 
     let deletedCount = 0
     let page = 0
+    const deleteBefore = Date.now() - PARTS_DELETE_GRACE_MS
     while (true) {
       const storageLocations = await db
         .selectFrom('storage_locations')
         .where('mergedAt', 'is not', null)
+        .where('mergedAt', '<', deleteBefore)
         .where('partsDeletedAt', 'is', null)
         .select(['folderName', 'id', 'partCount'])
         .limit(itemsPerPage)
