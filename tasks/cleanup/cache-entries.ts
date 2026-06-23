@@ -21,8 +21,15 @@ export default defineTask({
     while (true) {
       const storageLocations = await db
         .selectFrom('storage_locations')
-        .select(['folderName', 'id'])
-        .where('lastDownloadedAt', '<', xDaysAgo)
+        .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
+        .select(['storage_locations.folderName', 'storage_locations.id'])
+        .where((eb) =>
+          eb(
+            eb.fn.coalesce('storage_locations.lastDownloadedAt', 'cache_entries.updatedAt'),
+            '<',
+            xDaysAgo,
+          ),
+        )
         .limit(itemsPerPage)
         .offset(page * itemsPerPage)
         .execute()
