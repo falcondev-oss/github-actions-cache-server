@@ -5,12 +5,11 @@ import type { ReadableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
-import { once } from 'node:events'
 import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import { Agent } from 'node:https'
 import path from 'node:path'
-import { PassThrough, Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createSingletonPromise } from '@antfu/utils'
 import {
@@ -224,65 +223,20 @@ export class Storage {
       .execute()
 
     try {
-      if (storageLocation.mergedAt || storageLocation.mergeStartedAt)
-        return await this.downloadFromCacheEntryLocation(storageLocation)
+      // Already merged: serve the single merged blob directly. (Under the v2
+      // protocol an already-merged entry is handed out as a presigned URL by
+      // getCacheEntryWithDownloadUrl and never reaches this path.)
+      if (storageLocation.mergedAt)
+        return await this.adapter.createDownloadStream(`${storageLocation.folderName}/merged`)
 
       await this.ensurePartsExist(storageLocation)
 
-      await this.db
-        .updateTable('storage_locations')
-        .set({
-          mergeStartedAt: Date.now(),
-        })
-        .where('id', '=', storageLocation.id)
-        .execute()
+      // First download of an unmerged entry kicks off the merge in the
+      // background. The client download below is never coupled to it.
+      if (!storageLocation.mergeStartedAt) await this.tryStartBackgroundMerge(storageLocation)
 
-      const responseStream = new PassThrough()
-      const mergerStream = new PassThrough()
-
-      const mergePromise = this.adapter
-        .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
-        .then(async () => {
-          await this.db
-            .updateTable('storage_locations')
-            .set({
-              mergedAt: Date.now(),
-            })
-            .where('id', '=', storageLocation.id)
-            .execute()
-          await this.db.transaction().execute(async (tx) => {
-            await tx
-              .updateTable('storage_locations')
-              .set({
-                partsDeletedAt: Date.now(),
-              })
-              .where('id', '=', storageLocation.id)
-              .execute()
-            await this.adapter.deleteFolder(`${storageLocation.folderName}/parts`)
-          })
-        })
-        .catch(async () => {
-          await this.db
-            .updateTable('storage_locations')
-            .set({
-              mergedAt: null,
-              mergeStartedAt: null,
-            })
-            .where('id', '=', storageLocation.id)
-            .execute()
-          mergerStream.destroy()
-        })
-      this.mergeStreamPromises.add(mergePromise)
-      mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
-
-      this.pumpPartsToStreams(storageLocation, responseStream, mergerStream).catch((err) => {
-        responseStream.destroy(err)
-        mergerStream.destroy(err)
-        if (err instanceof ObjectNotFoundError)
-          logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
-      })
-
-      return responseStream
+      // Always serve the client straight from the parts at full speed.
+      return Readable.from(this.streamParts(storageLocation))
     } catch (err) {
       if (err instanceof ObjectNotFoundError) {
         logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
@@ -292,38 +246,59 @@ export class Storage {
     }
   }
 
+  /**
+   * Merge an unmerged entry's parts into a single `merged` blob in the
+   * background, reading its own part streams so it never throttles the client
+   * download. Parts are left in place for the `cleanup:parts` task to remove —
+   * deleting them inline would race readers still streaming the parts.
+   */
+  private async tryStartBackgroundMerge(location: StorageLocation) {
+    // Atomically claim the merge: only the request that flips mergeStartedAt
+    // from NULL runs it, so concurrent downloads (across replicas) don't start
+    // duplicate merges.
+    const claim = await this.db
+      .updateTable('storage_locations')
+      .set({
+        mergeStartedAt: Date.now(),
+      })
+      .where('id', '=', location.id)
+      .where('mergeStartedAt', 'is', null)
+      .where('mergedAt', 'is', null)
+      .executeTakeFirst()
+    if (claim.numUpdatedRows === 0n) return
+
+    const mergePromise = this.adapter
+      .uploadStream(`${location.folderName}/merged`, Readable.from(this.streamParts(location)))
+      .then(async () => {
+        await this.db
+          .updateTable('storage_locations')
+          .set({
+            mergedAt: Date.now(),
+          })
+          .where('id', '=', location.id)
+          .execute()
+      })
+      .catch(async (err: unknown) => {
+        logger.warn(
+          `Failed to merge cache entry ${location.folderName}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+        // Release the claim so cleanup:merges / a later download can retry.
+        await this.db
+          .updateTable('storage_locations')
+          .set({
+            mergeStartedAt: null,
+          })
+          .where('id', '=', location.id)
+          .execute()
+      })
+    this.mergeStreamPromises.add(mergePromise)
+    void mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
+  }
+
   private async ensurePartsExist(location: StorageLocation) {
     const partsFolder = `${location.folderName}/parts`
     const actualPartCount = await this.adapter.countFilesInFolder(partsFolder)
     if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
-  }
-
-  private async downloadFromCacheEntryLocation(location: StorageLocation) {
-    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
-
-    await this.ensurePartsExist(location)
-    return Readable.from(this.streamParts(location))
-  }
-
-  private async pumpPartsToStreams(
-    location: StorageLocation,
-    responseStream: PassThrough,
-    mergerStream: PassThrough,
-  ) {
-    if (location.partsDeletedAt) throw new Error('No parts to feed')
-
-    for await (const chunk of this.streamParts(location)) {
-      const responseWantsMore = responseStream.write(chunk)
-      const mergerWantsMore = mergerStream.write(chunk)
-
-      if (!responseWantsMore) await once(responseStream, 'drain')
-      if (!mergerWantsMore) await once(mergerStream, 'drain')
-    }
-
-    responseStream.end()
-    mergerStream.end()
-
-    await globalThis.gc?.()
   }
 
   private async *streamParts(location: StorageLocation) {
