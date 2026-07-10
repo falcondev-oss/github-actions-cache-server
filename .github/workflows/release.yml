@@ -12,6 +12,12 @@ on:
         type: choice
         required: true
         options: [⚙️ patch (v1.0.1), 🧩 minor (v1.1.0), ⭐️ major (v2.0.0)]
+      chart_version:
+        description: Bump Helm chart version
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major]
   push:
     tags:
       - 'v*'
@@ -35,12 +41,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: dev
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
           fetch-depth: 0
 
       - name: 🛤️ Version tag must be on dev branch
         if: github.event_name == 'push'
-        run: git branch --contains ${{ github.ref }} | grep dev
+        run: |
+          if ! git branch --remotes --contains "$GITHUB_SHA" | grep -qE 'origin/dev$'; then
+            echo "::error::Release tag ${{ github.ref_name }} must point to a commit on the dev branch"
+            exit 1
+          fi
 
       - uses: actions/setup-node@v6
         with:
@@ -55,27 +65,40 @@ jobs:
 
           npx bumpp ${{ env[inputs.version] }} -y -r --commit "chore(release): v%s" --no-push
 
-          export VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
-          sed -E "s/^appVersion:.+$/appVersion: '$VERSION'/" -i install/kubernetes/github-actions-cache-server/Chart.yaml
+          export VERSION=$(node -p "require('./package.json').version")
+          node scripts/release-metadata.mjs bump ${{ inputs.chart_version }}
           git stage install/kubernetes/github-actions-cache-server/Chart.yaml
           git commit -n --no-edit --amend
           git tag -f "v$VERSION"
 
-          git push origin dev
-          git push origin --tags
-
           echo "RELEASE_REF=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: ✅ Validate release metadata
+        id: release-metadata
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG_NAME=$(git describe --tags --abbrev=0)
+          fi
+          node scripts/release-metadata.mjs validate "$TAG_NAME"
+          echo "RELEASE_TAG=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: ⬆️ Push release commit and tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git push origin dev
+          git push origin "${{ steps.release-metadata.outputs.RELEASE_TAG }}"
 
       - name: 📥 Create release PR
         id: create-release-pr
         run: |
-          TAG_NAME=$(git describe --tags --abbrev=0)
+          TAG_NAME="${{ steps.release-metadata.outputs.RELEASE_TAG }}"
           echo "RELEASE_TAG=$TAG_NAME" >> "$GITHUB_OUTPUT"
           RELEASE_BRANCH="release/$TAG_NAME"
           echo "RELEASE_BRANCH=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
 
-          git branch $RELEASE_BRANCH dev
-          git push origin $RELEASE_BRANCH
+          git branch "$RELEASE_BRANCH" "$TAG_NAME"
+          git push origin "$RELEASE_BRANCH"
 
           gh pr create --title "$TAG_NAME" \
             --base master --head $RELEASE_BRANCH \
