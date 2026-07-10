@@ -572,34 +572,53 @@ class S3Adapter implements StorageAdapter {
     return this.deleteByPrefix(this.keyPrefix)
   }
 
+  private async *listObjectsByPrefix(prefix: string) {
+    let continuationToken: string | undefined
+
+    do {
+      const response = await this.s3.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        }),
+      )
+
+      yield response
+
+      if (!response.IsTruncated) return
+      if (!response.NextContinuationToken)
+        throw new Error(
+          `S3 listing for prefix "${prefix}" was truncated without a continuation token`,
+        )
+
+      continuationToken = response.NextContinuationToken
+    } while (continuationToken)
+  }
+
   private async deleteByPrefix(prefix: string) {
-    const listResponse = await this.s3.send(
-      new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: prefix,
-      }),
-    )
+    for await (const listResponse of this.listObjectsByPrefix(prefix)) {
+      if (!listResponse.Contents || listResponse.Contents.length === 0) continue
 
-    if (!listResponse.Contents || listResponse.Contents.length === 0) return
-
-    await Promise.all(
-      chunk(
-        listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
-        1000,
-      ).map((chunkedObjects) =>
-        this.s3.send(
-          new DeleteObjectsCommand({
-            Bucket: this.bucket,
-            Delete: {
-              Objects: chunkedObjects.map((obj) => ({
-                Key: obj.Key,
-              })),
-              Quiet: true,
-            },
-          }),
+      await Promise.all(
+        chunk(
+          listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
+          1000,
+        ).map((chunkedObjects) =>
+          this.s3.send(
+            new DeleteObjectsCommand({
+              Bucket: this.bucket,
+              Delete: {
+                Objects: chunkedObjects.map((obj) => ({
+                  Key: obj.Key,
+                })),
+                Quiet: true,
+              },
+            }),
+          ),
         ),
-      ),
-    )
+      )
+    }
   }
 
   async uploadStream(objectName: string, iterator: AsyncIterable<Uint8Array>) {
@@ -617,14 +636,12 @@ class S3Adapter implements StorageAdapter {
   }
 
   async countFilesInFolder(folderName: string) {
-    const listResponse = await this.s3.send(
-      new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: `${this.keyPrefix}/${folderName}/`,
-      }),
-    )
+    let count = 0
 
-    return listResponse.KeyCount ?? 0
+    for await (const listResponse of this.listObjectsByPrefix(`${this.keyPrefix}/${folderName}/`))
+      count += listResponse.Contents?.length ?? 0
+
+    return count
   }
 
   async createDownloadUrl(objectName: string) {
