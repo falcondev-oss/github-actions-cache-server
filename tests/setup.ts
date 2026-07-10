@@ -2,6 +2,7 @@
 import type { ResultPromise } from 'execa'
 
 import type { Nitro } from 'nitropack'
+import type { Server } from 'node:http'
 import type { StartedTestContainer } from 'testcontainers'
 import type { Env, envBaseSchema, envDbDriverSchema, envStorageDriverSchema } from '~/lib/schemas'
 
@@ -16,6 +17,7 @@ import { build, createNitro, prepare } from 'nitropack'
 import { GenericContainer } from 'testcontainers'
 import { match } from 'ts-pattern'
 import { envSchema } from '~/lib/schemas'
+import { startResultsOrigin } from './results-origin'
 
 export const TEST_TEMP_DIR = 'tests/temp'
 
@@ -97,11 +99,16 @@ let server: ResultPromise<{
   node: true
   stdio: 'inherit'
 }>
+let resultsOrigin: Server
 const testContainers: (StartedTestContainer | undefined)[] = []
 export async function setup() {
+  const resultsOriginFixture = await startResultsOrigin()
+  resultsOrigin = resultsOriginFixture.server
+
   Object.assign(
     process.env,
     TESTING_ENV_BASE,
+    { DEFAULT_ACTIONS_RESULTS_URL: resultsOriginFixture.url },
     TESTING_ENV_BY_DB_DRIVER[env.VITEST_DB_DRIVER],
     TESTING_ENV_BY_STORAGE_DRIVER[env.VITEST_STORAGE_DRIVER],
   )
@@ -219,6 +226,9 @@ export async function setup() {
 export async function teardown() {
   await server?.kill()
   await nitro?.close()
+  await new Promise<void>((resolve, reject) =>
+    resultsOrigin?.close((error) => (error ? reject(error) : resolve())),
+  )
   await Promise.all(
     testContainers.map((container) => container?.stop({ remove: true, removeVolumes: true })),
   )

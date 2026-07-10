@@ -1,3 +1,4 @@
+
 # GitHub Actions Cache Server
 
 This context describes the cache data managed by the server throughout its lifecycle.
@@ -36,5 +37,5 @@ _Avoid_: Orphan blob, orphaned storage location
 The transparent forwarding of a Results request that the cache server does not handle, and its response, without interpreting either.
 
 **Default Results Origin**:
-The upstream Results service that receives Results Passthrough requests.
+The upstream GitHub Actions Results service that receives Results Passthrough requests, configured by `DEFAULT_ACTIONS_RESULTS_URL`.
 _Avoid_: Artifact server, fallback server
