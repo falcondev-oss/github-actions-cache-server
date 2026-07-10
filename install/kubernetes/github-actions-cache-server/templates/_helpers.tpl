@@ -127,6 +127,8 @@ Generate environment variables from config values.
   value: {{ .Values.config.enableDirectDownloads | quote }}
 - name: CACHE_CLEANUP_OLDER_THAN_DAYS
   value: {{ .Values.config.cacheCleanupOlderThanDays | quote }}
+- name: ORPHANED_STORAGE_GRACE_PERIOD_HOURS
+  value: {{ .Values.config.orphanedStorageGracePeriodHours | quote }}
 {{- if .Values.config.disableCleanupJobs }}
 - name: DISABLE_CLEANUP_JOBS
   value: "true"

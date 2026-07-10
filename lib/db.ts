@@ -38,6 +38,24 @@ export const storageLocationSchema = z.object({
 })
 export type StorageLocation = z.infer<typeof storageLocationSchema>
 
+export const mergeLeaseSchema = z.object({
+  storageLocationId: z.string(),
+  token: z.string(),
+  expiresAt: z.number(),
+})
+type MergeLease = z.infer<typeof mergeLeaseSchema>
+
+export const storageReaderLeaseScopeSchema = z.enum(['parts', 'storage'])
+export type StorageReaderLeaseScope = z.infer<typeof storageReaderLeaseScopeSchema>
+
+export const storageReaderLeaseSchema = z.object({
+  id: z.string(),
+  storageLocationId: z.string(),
+  scope: storageReaderLeaseScopeSchema,
+  expiresAt: z.number(),
+})
+type StorageReaderLease = z.infer<typeof storageReaderLeaseSchema>
+
 export const uploadSchema = z.object({
   id: z.number(),
   key: z.string(),
@@ -54,6 +72,8 @@ type Upload = z.infer<typeof uploadSchema>
 
 export interface Database {
   cache_entries: CacheEntry
+  merge_leases: MergeLease
+  storage_reader_leases: StorageReaderLease
   storage_locations: StorageLocation
   uploads: Upload
 }

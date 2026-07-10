@@ -14,6 +14,8 @@ import { PassThrough, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createSingletonPromise } from '@antfu/utils'
 import {
+  CopyObjectCommand,
+  DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
@@ -31,6 +33,16 @@ import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
 import { logger } from './logger'
+import {
+  acquireMergeLease,
+  createReaderLease,
+  DIRECT_DOWNLOAD_LEASE_DURATION_MS,
+  LEASE_RENEWAL_MS,
+  releaseMergeLease,
+  releaseReaderLease,
+  renewMergeLease,
+  renewReaderLease,
+} from './storage-leases'
 
 function escapeLikePattern(value: string) {
   return value
@@ -128,22 +140,31 @@ export class Storage {
     if (!upload) return
 
     if (upload.finishedPartUploadCount === 0) {
-      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
-      throw new Error('No parts have been uploaded')
+      return this.abandonUpload(
+        upload.id,
+        upload.folderName,
+        new Error('No parts have been uploaded'),
+      )
     }
 
     if (upload.startedPartUploadCount !== upload.finishedPartUploadCount) {
-      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
-      throw new Error(
-        `Not all parts have been uploaded (only ${upload.finishedPartUploadCount} of ${upload.startedPartUploadCount} parts uploaded)`,
+      return this.abandonUpload(
+        upload.id,
+        upload.folderName,
+        new Error(
+          `Not all parts have been uploaded (only ${upload.finishedPartUploadCount} of ${upload.startedPartUploadCount} parts uploaded)`,
+        ),
       )
     }
 
     const partCount = await this.adapter.countFilesInFolder(`${upload.folderName}/parts`)
     if (partCount !== upload.finishedPartUploadCount) {
-      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
-      throw new Error(
-        `Uploaded part count does not match actual part count in storage (expected ${upload.finishedPartUploadCount} but found ${partCount})`,
+      return this.abandonUpload(
+        upload.id,
+        upload.folderName,
+        new Error(
+          `Uploaded part count does not match actual part count in storage (expected ${upload.finishedPartUploadCount} but found ${partCount})`,
+        ),
       )
     }
 
@@ -169,7 +190,7 @@ export class Storage {
         .where('scope', '=', scope)
         .where('repoId', '=', repoId)
         .innerJoin('storage_locations', 'storage_locations.id', 'cache_entries.locationId')
-        .select(['cache_entries.id', 'cache_entries.locationId', 'storage_locations.folderName'])
+        .select(['cache_entries.id', 'cache_entries.locationId'])
         .executeTakeFirst()
 
       if (existingCacheEntry) {
@@ -181,11 +202,6 @@ export class Storage {
           })
           .where('id', '=', existingCacheEntry.id)
           .execute()
-        await tx
-          .deleteFrom('storage_locations')
-          .where('id', '=', existingCacheEntry.locationId)
-          .execute()
-        await this.adapter.deleteFolder(existingCacheEntry.folderName)
       } else
         await tx
           .insertInto('cache_entries')
@@ -206,14 +222,32 @@ export class Storage {
     return upload
   }
 
+  private async abandonUpload(uploadId: number, folderName: string, reason: Error): Promise<never> {
+    await this.db.deleteFrom('uploads').where('id', '=', uploadId).execute()
+    try {
+      await this.adapter.deleteFolder(folderName)
+    } catch (err) {
+      throw new AggregateError([reason, err], reason.message)
+    }
+    throw reason
+  }
+
   async download(cacheEntryId: string): Promise<Readable | undefined> {
-    const storageLocation = await this.db
-      .selectFrom('storage_locations')
-      .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
-      .where('cache_entries.id', '=', cacheEntryId)
-      .selectAll('storage_locations')
-      .executeTakeFirst()
-    if (!storageLocation) return
+    const protectedLocation = await this.db.transaction().execute(async (tx) => {
+      let query = tx
+        .selectFrom('storage_locations')
+        .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
+        .where('cache_entries.id', '=', cacheEntryId)
+        .selectAll('storage_locations')
+      if (env.DB_DRIVER !== 'sqlite') query = query.forUpdate()
+      const storageLocation = await query.executeTakeFirst()
+      if (!storageLocation) return
+      const readerScope = storageLocation.mergedAt ? 'storage' : 'parts'
+      const readerLeaseId = await createReaderLease(tx, storageLocation.id, readerScope)
+      return { storageLocation, readerLeaseId }
+    })
+    if (!protectedLocation) return
+    const { storageLocation, readerLeaseId } = protectedLocation
 
     void this.db
       .updateTable('storage_locations')
@@ -224,10 +258,18 @@ export class Storage {
       .execute()
 
     try {
-      if (storageLocation.mergedAt || storageLocation.mergeStartedAt)
-        return await this.downloadFromCacheEntryLocation(storageLocation)
+      if (storageLocation.mergedAt) {
+        const stream = await this.downloadFromCacheEntryLocation(storageLocation)
+        return this.protectDownloadStream(stream, readerLeaseId)
+      }
 
       await this.ensurePartsExist(storageLocation)
+
+      const mergeToken = await acquireMergeLease(this.db, storageLocation.id)
+      if (!mergeToken) {
+        const stream = await this.downloadFromCacheEntryLocation(storageLocation)
+        return this.protectDownloadStream(stream, readerLeaseId)
+      }
 
       await this.db
         .updateTable('storage_locations')
@@ -239,26 +281,34 @@ export class Storage {
 
       const responseStream = new PassThrough()
       const mergerStream = new PassThrough()
+      const renewalTimer = setInterval(() => {
+        void renewMergeLease(this.db, storageLocation.id, mergeToken)
+      }, LEASE_RENEWAL_MS)
+      renewalTimer.unref()
+      const mergeCandidateFolder = `merge-${mergeToken}`
+      const mergeCandidateObject = `${mergeCandidateFolder}/merged`
 
       const mergePromise = this.adapter
-        .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
+        .uploadStream(mergeCandidateObject, mergerStream)
         .then(async () => {
-          await this.db
-            .updateTable('storage_locations')
-            .set({
-              mergedAt: Date.now(),
-            })
-            .where('id', '=', storageLocation.id)
-            .execute()
           await this.db.transaction().execute(async (tx) => {
+            let leaseQuery = tx
+              .selectFrom('merge_leases')
+              .select(['token', 'expiresAt'])
+              .where('storageLocationId', '=', storageLocation.id)
+            if (env.DB_DRIVER !== 'sqlite') leaseQuery = leaseQuery.forUpdate()
+            const lease = await leaseQuery.executeTakeFirst()
+            if (lease?.token !== mergeToken || lease.expiresAt <= Date.now())
+              throw new Error('Merge lease was lost before completion')
+            await this.adapter.promoteObject(
+              mergeCandidateObject,
+              `${storageLocation.folderName}/merged`,
+            )
             await tx
               .updateTable('storage_locations')
-              .set({
-                partsDeletedAt: Date.now(),
-              })
+              .set({ mergedAt: Date.now() })
               .where('id', '=', storageLocation.id)
               .execute()
-            await this.adapter.deleteFolder(`${storageLocation.folderName}/parts`)
           })
         })
         .catch(async () => {
@@ -269,8 +319,29 @@ export class Storage {
               mergeStartedAt: null,
             })
             .where('id', '=', storageLocation.id)
+            .where((eb) =>
+              eb.exists(
+                eb
+                  .selectFrom('merge_leases')
+                  .select('storageLocationId')
+                  .whereRef('storageLocationId', '=', 'storage_locations.id')
+                  .where('token', '=', mergeToken),
+              ),
+            )
             .execute()
           mergerStream.destroy()
+        })
+        .finally(async () => {
+          clearInterval(renewalTimer)
+          await releaseMergeLease(this.db, storageLocation.id, mergeToken)
+          try {
+            await this.adapter.deleteFolder(mergeCandidateFolder)
+          } catch (err) {
+            logger.warn('Failed to remove merge candidate storage', {
+              folderName: mergeCandidateFolder,
+              error: err,
+            })
+          }
         })
       this.mergeStreamPromises.add(mergePromise)
       mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
@@ -282,14 +353,37 @@ export class Storage {
           logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
       })
 
-      return responseStream
+      return this.protectDownloadStream(responseStream, readerLeaseId)
     } catch (err) {
+      await releaseReaderLease(this.db, readerLeaseId)
       if (err instanceof ObjectNotFoundError) {
         logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
         return
       }
       throw err
     }
+  }
+
+  private protectDownloadStream(stream: Readable, readerLeaseId: string) {
+    const renewalTimer = setInterval(() => {
+      void renewReaderLease(this.db, readerLeaseId)
+        .then((renewed) => {
+          if (!renewed) stream.destroy(new Error('Storage Reader Lease was lost'))
+        })
+        .catch((err) => stream.destroy(err))
+    }, LEASE_RENEWAL_MS)
+    renewalTimer.unref()
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      clearInterval(renewalTimer)
+      void releaseReaderLease(this.db, readerLeaseId)
+    }
+    stream.once('end', release)
+    stream.once('close', release)
+    stream.once('error', release)
+    return stream
   }
 
   private async ensurePartsExist(location: StorageLocation) {
@@ -476,16 +570,32 @@ export class Storage {
         cacheEntry: cacheEntry.match,
       }
 
-    const location = await this.db
-      .selectFrom('storage_locations')
-      .where('id', '=', cacheEntry.match.locationId)
-      .select(['folderName', 'mergedAt'])
-      .executeTakeFirst()
+    const directDownloadExpiresAt = Date.now() + DIRECT_DOWNLOAD_LEASE_DURATION_MS
+    const location = await this.db.transaction().execute(async (tx) => {
+      let query = tx
+        .selectFrom('storage_locations')
+        .where('id', '=', cacheEntry.match.locationId)
+        .select(['id', 'folderName', 'mergedAt'])
+      if (env.DB_DRIVER !== 'sqlite') query = query.forUpdate()
+      const location = await query.executeTakeFirst()
+      if (!location?.mergedAt) return location
+      await createReaderLease(tx, location.id, 'storage', directDownloadExpiresAt)
+      await tx
+        .updateTable('storage_locations')
+        .set({ lastDownloadedAt: Date.now() })
+        .where('id', '=', location.id)
+        .execute()
+      return location
+    })
     if (!location) throw new Error('Storage location not found')
 
-    const downloadUrl = location.mergedAt
-      ? await this.adapter.createDownloadUrl(`${location.folderName}/merged`)
-      : defaultUrl
+    let downloadUrl = defaultUrl
+    if (location.mergedAt) {
+      downloadUrl = await this.adapter.createDownloadUrl(
+        `${location.folderName}/merged`,
+        directDownloadExpiresAt,
+      )
+    }
 
     return {
       downloadUrl,
@@ -496,13 +606,40 @@ export class Storage {
 
 export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
 
-interface StorageAdapter {
+export interface StorageAdapter {
   createDownloadStream(objectName: string): Promise<Readable>
   uploadStream(objectName: string, stream: Readable): Promise<void>
-  deleteFolder(folderName: string): Promise<void>
+  deleteFolder(folderName: string): Promise<StorageDeletion>
   countFilesInFolder(folderName: string): Promise<number>
-  createDownloadUrl?(objectName: string): Promise<string>
+  listStorageFolders(): Promise<StorageFolder[]>
+  promoteObject(sourceObjectName: string, destinationObjectName: string): Promise<void>
+  createDownloadUrl?(objectName: string, expiresAt: number): Promise<string>
   clear(): Promise<void>
+}
+
+export interface StorageFolder {
+  folderName: string
+  objectCount: number
+  bytes: number
+  updatedAt: number
+}
+
+export interface StorageDeletion {
+  objects: number
+  bytes: number
+}
+
+function accumulateFolder(
+  folders: Map<string, StorageFolder>,
+  folderName: string,
+  size: number,
+  updatedAt: number,
+) {
+  const existing = folders.get(folderName) ?? { folderName, objectCount: 0, bytes: 0, updatedAt: 0 }
+  existing.objectCount++
+  existing.bytes += size
+  existing.updatedAt = Math.max(existing.updatedAt, updatedAt)
+  folders.set(folderName, existing)
 }
 
 class S3Adapter implements StorageAdapter {
@@ -569,7 +706,7 @@ class S3Adapter implements StorageAdapter {
   }
 
   async clear() {
-    return this.deleteByPrefix(this.keyPrefix)
+    await this.deleteByPrefix(`${this.keyPrefix}/`)
   }
 
   private async *listObjectsByPrefix(prefix: string) {
@@ -597,10 +734,20 @@ class S3Adapter implements StorageAdapter {
   }
 
   private async deleteByPrefix(prefix: string) {
-    for await (const listResponse of this.listObjectsByPrefix(prefix)) {
-      if (!listResponse.Contents || listResponse.Contents.length === 0) continue
+    const deleted = { objects: 0, bytes: 0 }
+    while (true) {
+      const listResponse = await this.s3.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix }),
+      )
+      if (!listResponse.Contents || listResponse.Contents.length === 0) break
 
-      await Promise.all(
+      deleted.objects += listResponse.Contents.length
+      deleted.bytes += listResponse.Contents.reduce(
+        (total, object) => total + (object.Size ?? 0),
+        0,
+      )
+
+      const responses = await Promise.all(
         chunk(
           listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
           1000,
@@ -618,7 +765,15 @@ class S3Adapter implements StorageAdapter {
           ),
         ),
       )
+      const errors = responses.flatMap((response) => response.Errors ?? [])
+      if (errors.length > 0)
+        throw new Error(
+          `S3 failed to delete ${errors.length} object(s): ${errors
+            .map((error) => `${error.Key ?? '<unknown>'} (${error.Code ?? 'unknown error'})`)
+            .join(', ')}`,
+        )
     }
+    return deleted
   }
 
   async uploadStream(objectName: string, iterator: AsyncIterable<Uint8Array>) {
@@ -635,6 +790,18 @@ class S3Adapter implements StorageAdapter {
     }).done()
   }
 
+  async promoteObject(sourceObjectName: string, destinationObjectName: string) {
+    const sourceKey = `${this.keyPrefix}/${sourceObjectName}`
+    await this.s3.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        CopySource: encodeURIComponent(`${this.bucket}/${sourceKey}`),
+        Key: `${this.keyPrefix}/${destinationObjectName}`,
+      }),
+    )
+    await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: sourceKey }))
+  }
+
   async countFilesInFolder(folderName: string) {
     let count = 0
 
@@ -644,7 +811,27 @@ class S3Adapter implements StorageAdapter {
     return count
   }
 
-  async createDownloadUrl(objectName: string) {
+  async listStorageFolders() {
+    const folders = new Map<string, StorageFolder>()
+    const prefix = `${this.keyPrefix}/`
+
+    for await (const response of this.listObjectsByPrefix(prefix)) {
+      for (const object of response.Contents ?? []) {
+        if (!object.Key) continue
+        if (!object.LastModified)
+          throw new Error(`S3 did not return a modification time for object "${object.Key}"`)
+        const relativeName = object.Key.slice(prefix.length)
+        const folderName = relativeName.split('/')[0]
+        if (!folderName) continue
+
+        accumulateFolder(folders, folderName, object.Size ?? 0, object.LastModified.getTime())
+      }
+    }
+
+    return [...folders.values()]
+  }
+
+  async createDownloadUrl(objectName: string, expiresAt: number) {
     return getSignedUrl(
       this.s3,
       new GetObjectCommand({
@@ -652,7 +839,7 @@ class S3Adapter implements StorageAdapter {
         Key: `${this.keyPrefix}/${objectName}`,
       }),
       {
-        expiresIn: 10 * 60 * 1000, // 10min
+        expiresIn: Math.max(1, Math.floor((expiresAt - Date.now()) / 1000)),
       },
     )
   }
@@ -694,10 +881,12 @@ class FileSystemAdapter implements StorageAdapter {
   }
 
   async deleteFolder(folderName: string) {
+    const folder = await this.inspectPath(this.safePath(folderName), folderName)
     await fs.rm(this.safePath(folderName), {
       recursive: true,
       force: true,
     })
+    return { objects: folder.objectCount, bytes: folder.bytes }
   }
 
   async clear() {
@@ -716,6 +905,12 @@ class FileSystemAdapter implements StorageAdapter {
     await pipeline(stream, createWriteStream(filePath))
   }
 
+  async promoteObject(sourceObjectName: string, destinationObjectName: string) {
+    const destination = this.safePath(destinationObjectName)
+    await fs.mkdir(path.dirname(destination), { recursive: true })
+    await fs.rename(this.safePath(sourceObjectName), destination)
+  }
+
   async countFilesInFolder(folderName: string) {
     try {
       const dir = await fs.readdir(this.safePath(folderName), {
@@ -726,6 +921,39 @@ class FileSystemAdapter implements StorageAdapter {
       if (err.code === 'ENOENT') return 0
       throw err
     }
+  }
+
+  async listStorageFolders() {
+    const entries = await fs.readdir(this.rootFolder, { withFileTypes: true })
+    const folders: StorageFolder[] = []
+    for (const entry of entries)
+      folders.push(await this.inspectPath(this.safePath(entry.name), entry.name))
+    return folders
+  }
+
+  private async inspectPath(entryPath: string, folderName: string) {
+    const folder: StorageFolder = { folderName, objectCount: 0, bytes: 0, updatedAt: 0 }
+    const inspect = async (currentPath: string): Promise<void> => {
+      let stat
+      try {
+        stat = await fs.lstat(currentPath)
+      } catch (err: any) {
+        if (err.code === 'ENOENT') return
+        throw err
+      }
+      folder.updatedAt = Math.max(folder.updatedAt, stat.mtimeMs)
+      if (stat.isSymbolicLink())
+        throw new Error(`Refusing to inspect symbolic link in owned storage: ${currentPath}`)
+      if (!stat.isDirectory()) {
+        folder.objectCount++
+        folder.bytes += stat.size
+        return
+      }
+      const children = await fs.readdir(currentPath)
+      for (const child of children) await inspect(path.join(currentPath, child))
+    }
+    await inspect(entryPath)
+    return folder
   }
 }
 
@@ -762,14 +990,18 @@ class GcsAdapter implements StorageAdapter {
   }
 
   async deleteFolder(folderName: string) {
-    await this.bucket.deleteFiles({
-      prefix: `${this.keyPrefix}/${folderName}/`,
-    })
+    const prefix = `${this.keyPrefix}/${folderName}/`
+    const [files] = await this.bucket.getFiles({ prefix, autoPaginate: true })
+    await this.bucket.deleteFiles({ prefix })
+    return {
+      objects: files.length,
+      bytes: files.reduce((total, file) => total + Number(file.metadata.size ?? 0), 0),
+    }
   }
 
   async clear() {
     await this.bucket.deleteFiles({
-      prefix: this.keyPrefix,
+      prefix: `${this.keyPrefix}/`,
     })
   }
 
@@ -785,6 +1017,12 @@ class GcsAdapter implements StorageAdapter {
     )
   }
 
+  async promoteObject(sourceObjectName: string, destinationObjectName: string) {
+    await this.bucket
+      .file(`${this.keyPrefix}/${sourceObjectName}`)
+      .move(this.bucket.file(`${this.keyPrefix}/${destinationObjectName}`))
+  }
+
   async countFilesInFolder(folderName: string) {
     return this.bucket
       .getFiles({
@@ -794,12 +1032,32 @@ class GcsAdapter implements StorageAdapter {
       .then((res) => res[0].length)
   }
 
-  async createDownloadUrl(objectName: string) {
+  async listStorageFolders() {
+    const [files] = await this.bucket.getFiles({
+      prefix: `${this.keyPrefix}/`,
+      autoPaginate: true,
+    })
+    const folders = new Map<string, StorageFolder>()
+    const prefix = `${this.keyPrefix}/`
+
+    for (const file of files) {
+      const folderName = file.name.slice(prefix.length).split('/')[0]
+      if (!folderName) continue
+      const updatedAt = Date.parse(file.metadata.updated ?? '')
+      if (!Number.isFinite(updatedAt))
+        throw new Error(`GCS did not return a modification time for object "${file.name}"`)
+      accumulateFolder(folders, folderName, Number(file.metadata.size ?? 0), updatedAt)
+    }
+
+    return [...folders.values()]
+  }
+
+  async createDownloadUrl(objectName: string, expiresAt: number) {
     return this.bucket
       .file(`${this.keyPrefix}/${objectName}`)
       .getSignedUrl({
         action: 'read',
-        expires: Date.now() + 10 * 60 * 1000, // 10min
+        expires: expiresAt,
       })
       .then((res) => res[0])
   }

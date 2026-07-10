@@ -61,6 +61,7 @@ export const envBaseSchema = type({
   'DEFAULT_ACTIONS_RESULTS_URL':
     "string.url = 'https://results-receiver.actions.githubusercontent.com'",
   'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 90',
+  'ORPHANED_STORAGE_GRACE_PERIOD_HOURS': 'number.integer >= 1 = 24',
   'DISABLE_CLEANUP_JOBS?': 'boolean',
   'DEBUG?': 'unknown',
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',

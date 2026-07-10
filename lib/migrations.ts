@@ -158,5 +158,40 @@ export function migrations(
         await db.schema.alterTable('uploads').dropColumn('repoId').execute()
       },
     },
+    $4_storage_leases: {
+      async up(db) {
+        const idType = driver === 'mysql' ? 'varchar(36)' : 'text'
+        const scopeType = driver === 'mysql' ? 'varchar(16)' : 'text'
+
+        await db.schema
+          .createTable('merge_leases')
+          .addColumn('storageLocationId', idType, (col) =>
+            col.primaryKey().references('storage_locations.id').onDelete('cascade'),
+          )
+          .addColumn('token', idType, (col) => col.notNull())
+          .addColumn('expiresAt', 'bigint', (col) => col.notNull())
+          .execute()
+
+        await db.schema
+          .createTable('storage_reader_leases')
+          .addColumn('id', idType, (col) => col.primaryKey())
+          .addColumn('storageLocationId', idType, (col) =>
+            col.notNull().references('storage_locations.id').onDelete('cascade'),
+          )
+          .addColumn('scope', scopeType, (col) => col.notNull())
+          .addColumn('expiresAt', 'bigint', (col) => col.notNull())
+          .execute()
+
+        await db.schema
+          .createIndex('idx_storage_reader_leases_location_expiry')
+          .on('storage_reader_leases')
+          .columns(['storageLocationId', 'expiresAt'])
+          .execute()
+      },
+      async down(db) {
+        await db.schema.dropTable('storage_reader_leases').execute()
+        await db.schema.dropTable('merge_leases').execute()
+      },
+    },
   } satisfies Record<string, Migration>
 }

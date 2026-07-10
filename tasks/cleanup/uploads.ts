@@ -1,55 +1,72 @@
 import { getDatabase } from '~/lib/db'
 import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
+import { CleanupAggregateError, runCleanupTask } from '~/lib/storage-lifecycle'
 
 const itemsPerPage = 10
 
 export default defineTask({
   meta: {
     name: 'cleanup:uploads',
-    description:
-      'Delete uploads without activity for over 1 minute. Since parts are only a few megabytes each, we can be fairly aggressive in cleaning up abandoned uploads.',
+    description: 'Delete uploads without activity for over 1 minute',
   },
   async run() {
-    if (env.DISABLE_CLEANUP_JOBS) return {}
-
-    const oneMinuteAgo = Date.now() - 60 * 1000
-    const db = await getDatabase()
-    const storage = await getStorage()
-
-    let deletedCount = 0
-    let page = 0
-    while (true) {
-      const uploads = await db
-        .selectFrom('uploads')
-        .where(({ eb, or, and }) =>
-          and([
-            or([eb('lastPartUploadedAt', 'is', null), eb('lastPartUploadedAt', '<', oneMinuteAgo)]), // no parts uploaded or last part uploaded over 1 minute ago
-            eb('createdAt', '<', oneMinuteAgo), // older than 1 minute
-          ]),
-        )
-        .selectAll()
-        .limit(itemsPerPage)
-        .offset(page * itemsPerPage)
-        .execute()
-
-      deletedCount += uploads.length
-
-      for (const upload of uploads) {
-        await db.transaction().execute(async (tx) => {
-          await tx.deleteFrom('uploads').where('id', '=', upload.id).execute()
-          await storage.adapter.deleteFolder(upload.folderName)
-        })
-      }
-
-      if (uploads.length < itemsPerPage) break
-      page++
+    const result = {
+      skipped: !!env.DISABLE_CLEANUP_JOBS,
+      deletedUploads: 0,
+      deletedObjects: 0,
+      deletedBytes: 0,
+      failures: 0,
+      durationMs: 0,
     }
+    return runCleanupTask({
+      task: 'cleanup:uploads',
+      result,
+      async run() {
+        if (result.skipped) return
+        const oneMinuteAgo = Date.now() - 60 * 1000
+        const [db, storage] = await Promise.all([getDatabase(), getStorage()])
+        const errors: unknown[] = []
+        while (true) {
+          const uploads = await db
+            .selectFrom('uploads')
+            .where(({ eb, or, and }) =>
+              and([
+                or([
+                  eb('lastPartUploadedAt', 'is', null),
+                  eb('lastPartUploadedAt', '<', oneMinuteAgo),
+                ]),
+                eb('createdAt', '<', oneMinuteAgo),
+              ]),
+            )
+            .select(['id', 'folderName'])
+            .limit(itemsPerPage)
+            .execute()
+          if (uploads.length === 0) break
 
-    return {
-      result: {
-        deleted: deletedCount,
+          for (const upload of uploads) {
+            await db.deleteFrom('uploads').where('id', '=', upload.id).execute()
+            result.deletedUploads++
+            try {
+              const reclaimed = await storage.adapter.deleteFolder(upload.folderName)
+              result.deletedObjects += reclaimed.objects
+              result.deletedBytes += reclaimed.bytes
+            } catch (err) {
+              result.failures++
+              errors.push(err)
+            }
+          }
+          if (uploads.length < itemsPerPage) break
+        }
+
+        if (errors.length > 0) {
+          throw new CleanupAggregateError(
+            errors,
+            'Failed to delete abandoned upload storage',
+            result,
+          )
+        }
       },
-    }
+    })
   },
 })

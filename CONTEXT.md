@@ -1,4 +1,3 @@
-
 # GitHub Actions Cache Server
 
 This context describes the cache data managed by the server throughout its lifecycle.

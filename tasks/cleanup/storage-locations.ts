@@ -1,6 +1,12 @@
 import { getDatabase } from '~/lib/db'
 import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
+import {
+  CleanupAggregateError,
+  deleteStorageLocationIfUnread,
+  noActiveReaderLease,
+  runCleanupTask,
+} from '~/lib/storage-lifecycle'
 
 const itemsPerPage = 10
 
@@ -10,48 +16,62 @@ export default defineTask({
     description: 'Delete storage locations not associated with any cache entries',
   },
   async run() {
-    if (env.DISABLE_CLEANUP_JOBS) return {}
-
-    const db = await getDatabase()
-    const storage = await getStorage()
-
-    let deletedCount = 0
-    let page = 0
-    while (true) {
-      const storageLocations = await db
-        .selectFrom('storage_locations')
-        .select(['folderName', 'id'])
-        .where(({ exists, not }) =>
-          not(
-            exists((eb) =>
-              eb
-                .selectFrom('cache_entries')
-                .select('id')
-                .where('cache_entries.locationId', '=', eb.ref('storage_locations.id')),
-            ),
-          ),
-        )
-        .limit(itemsPerPage)
-        .offset(page * itemsPerPage)
-        .execute()
-
-      deletedCount += storageLocations.length
-
-      for (const location of storageLocations) {
-        await db.transaction().execute(async (tx) => {
-          await tx.deleteFrom('storage_locations').where('id', '=', location.id).execute()
-          await storage.adapter.deleteFolder(location.folderName)
-        })
-      }
-
-      if (storageLocations.length < itemsPerPage) break
-      page++
+    const result = {
+      skipped: !!env.DISABLE_CLEANUP_JOBS,
+      deletedLocations: 0,
+      deletedObjects: 0,
+      deletedBytes: 0,
+      failures: 0,
+      durationMs: 0,
     }
+    return runCleanupTask({
+      task: 'cleanup:storage-locations',
+      result,
+      async run() {
+        if (result.skipped) return
+        const [db, storage] = await Promise.all([getDatabase(), getStorage()])
+        const errors: unknown[] = []
+        while (true) {
+          const locations = await db
+            .selectFrom('storage_locations')
+            .select(['folderName', 'id'])
+            .where(({ exists, not }) =>
+              not(
+                exists((eb) =>
+                  eb
+                    .selectFrom('cache_entries')
+                    .select('id')
+                    .whereRef('cache_entries.locationId', '=', 'storage_locations.id'),
+                ),
+              ),
+            )
+            .where((eb) => noActiveReaderLease(eb))
+            .limit(itemsPerPage)
+            .execute()
+          if (locations.length === 0) break
 
-    return {
-      result: {
-        deleted: deletedCount,
+          for (const location of locations) {
+            const deleted = await db.transaction().execute(async (tx) => {
+              return deleteStorageLocationIfUnread(tx, location.id)
+            })
+            if (!deleted) continue
+            result.deletedLocations++
+            try {
+              const reclaimed = await storage.adapter.deleteFolder(location.folderName)
+              result.deletedObjects += reclaimed.objects
+              result.deletedBytes += reclaimed.bytes
+            } catch (err) {
+              result.failures++
+              errors.push(err)
+            }
+          }
+          if (locations.length < itemsPerPage) break
+        }
+
+        if (errors.length > 0) {
+          throw new CleanupAggregateError(errors, 'Failed to delete unreferenced storage', result)
+        }
       },
-    }
+    })
   },
 })

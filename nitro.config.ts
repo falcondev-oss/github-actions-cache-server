@@ -24,7 +24,8 @@ export default defineNitroConfig({
   },
   scheduledTasks: {
     '*/5 * * * *': ['cleanup:uploads'], // every 5 minutes
-    '0 0 * * *': ['cleanup:cache-entries', 'cleanup:storage-locations'], // daily
-    '0 * * * *': ['cleanup:parts', 'cleanup:merges'], // hourly
+    '0 0 * * *': ['cleanup:cache-entries', 'cleanup:orphaned-storage'], // daily
+    '*/10 * * * *': ['cleanup:parts', 'cleanup:storage-locations'], // every 10 minutes
+    '0 * * * *': ['cleanup:merges'], // hourly
   },
 })
