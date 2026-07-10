@@ -50,7 +50,6 @@ describe('storage lifecycle reconciliation', () => {
       async countFilesInFolder() {
         return 0
       },
-      async promoteObject() {},
       async clear() {},
     } satisfies StorageAdapter
 
@@ -76,7 +75,6 @@ describe('storage lifecycle reconciliation', () => {
       async countFilesInFolder() {
         return 0
       },
-      async promoteObject() {},
       async clear() {},
     } satisfies StorageAdapter
 

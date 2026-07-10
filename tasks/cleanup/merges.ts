@@ -5,7 +5,7 @@ import { runCleanupTask } from '~/lib/storage-lifecycle'
 export default defineTask({
   meta: {
     name: 'cleanup:merges',
-    description: 'Reset stalled merges that have not completed within 15 minutes',
+    description: 'Reset stalled merges and purge expired leases',
   },
   async run() {
     const result = {
@@ -40,6 +40,9 @@ export default defineTask({
           .executeTakeFirst()
 
         await db.deleteFrom('merge_leases').where('expiresAt', '<=', Date.now()).execute()
+        // Expired Storage Reader Leases are otherwise only removed by stream
+        // teardown or location cascade — direct-download leases rely on this purge.
+        await db.deleteFrom('storage_reader_leases').where('expiresAt', '<=', Date.now()).execute()
         result.updated = Number(res.numUpdatedRows)
       },
     })

@@ -14,8 +14,6 @@ import { PassThrough, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createSingletonPromise } from '@antfu/utils'
 import {
-  CopyObjectCommand,
-  DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
@@ -285,11 +283,13 @@ export class Storage {
         void renewMergeLease(this.db, storageLocation.id, mergeToken)
       }, LEASE_RENEWAL_MS)
       renewalTimer.unref()
-      const mergeCandidateFolder = `merge-${mergeToken}`
-      const mergeCandidateObject = `${mergeCandidateFolder}/merged`
 
+      // Uploading straight to the final object is safe: uploads are atomically
+      // visible (see StorageAdapter.uploadStream) and Parts are immutable, so a
+      // merger that lost its lease can only overwrite `merged` with identical
+      // bytes — the fence only needs to guard who flips `mergedAt`.
       const mergePromise = this.adapter
-        .uploadStream(mergeCandidateObject, mergerStream)
+        .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
         .then(async () => {
           await this.db.transaction().execute(async (tx) => {
             let leaseQuery = tx
@@ -300,10 +300,6 @@ export class Storage {
             const lease = await leaseQuery.executeTakeFirst()
             if (lease?.token !== mergeToken || lease.expiresAt <= Date.now())
               throw new Error('Merge lease was lost before completion')
-            await this.adapter.promoteObject(
-              mergeCandidateObject,
-              `${storageLocation.folderName}/merged`,
-            )
             await tx
               .updateTable('storage_locations')
               .set({ mergedAt: Date.now() })
@@ -334,14 +330,6 @@ export class Storage {
         .finally(async () => {
           clearInterval(renewalTimer)
           await releaseMergeLease(this.db, storageLocation.id, mergeToken)
-          try {
-            await this.adapter.deleteFolder(mergeCandidateFolder)
-          } catch (err) {
-            logger.warn('Failed to remove merge candidate storage', {
-              folderName: mergeCandidateFolder,
-              error: err,
-            })
-          }
         })
       this.mergeStreamPromises.add(mergePromise)
       mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
@@ -608,11 +596,16 @@ export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
 
 export interface StorageAdapter {
   createDownloadStream(objectName: string): Promise<Readable>
+  /**
+   * Uploads must be atomically visible: an object never exists partially, and
+   * overwriting an object never disturbs active readers of the previous
+   * version. Object stores give this natively; the filesystem adapter writes
+   * to a temp path and renames. See ADR-0004.
+   */
   uploadStream(objectName: string, stream: Readable): Promise<void>
   deleteFolder(folderName: string): Promise<StorageDeletion>
   countFilesInFolder(folderName: string): Promise<number>
   listStorageFolders(): Promise<StorageFolder[]>
-  promoteObject(sourceObjectName: string, destinationObjectName: string): Promise<void>
   createDownloadUrl?(objectName: string, expiresAt: number): Promise<string>
   clear(): Promise<void>
 }
@@ -790,18 +783,6 @@ class S3Adapter implements StorageAdapter {
     }).done()
   }
 
-  async promoteObject(sourceObjectName: string, destinationObjectName: string) {
-    const sourceKey = `${this.keyPrefix}/${sourceObjectName}`
-    await this.s3.send(
-      new CopyObjectCommand({
-        Bucket: this.bucket,
-        CopySource: encodeURIComponent(`${this.bucket}/${sourceKey}`),
-        Key: `${this.keyPrefix}/${destinationObjectName}`,
-      }),
-    )
-    await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: sourceKey }))
-  }
-
   async countFilesInFolder(folderName: string) {
     let count = 0
 
@@ -901,14 +882,20 @@ class FileSystemAdapter implements StorageAdapter {
 
   async uploadStream(objectName: string, stream: Readable) {
     const filePath = this.safePath(objectName)
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await pipeline(stream, createWriteStream(filePath))
-  }
-
-  async promoteObject(sourceObjectName: string, destinationObjectName: string) {
-    const destination = this.safePath(destinationObjectName)
-    await fs.mkdir(path.dirname(destination), { recursive: true })
-    await fs.rename(this.safePath(sourceObjectName), destination)
+    // Write to a top-level temp entry and rename for atomic visibility. Temp
+    // entries orphaned by a crash are unauthorized top-level storage, so
+    // cleanup:orphaned-storage reclaims them after the grace period. Each
+    // upload gets its own entry — a shared temp directory would stay
+    // perpetually fresh and never age out.
+    const tempPath = this.safePath(`tmp-${randomUUID()}`)
+    try {
+      await pipeline(stream, createWriteStream(tempPath))
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.rename(tempPath, filePath)
+    } catch (err) {
+      await fs.rm(tempPath, { force: true })
+      throw err
+    }
   }
 
   async countFilesInFolder(folderName: string) {
@@ -1015,12 +1002,6 @@ class GcsAdapter implements StorageAdapter {
         validation: false,
       }),
     )
-  }
-
-  async promoteObject(sourceObjectName: string, destinationObjectName: string) {
-    await this.bucket
-      .file(`${this.keyPrefix}/${sourceObjectName}`)
-      .move(this.bucket.file(`${this.keyPrefix}/${destinationObjectName}`))
   }
 
   async countFilesInFolder(folderName: string) {

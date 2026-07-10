@@ -33,7 +33,10 @@ export async function startResultsOrigin() {
     response.end('{"code":"already_exists","msg":"artifact already exists"}')
   })
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
   const address = server.address()
   if (!address || typeof address === 'string')
     throw new TypeError('Fake Results origin did not bind to a TCP port')
