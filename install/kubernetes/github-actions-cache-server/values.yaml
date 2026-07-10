@@ -78,6 +78,8 @@ config:
       # accessKeyId: ''
       # -- AWS secret access key. Can also be provided via existingSecret.
       # secretAccessKey: ''
+      # -- Socket inactivity timeout in milliseconds. Set to 0 to disable.
+      socketTimeoutMs: 10000
 
     # -- Google Cloud Storage driver settings
     # See https://gha-cache-server.falcondev.io/storage-drivers/google-cloud-storage

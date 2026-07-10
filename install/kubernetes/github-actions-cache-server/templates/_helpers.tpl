@@ -167,6 +167,8 @@ Generate environment variables from config values.
 - name: AWS_SECRET_ACCESS_KEY
   value: {{ .secretAccessKey | quote }}
 {{- end }}
+- name: STORAGE_S3_SOCKET_TIMEOUT_MS
+  value: {{ .socketTimeoutMs | quote }}
 {{- end }}
 {{- else if eq .Values.config.storage.driver "gcs" }}
 {{- with .Values.config.storage.gcs }}

@@ -4,6 +4,7 @@ export const envStorageDriverSchema = type.or(
   {
     'STORAGE_DRIVER': type.unit('s3'),
     'STORAGE_S3_BUCKET': 'string',
+    'STORAGE_S3_SOCKET_TIMEOUT_MS': 'number.integer >= 0 = 10000',
     'AWS_REGION': "string = 'us-east-1'",
     'AWS_ENDPOINT_URL?': 'string.url',
     'AWS_ACCESS_KEY_ID?': 'string',

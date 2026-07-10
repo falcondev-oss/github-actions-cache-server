@@ -527,7 +527,7 @@ class S3Adapter implements StorageAdapter {
       region: env.AWS_REGION,
       requestHandler: new NodeHttpHandler({
         httpsAgent: agent,
-        socketTimeout: 3000,
+        socketTimeout: env.STORAGE_S3_SOCKET_TIMEOUT_MS,
       }),
     })
 

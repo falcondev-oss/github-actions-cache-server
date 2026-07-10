@@ -74,6 +74,7 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     STORAGE_DRIVER: 's3',
     AWS_REGION: 'us-east-1',
     STORAGE_S3_BUCKET: 'vitest',
+    STORAGE_S3_SOCKET_TIMEOUT_MS: 10_000,
     AWS_ACCESS_KEY_ID: 'minioadmin',
     AWS_SECRET_ACCESS_KEY: 'minioadmin',
     AWS_ENDPOINT_URL: 'http://localhost:9000',
