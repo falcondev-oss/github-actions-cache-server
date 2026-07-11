@@ -285,6 +285,10 @@ describe('cleanup lifecycle', () => {
         .execute()
 
       await vi.advanceTimersByTimeAsync(30_000)
+      // The renewal fires on the fake timer, but the lease-lost DB query resolves on a
+      // real round-trip — wait for the resulting destroy instead of asserting synchronously.
+      // Plain 'close' wait (not events.once, which rejects on the error-destroy).
+      if (!download!.destroyed) await new Promise((resolve) => download!.once('close', resolve))
 
       expect(download!.destroyed).toBe(true)
     } finally {
