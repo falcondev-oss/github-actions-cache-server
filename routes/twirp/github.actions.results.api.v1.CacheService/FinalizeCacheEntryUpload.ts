@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { cacheUploadsTotal } from '~/lib/metrics'
 import { getCacheScope } from '~/lib/scope'
 import { getStorage } from '~/lib/storage'
 import { readTwirpRequest, sendTwirpResponse, TwirpMessage } from '~/lib/twirp'
@@ -28,6 +29,8 @@ export default defineEventHandler(async (event) => {
       statusCode: 404,
       statusMessage: 'Upload not found',
     })
+
+  cacheUploadsTotal.inc()
 
   return sendTwirpResponse(
     event,

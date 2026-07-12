@@ -1,5 +1,6 @@
 import { map, pipe, prop, sortBy } from 'remeda'
 import { z } from 'zod'
+import { cacheRequestsTotal } from '~/lib/metrics'
 import { getCacheScope } from '~/lib/scope'
 import { getStorage } from '~/lib/storage'
 import { readTwirpRequest, sendTwirpResponse, TwirpMessage } from '~/lib/twirp'
@@ -26,6 +27,8 @@ export default defineEventHandler(async (event) => {
     scopes: pipe(scopes, sortBy([prop('Permission'), 'desc']), map(prop('Scope'))),
     repoId,
   })
+
+  cacheRequestsTotal.inc({ result: match ? 'hit' : 'miss' })
 
   return sendTwirpResponse(
     event,
