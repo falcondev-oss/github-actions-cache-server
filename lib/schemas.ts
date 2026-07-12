@@ -60,6 +60,7 @@ export const envBaseSchema = type({
   'API_BASE_URL': 'string.url',
   'DEFAULT_ACTIONS_RESULTS_URL':
     "string.url = 'https://results-receiver.actions.githubusercontent.com'",
+  'ACTIONS_TOKEN_ISSUER': "string.url = 'https://token.actions.githubusercontent.com'",
   'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 90',
   'ORPHANED_STORAGE_GRACE_PERIOD_HOURS': 'number.integer >= 1 = 24',
   'DISABLE_CLEANUP_JOBS?': 'boolean',

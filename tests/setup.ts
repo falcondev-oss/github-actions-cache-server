@@ -40,6 +40,7 @@ const TESTING_ENV_BASE = {
   | 'ENABLE_DIRECT_DOWNLOADS'
   | 'BENCHMARK'
   | 'SKIP_TOKEN_VALIDATION'
+  | 'ACTIONS_TOKEN_ISSUER'
 > &
   Record<string, string>
 
