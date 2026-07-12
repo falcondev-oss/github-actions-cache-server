@@ -41,7 +41,7 @@ import {
   renewMergeLease,
   renewReaderLease,
 } from './storage-leases'
-import { deleteStorageLocationIfUnread } from './storage-lifecycle'
+import { deleteStorageLocationIfUnread, noActiveReaderLease } from './storage-lifecycle'
 
 // Bounds the self-heal retry when matching keeps surfacing Dangling Cache
 // Entries for the same prefix — caps a pathological scan (ADR-0005).
@@ -63,10 +63,12 @@ export class ObjectNotFoundError extends Error {
 
 export class Storage {
   static async fromEnv() {
-    return new Storage({
+    const storage = new Storage({
       adapter: await this.getAdapterFromEnv(),
       db: await getDatabase(),
     })
+    await storage.reconcileStorageLocationSizes()
+    return storage
   }
 
   static async getAdapterFromEnv() {
@@ -196,6 +198,28 @@ export class Storage {
     })
   }
 
+  private async reconcileStorageLocationSizes() {
+    // Backfill rows predating size tracking. One full-bucket LIST at startup,
+    // then a no-op once every row has a size (the `is null` guard).
+    const missing = await this.db
+      .selectFrom('storage_locations')
+      .select(['id', 'folderName'])
+      .where('sizeBytes', 'is', null)
+      .execute()
+    if (missing.length === 0) return
+
+    const storedFolders = await this.adapter.listStorageFolders()
+    const sizes = new Map(storedFolders.map(({ folderName, bytes }) => [folderName, bytes]))
+    for (const location of missing) {
+      await this.db
+        .updateTable('storage_locations')
+        .set({ sizeBytes: sizes.get(location.folderName) ?? 0 })
+        .where('id', '=', location.id)
+        .where('sizeBytes', 'is', null)
+        .execute()
+    }
+  }
+
   waitForOngoingMerges() {
     return Promise.all(this.mergeStreamPromises)
   }
@@ -281,6 +305,8 @@ export class Storage {
       )
     }
 
+    const sizeBytes = await this.adapter.getFolderSize(upload.folderName)
+
     await this.db.transaction().execute(async (tx) => {
       const locationId = randomUUID()
       await tx
@@ -293,6 +319,7 @@ export class Storage {
           mergeStartedAt: null,
           partsDeletedAt: null,
           lastDownloadedAt: null,
+          sizeBytes,
         })
         .execute()
 
@@ -332,7 +359,59 @@ export class Storage {
       await tx.deleteFrom('uploads').where('id', '=', upload.id).execute()
     })
 
+    try {
+      await this.enforceStorageBudget()
+    } catch (err) {
+      logger.warn('Capacity-based Eviction failed after upload completion', { error: err })
+    }
+
     return upload
+  }
+
+  async enforceStorageBudget() {
+    const filesystemUsage = env.CACHE_MAX_SIZE_BYTES
+      ? undefined
+      : await this.adapter.getFilesystemUsage?.()
+    const budget =
+      env.CACHE_MAX_SIZE_BYTES ??
+      (filesystemUsage &&
+        Math.floor((filesystemUsage.capacityBytes * env.CACHE_FILESYSTEM_MAX_USAGE_PERCENT) / 100))
+    if (!budget) return
+
+    const target = Math.floor(budget * 0.9)
+    const storedUsage = filesystemUsage
+      ? undefined
+      : await this.db
+          .selectFrom('storage_locations')
+          .select(sql<number>`coalesce(sum(${sql.ref('sizeBytes')}), 0)`.as('bytes'))
+          .executeTakeFirstOrThrow()
+    let usage = filesystemUsage ? filesystemUsage.usedBytes : Number(storedUsage!.bytes)
+    if (usage <= budget) return
+
+    const locations = await this.db
+      .selectFrom('storage_locations')
+      .leftJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
+      .select([
+        'storage_locations.id',
+        'storage_locations.folderName',
+        'storage_locations.sizeBytes',
+      ])
+      .where((eb) => noActiveReaderLease(eb))
+      .orderBy(sql`coalesce(${sql.ref('lastDownloadedAt')}, ${sql.ref('updatedAt')}, 0)`, 'asc')
+      .execute()
+
+    for (const location of locations) {
+      if (usage <= target) break
+      const deleted = await this.db
+        .transaction()
+        .execute((tx) => deleteStorageLocationIfUnread(tx, location.id))
+      if (!deleted) continue
+      await this.adapter.deleteFolder(location.folderName)
+      if (filesystemUsage) {
+        const currentUsage = await this.adapter.getFilesystemUsage!()
+        usage = currentUsage.usedBytes
+      } else usage -= location.sizeBytes ?? 0
+    }
   }
 
   async download(cacheEntryId: string): Promise<Readable | undefined> {
@@ -667,8 +746,10 @@ export interface StorageAdapter {
   objectExists(objectName: string): Promise<boolean>
   deleteFolder(folderName: string): Promise<StorageDeletion>
   countFilesInFolder(folderName: string): Promise<number>
+  getFolderSize(folderName: string): Promise<number>
   listStorageFolders(): Promise<StorageFolder[]>
   createDownloadUrl?(objectName: string, expiresAt: number): Promise<string>
+  getFilesystemUsage?(): Promise<{ capacityBytes: number; usedBytes: number }>
   clear(): Promise<void>
 }
 
@@ -874,6 +955,16 @@ class S3Adapter implements StorageAdapter {
     return count
   }
 
+  async getFolderSize(folderName: string) {
+    let bytes = 0
+
+    const pages = this.listObjectsByPrefix(`${this.keyPrefix}/${folderName}/`)
+    for await (const listResponse of pages)
+      bytes += (listResponse.Contents ?? []).reduce((sum, object) => sum + (object.Size ?? 0), 0)
+
+    return bytes
+  }
+
   async listStorageFolders() {
     const folders = new Map<string, StorageFolder>()
     const prefix = `${this.keyPrefix}/`
@@ -997,6 +1088,14 @@ class FileSystemAdapter implements StorageAdapter {
     })
   }
 
+  async getFilesystemUsage() {
+    const stats = await fs.statfs(this.rootFolder)
+    return {
+      capacityBytes: stats.blocks * stats.bsize,
+      usedBytes: (stats.blocks - stats.bavail) * stats.bsize,
+    }
+  }
+
   async uploadStream(objectName: string, stream: Readable) {
     const filePath = this.safePath(objectName)
     // Write to a top-level temp entry and rename for atomic visibility. Temp
@@ -1025,6 +1124,11 @@ class FileSystemAdapter implements StorageAdapter {
       if (err.code === 'ENOENT') return 0
       throw err
     }
+  }
+
+  async getFolderSize(folderName: string) {
+    const folder = await this.inspectPath(this.safePath(folderName), folderName)
+    return folder.bytes
   }
 
   async listStorageFolders() {
@@ -1108,6 +1212,14 @@ class GcsAdapter implements StorageAdapter {
         autoPaginate: true,
       })
       .then((res) => res[0].length)
+  }
+
+  async getFolderSize(folderName: string) {
+    const [files] = await this.bucket.getFiles({
+      prefix: `${this.keyPrefix}/${folderName}/`,
+      autoPaginate: true,
+    })
+    return files.reduce((total, file) => total + Number(file.metadata.size ?? 0), 0)
   }
 
   async listStorageFolders() {

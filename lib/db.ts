@@ -35,6 +35,7 @@ export const storageLocationSchema = z.object({
   mergedAt: z.number().nullable(),
   partsDeletedAt: z.number().nullable(),
   lastDownloadedAt: z.number().nullable(),
+  sizeBytes: z.number().nullable(),
 })
 export type StorageLocation = z.infer<typeof storageLocationSchema>
 

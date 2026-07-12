@@ -42,6 +42,13 @@ config:
   # -- Number of days to keep stale cache data before deleting it. Set to 0 to disable.
   cacheCleanupOlderThanDays: 90
 
+  # -- Maximum bytes occupied by finalized cache payloads. Leave unset to use
+  # the filesystem percentage below, or unlimited object storage.
+  # cacheMaxSizeBytes: 107374182400
+
+  # -- Maximum filesystem volume usage before Capacity-based Eviction starts.
+  cacheFilesystemMaxUsagePercent: 90
+
   # -- Hours an unreferenced storage folder must remain untouched before it is deleted.
   # Must be at least 1 hour.
   orphanedStorageGracePeriodHours: 24

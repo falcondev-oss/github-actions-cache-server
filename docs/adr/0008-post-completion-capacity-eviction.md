@@ -1,0 +1,7 @@
+# Capacity-based Eviction runs after upload completion
+
+Finalized cache payloads are measured in bytes. Every completed upload records its own payload size by measuring only that folder, so the total is always available (for the `cache_storage_bytes` metric and for eviction) without a full-storage scan per upload. Filesystem storage has a configurable Storage Budget percentage, defaulting to 90% of Filesystem Capacity; any backend may instead use an explicit byte budget. Object storage is unlimited without that explicit budget.
+
+After an upload completes, Capacity-based Eviction runs only when usage exceeds the Storage Budget and deletes Cache Entries in Cache Recency order until usage is at most 90% of the budget. A Cache Access is recorded when a proxied download starts or a direct-download URL is issued. Cache Recency falls back to the Cache Entry's save time. Active Storage Reader Leases continue to prevent deletion.
+
+Locations predating size tracking are reconciled resumably on startup with a single full-storage scan, skipped once every location has a recorded size. This design deliberately has no pre-upload checks, chunk accounting, reservations, or global capacity lock. Concurrent completions may temporarily exceed the budget, and an oversized completed payload may be evicted while upload finalization still succeeds. Operators must leave suitable headroom for in-progress uploads and concurrency.

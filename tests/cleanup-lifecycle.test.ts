@@ -1,3 +1,4 @@
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 
@@ -11,6 +12,155 @@ describe('cleanup lifecycle', () => {
     vi.stubGlobal('defineTask', (definition: unknown) => definition)
   })
   afterAll(() => vi.unstubAllGlobals())
+
+  test('evicts least-recently-used entries to 90% only after exceeding the budget', async () => {
+    const db = await getDatabase()
+    const storage = await Storage.fromEnv()
+    await db.deleteFrom('storage_locations').execute()
+    await storage.adapter.clear()
+    const originalBudget = env.CACHE_MAX_SIZE_BYTES
+    const locations = [
+      { id: randomUUID(), folderName: `capacity-old-${randomUUID()}`, accessedAt: null },
+      { id: randomUUID(), folderName: `capacity-new-${randomUUID()}`, accessedAt: Date.now() },
+    ]
+
+    try {
+      env.CACHE_MAX_SIZE_BYTES = 12
+      for (const [index, location] of locations.entries()) {
+        await storage.adapter.uploadStream(
+          `${location.folderName}/parts/0`,
+          Readable.from('123456'),
+        )
+        await db
+          .insertInto('storage_locations')
+          .values({
+            id: location.id,
+            folderName: location.folderName,
+            partCount: 1,
+            mergedAt: null,
+            mergeStartedAt: null,
+            partsDeletedAt: null,
+            lastDownloadedAt: location.accessedAt,
+            sizeBytes: 6,
+          })
+          .execute()
+        await db
+          .insertInto('cache_entries')
+          .values({
+            id: randomUUID(),
+            key: randomUUID(),
+            version: 'v1',
+            scope: 'refs/heads/main',
+            repoId: '123',
+            updatedAt: Date.now() - (2 - index) * 1000,
+            locationId: location.id,
+          })
+          .execute()
+      }
+
+      await storage.enforceStorageBudget()
+      expect(await db.selectFrom('storage_locations').select('id').execute()).toEqual(
+        expect.arrayContaining(locations.map(({ id }) => ({ id }))),
+      )
+
+      env.CACHE_MAX_SIZE_BYTES = 11
+      await storage.enforceStorageBudget()
+      expect(await db.selectFrom('storage_locations').select('id').execute()).toContainEqual({
+        id: locations[1]!.id,
+      })
+      expect(
+        await db
+          .selectFrom('storage_locations')
+          .where('id', '=', locations[0]!.id)
+          .select('id')
+          .executeTakeFirst(),
+      ).toBeUndefined()
+    } finally {
+      env.CACHE_MAX_SIZE_BYTES = originalBudget
+      for (const location of locations) {
+        await db.deleteFrom('storage_locations').where('id', '=', location.id).execute()
+        await storage.adapter.deleteFolder(location.folderName)
+      }
+    }
+  })
+
+  test('upload finalization succeeds when post-completion eviction fails', async () => {
+    const db = await getDatabase()
+    const storage = await Storage.fromEnv()
+    const key = randomUUID()
+    const originalBudget = env.CACHE_MAX_SIZE_BYTES
+    const upload = await storage.createUpload({
+      key,
+      version: 'v1',
+      scope: 'refs/heads/main',
+      repoId: '123',
+    })
+    await storage.uploadPart(
+      upload!.id,
+      0,
+      Readable.toWeb(Readable.from('payload')) as NodeReadableStream,
+    )
+    const deleteFolder = vi
+      .spyOn(storage.adapter, 'deleteFolder')
+      .mockRejectedValue(new Error('no'))
+
+    try {
+      env.CACHE_MAX_SIZE_BYTES = 1
+      await expect(
+        storage.completeUpload({ key, version: 'v1', scope: 'refs/heads/main', repoId: '123' }),
+      ).resolves.toBeDefined()
+    } finally {
+      env.CACHE_MAX_SIZE_BYTES = originalBudget
+      deleteFolder.mockRestore()
+      const location = await db
+        .selectFrom('storage_locations')
+        .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
+        .where('cache_entries.key', '=', key)
+        .select(['storage_locations.id', 'storage_locations.folderName'])
+        .executeTakeFirst()
+      if (location) {
+        await db.deleteFrom('storage_locations').where('id', '=', location.id).execute()
+        await storage.adapter.deleteFolder(location.folderName)
+      }
+      await storage.adapter.deleteFolder(upload!.id.toString())
+    }
+  })
+
+  test('reconciles missing storage-location sizes when a byte budget is enabled', async () => {
+    const db = await getDatabase()
+    const adapter = await Storage.getAdapterFromEnv()
+    const originalBudget = env.CACHE_MAX_SIZE_BYTES
+    const location = { id: randomUUID(), folderName: `reconcile-${randomUUID()}` }
+    await adapter.uploadStream(`${location.folderName}/parts/0`, Readable.from('payload'))
+    await db
+      .insertInto('storage_locations')
+      .values({
+        ...location,
+        partCount: 1,
+        mergedAt: null,
+        mergeStartedAt: null,
+        partsDeletedAt: null,
+        lastDownloadedAt: null,
+        sizeBytes: null,
+      })
+      .execute()
+
+    try {
+      env.CACHE_MAX_SIZE_BYTES = 100
+      await Storage.fromEnv()
+      expect(
+        await db
+          .selectFrom('storage_locations')
+          .where('id', '=', location.id)
+          .select('sizeBytes')
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ sizeBytes: 7 })
+    } finally {
+      env.CACHE_MAX_SIZE_BYTES = originalBudget
+      await db.deleteFrom('storage_locations').where('id', '=', location.id).execute()
+      await adapter.deleteFolder(location.folderName)
+    }
+  })
 
   test('retention drains more than one page of never-downloaded entries', async () => {
     const db = await getDatabase()
@@ -219,6 +369,11 @@ describe('cleanup lifecycle', () => {
           .where('storageLocationId', '=', locationId)
           .select('expiresAt')
           .executeTakeFirstOrThrow()
+        const accessed = await db
+          .selectFrom('storage_locations')
+          .where('id', '=', locationId)
+          .select('lastDownloadedAt')
+          .executeTakeFirstOrThrow()
         const url = new URL(result!.downloadUrl)
         const signedLifetimeSeconds = Number(
           url.searchParams.get('X-Amz-Expires') ?? url.searchParams.get('X-Goog-Expires'),
@@ -226,6 +381,7 @@ describe('cleanup lifecycle', () => {
 
         expect(signedLifetimeSeconds).toBeGreaterThan(0)
         expect(lease.expiresAt - startedAt).toBeGreaterThanOrEqual(signedLifetimeSeconds * 1000)
+        expect(accessed.lastDownloadedAt).toBeGreaterThanOrEqual(startedAt)
       } finally {
         env.ENABLE_DIRECT_DOWNLOADS = directDownloadsEnabled
         await db.deleteFrom('storage_locations').where('id', '=', locationId).execute()
