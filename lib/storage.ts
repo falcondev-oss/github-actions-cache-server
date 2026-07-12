@@ -17,6 +17,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -41,6 +42,11 @@ import {
   renewMergeLease,
   renewReaderLease,
 } from './storage-leases'
+import { deleteStorageLocationIfUnread } from './storage-lifecycle'
+
+// Bounds the self-heal retry when matching keeps surfacing Dangling Cache
+// Entries for the same prefix — caps a pathological scan (ADR-0005).
+const MAX_DANGLING_PURGE_ATTEMPTS = 10
 
 function escapeLikePattern(value: string) {
   return value
@@ -547,48 +553,103 @@ export class Storage {
   }
 
   async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.matchCacheEntry>[0]) {
-    const cacheEntry = await this.matchCacheEntry(args)
-    if (!cacheEntry) return
+    // Returning a download URL is a promise the data exists — the client commits
+    // to downloading and can't walk a later 404 back to a cache miss (BuildKit
+    // hard-fails the build). So validate storage before handing out a URL: a
+    // Dangling Cache Entry is self-healed and matching retried, so a valid
+    // candidate under another restore key still wins. See ADR-0005.
+    for (let attempt = 0; attempt < MAX_DANGLING_PURGE_ATTEMPTS; attempt++) {
+      const cacheEntry = await this.matchCacheEntry(args)
+      if (!cacheEntry) return
 
-    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
-
-    if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl)
-      return {
-        downloadUrl: defaultUrl,
-        cacheEntry: cacheEntry.match,
-      }
-
-    const directDownloadExpiresAt = Date.now() + DIRECT_DOWNLOAD_LEASE_DURATION_MS
-    const location = await this.db.transaction().execute(async (tx) => {
-      let query = tx
+      const location = await this.db
         .selectFrom('storage_locations')
         .where('id', '=', cacheEntry.match.locationId)
-        .select(['id', 'folderName', 'mergedAt'])
-      if (env.DB_DRIVER !== 'sqlite') query = query.forUpdate()
-      const location = await query.executeTakeFirst()
-      if (!location?.mergedAt) return location
-      await createReaderLease(tx, location.id, 'storage', directDownloadExpiresAt)
-      await tx
-        .updateTable('storage_locations')
-        .set({ lastDownloadedAt: Date.now() })
-        .where('id', '=', location.id)
-        .execute()
-      return location
+        .select(['id', 'folderName', 'partCount', 'mergedAt', 'partsDeletedAt'])
+        .executeTakeFirst()
+
+      if (!location || !(await this.storageHasData(location))) {
+        logger.warn(
+          `Cache entry ${cacheEntry.match.id} (${cacheEntry.match.key}) is a Dangling Cache Entry, purging.`,
+        )
+        await this.purgeDanglingCacheEntry(cacheEntry.match.id, cacheEntry.match.locationId)
+        continue
+      }
+
+      const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
+
+      if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl || !location.mergedAt)
+        return {
+          downloadUrl: defaultUrl,
+          cacheEntry: cacheEntry.match,
+        }
+
+      // Merged entry with direct downloads enabled: take a reader lease bounded
+      // by the signed URL lifetime, then sign.
+      const directDownloadExpiresAt = Date.now() + DIRECT_DOWNLOAD_LEASE_DURATION_MS
+      const leased = await this.db.transaction().execute(async (tx) => {
+        let query = tx
+          .selectFrom('storage_locations')
+          .where('id', '=', location.id)
+          .select(['id', 'folderName', 'mergedAt'])
+        if (env.DB_DRIVER !== 'sqlite') query = query.forUpdate()
+        const current = await query.executeTakeFirst()
+        if (!current?.mergedAt) return current
+        await createReaderLease(tx, current.id, 'storage', directDownloadExpiresAt)
+        await tx
+          .updateTable('storage_locations')
+          .set({ lastDownloadedAt: Date.now() })
+          .where('id', '=', current.id)
+          .execute()
+        return current
+      })
+      if (!leased) throw new Error('Storage location not found')
+
+      // The merge could have been undone between validation and the lease read.
+      const downloadUrl = leased.mergedAt
+        ? await this.adapter.createDownloadUrl(
+            `${leased.folderName}/merged`,
+            directDownloadExpiresAt,
+          )
+        : defaultUrl
+
+      return {
+        downloadUrl,
+        cacheEntry: cacheEntry.match,
+      }
+    }
+
+    logger.warn('Exhausted Dangling Cache Entry purge attempts; returning cache miss.')
+  }
+
+  /**
+   * True iff the entry's storage physically exists. A merged entry is confirmed
+   * by its merged object; an unmerged entry by its first Part. Parts deleted
+   * without a completed merge means the data is gone. See ADR-0005.
+   */
+  private async storageHasData(location: {
+    folderName: string
+    partCount: number
+    mergedAt: number | null
+    partsDeletedAt: number | null
+  }) {
+    if (location.mergedAt) return this.adapter.objectExists(`${location.folderName}/merged`)
+    if (location.partsDeletedAt || location.partCount === 0) return false
+    // ponytail: single-part HEAD, not a full LIST of parts. External drift wipes
+    // the whole folder and the server never produces partial Part loss, so
+    // Part 0's absence is a sufficient proxy. Won't catch surgical deletion of
+    // an interior Part. See ADR-0005.
+    return this.adapter.objectExists(`${location.folderName}/parts/0`)
+  }
+
+  private async purgeDanglingCacheEntry(cacheEntryId: string, locationId: string) {
+    await this.db.transaction().execute(async (tx) => {
+      await tx.deleteFrom('cache_entries').where('id', '=', cacheEntryId).execute()
+      // Reap the now-childless Storage Location too: an Orphaned Storage sweep
+      // scans physical storage and can never see a row whose data is already
+      // gone. Respects reader leases per ADR-0002.
+      await deleteStorageLocationIfUnread(tx, locationId)
     })
-    if (!location) throw new Error('Storage location not found')
-
-    let downloadUrl = defaultUrl
-    if (location.mergedAt) {
-      downloadUrl = await this.adapter.createDownloadUrl(
-        `${location.folderName}/merged`,
-        directDownloadExpiresAt,
-      )
-    }
-
-    return {
-      downloadUrl,
-      cacheEntry: cacheEntry.match,
-    }
   }
 }
 
@@ -603,6 +664,7 @@ export interface StorageAdapter {
    * to a temp path and renames. See ADR-0004.
    */
   uploadStream(objectName: string, stream: Readable): Promise<void>
+  objectExists(objectName: string): Promise<boolean>
   deleteFolder(folderName: string): Promise<StorageDeletion>
   countFilesInFolder(folderName: string): Promise<number>
   listStorageFolders(): Promise<StorageFolder[]>
@@ -690,6 +752,26 @@ class S3Adapter implements StorageAdapter {
       return response.Body as Readable
     } catch (err: any) {
       if (err.name === 'NoSuchKey') throw new ObjectNotFoundError(objectName)
+      throw err
+    }
+  }
+
+  async objectExists(objectName: string) {
+    try {
+      await this.s3.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: `${this.keyPrefix}/${objectName}`,
+        }),
+      )
+      return true
+    } catch (err: any) {
+      if (
+        err.name === 'NotFound' ||
+        err.name === 'NoSuchKey' ||
+        err.$metadata?.httpStatusCode === 404
+      )
+        return false
       throw err
     }
   }
@@ -861,6 +943,15 @@ class FileSystemAdapter implements StorageAdapter {
     return createReadStream(filePath)
   }
 
+  async objectExists(objectName: string) {
+    try {
+      await fs.access(this.safePath(objectName))
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async deleteFolder(folderName: string) {
     const folder = await this.inspectPath(this.safePath(folderName), folderName)
     await fs.rm(this.safePath(folderName), {
@@ -974,6 +1065,11 @@ class GcsAdapter implements StorageAdapter {
     const [exists] = await file.exists()
     if (!exists) throw new ObjectNotFoundError(objectName)
     return file.createReadStream()
+  }
+
+  async objectExists(objectName: string) {
+    const [exists] = await this.bucket.file(`${this.keyPrefix}/${objectName}`).exists()
+    return exists
   }
 
   async deleteFolder(folderName: string) {

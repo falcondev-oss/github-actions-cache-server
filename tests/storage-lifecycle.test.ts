@@ -40,6 +40,9 @@ describe('storage lifecycle reconciliation', () => {
         return Readable.from('')
       },
       async uploadStream() {},
+      async objectExists() {
+        return false
+      },
       async listStorageFolders() {
         throw new Error('incomplete inventory')
       },
@@ -66,6 +69,9 @@ describe('storage lifecycle reconciliation', () => {
         return Readable.from('')
       },
       async uploadStream() {},
+      async objectExists() {
+        return false
+      },
       async listStorageFolders() {
         return [{ folderName: 'orphan-under-write', objectCount: 99, bytes: 999, updatedAt: 0 }]
       },

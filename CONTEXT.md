@@ -32,6 +32,10 @@ A Storage Reader Lease held by a download that is reading a Storage Location's P
 Stored cache data that, after a safety grace period, belongs to neither an Upload nor a Storage Location.
 _Avoid_: Orphan blob, orphaned storage location
 
+**Dangling Cache Entry**:
+A Cache Entry whose Storage Location references storage that no longer physically exists, caused by external mutation of storage the server owns (bucket wipe, external lifecycle expiry, out-of-sync database restore). The mirror of Orphaned Storage.
+_Avoid_: stale entry, missing cache
+
 **Results Passthrough**:
 The transparent forwarding of a Results request that the cache server does not handle, and its response, without interpreting either.
 
