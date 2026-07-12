@@ -1,4 +1,3 @@
-/* eslint-disable no-shadow */
 /* eslint-disable ts/method-signature-style */
 import type { Kysely } from 'kysely'
 import type { ReadableStream } from 'node:stream/web'
@@ -63,13 +62,11 @@ export class ObjectNotFoundError extends Error {
 }
 
 export class Storage {
-  adapter
-  private db
-  private mergeStreamPromises = new Set<Promise<void>>()
-
-  private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
-    this.adapter = adapter
-    this.db = db
+  static async fromEnv() {
+    return new Storage({
+      adapter: await this.getAdapterFromEnv(),
+      db: await getDatabase(),
+    })
   }
 
   static async getAdapterFromEnv() {
@@ -80,10 +77,122 @@ export class Storage {
       .exhaustive()
   }
 
-  static async fromEnv() {
-    return new Storage({
-      adapter: await Storage.getAdapterFromEnv(),
-      db: await getDatabase(),
+  private db
+  private mergeStreamPromises = new Set<Promise<void>>()
+  adapter
+
+  private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
+    this.adapter = adapter
+    this.db = db
+  }
+
+  private async abandonUpload(uploadId: number, folderName: string, reason: Error): Promise<never> {
+    await this.db.deleteFrom('uploads').where('id', '=', uploadId).execute()
+    try {
+      await this.adapter.deleteFolder(folderName)
+    } catch (err) {
+      throw new AggregateError([reason, err], reason.message)
+    }
+    throw reason
+  }
+
+  private protectDownloadStream(stream: Readable, readerLeaseId: string) {
+    const renewalTimer = setInterval(() => {
+      void renewReaderLease(this.db, readerLeaseId)
+        .then((renewed) => {
+          if (!renewed) stream.destroy(new Error('Storage Reader Lease was lost'))
+        })
+        .catch((err) => stream.destroy(err))
+    }, LEASE_RENEWAL_MS)
+    renewalTimer.unref()
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      clearInterval(renewalTimer)
+      void releaseReaderLease(this.db, readerLeaseId)
+    }
+    stream.once('end', release)
+    stream.once('close', release)
+    stream.once('error', release)
+    return stream
+  }
+
+  private async ensurePartsExist(location: StorageLocation) {
+    const partsFolder = `${location.folderName}/parts`
+    const actualPartCount = await this.adapter.countFilesInFolder(partsFolder)
+    if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
+  }
+
+  private async downloadFromCacheEntryLocation(location: StorageLocation) {
+    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
+
+    await this.ensurePartsExist(location)
+    return Readable.from(this.streamParts(location))
+  }
+
+  private async pumpPartsToStreams(
+    location: StorageLocation,
+    responseStream: PassThrough,
+    mergerStream: PassThrough,
+  ) {
+    if (location.partsDeletedAt) throw new Error('No parts to feed')
+
+    for await (const chunk of this.streamParts(location)) {
+      const responseWantsMore = responseStream.write(chunk)
+      const mergerWantsMore = mergerStream.write(chunk)
+
+      if (!responseWantsMore) await once(responseStream, 'drain')
+      if (!mergerWantsMore) await once(mergerStream, 'drain')
+    }
+
+    responseStream.end()
+    mergerStream.end()
+
+    await globalThis.gc?.()
+  }
+
+  private async *streamParts(location: StorageLocation) {
+    if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
+
+    for (let i = 0; i < location.partCount; i++) {
+      const partStream = await this.adapter.createDownloadStream(
+        `${location.folderName}/parts/${i}`,
+      )
+
+      for await (const chunk of partStream) yield chunk
+
+      await globalThis.gc?.()
+    }
+  }
+
+  /**
+   * True iff the entry's storage physically exists. A merged entry is confirmed
+   * by its merged object; an unmerged entry by its first Part. Parts deleted
+   * without a completed merge means the data is gone. See ADR-0005.
+   */
+  private async storageHasData(location: {
+    folderName: string
+    partCount: number
+    mergedAt: number | null
+    partsDeletedAt: number | null
+  }) {
+    if (location.mergedAt) return this.adapter.objectExists(`${location.folderName}/merged`)
+    if (location.partsDeletedAt || location.partCount === 0) return false
+    // ponytail: single-part HEAD, not a full LIST of parts. External drift wipes
+    // the whole folder and the server never produces partial Part loss, so
+    // Part 0's absence is a sufficient proxy. Won't catch surgical deletion of
+    // an interior Part. See ADR-0005.
+    return this.adapter.objectExists(`${location.folderName}/parts/0`)
+  }
+
+  private async purgeDanglingCacheEntry(cacheEntryId: string, locationId: string) {
+    await this.db.transaction().execute(async (tx) => {
+      await tx.deleteFrom('cache_entries').where('id', '=', cacheEntryId).execute()
+      // Reap the now-childless Storage Location too: an Orphaned Storage sweep
+      // scans physical storage and can never see a row whose data is already
+      // gone. Respects reader leases per ADR-0002.
+      await deleteStorageLocationIfUnread(tx, locationId)
     })
   }
 
@@ -226,16 +335,6 @@ export class Storage {
     return upload
   }
 
-  private async abandonUpload(uploadId: number, folderName: string, reason: Error): Promise<never> {
-    await this.db.deleteFrom('uploads').where('id', '=', uploadId).execute()
-    try {
-      await this.adapter.deleteFolder(folderName)
-    } catch (err) {
-      throw new AggregateError([reason, err], reason.message)
-    }
-    throw reason
-  }
-
   async download(cacheEntryId: string): Promise<Readable | undefined> {
     const protectedLocation = await this.db.transaction().execute(async (tx) => {
       let query = tx
@@ -358,76 +457,6 @@ export class Storage {
     }
   }
 
-  private protectDownloadStream(stream: Readable, readerLeaseId: string) {
-    const renewalTimer = setInterval(() => {
-      void renewReaderLease(this.db, readerLeaseId)
-        .then((renewed) => {
-          if (!renewed) stream.destroy(new Error('Storage Reader Lease was lost'))
-        })
-        .catch((err) => stream.destroy(err))
-    }, LEASE_RENEWAL_MS)
-    renewalTimer.unref()
-    let released = false
-    const release = () => {
-      if (released) return
-      released = true
-      clearInterval(renewalTimer)
-      void releaseReaderLease(this.db, readerLeaseId)
-    }
-    stream.once('end', release)
-    stream.once('close', release)
-    stream.once('error', release)
-    return stream
-  }
-
-  private async ensurePartsExist(location: StorageLocation) {
-    const partsFolder = `${location.folderName}/parts`
-    const actualPartCount = await this.adapter.countFilesInFolder(partsFolder)
-    if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
-  }
-
-  private async downloadFromCacheEntryLocation(location: StorageLocation) {
-    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
-
-    await this.ensurePartsExist(location)
-    return Readable.from(this.streamParts(location))
-  }
-
-  private async pumpPartsToStreams(
-    location: StorageLocation,
-    responseStream: PassThrough,
-    mergerStream: PassThrough,
-  ) {
-    if (location.partsDeletedAt) throw new Error('No parts to feed')
-
-    for await (const chunk of this.streamParts(location)) {
-      const responseWantsMore = responseStream.write(chunk)
-      const mergerWantsMore = mergerStream.write(chunk)
-
-      if (!responseWantsMore) await once(responseStream, 'drain')
-      if (!mergerWantsMore) await once(mergerStream, 'drain')
-    }
-
-    responseStream.end()
-    mergerStream.end()
-
-    await globalThis.gc?.()
-  }
-
-  private async *streamParts(location: StorageLocation) {
-    if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
-
-    for (let i = 0; i < location.partCount; i++) {
-      const partStream = await this.adapter.createDownloadStream(
-        `${location.folderName}/parts/${i}`,
-      )
-
-      for await (const chunk of partStream) yield chunk
-
-      await globalThis.gc?.()
-    }
-  }
-
   async createUpload({
     key,
     version,
@@ -470,7 +499,7 @@ export class Storage {
   }
 
   async matchCacheEntry({
-    keys: [primaryKey, ...restoreKeys],
+    keys,
     version,
     scopes,
     repoId,
@@ -480,6 +509,7 @@ export class Storage {
     scopes: string[]
     repoId: string
   }) {
+    const [primaryKey, ...restoreKeys] = keys
     for (const scope of scopes) {
       const exactPrimaryMatch = await this.db
         .selectFrom('cache_entries')
@@ -621,36 +651,6 @@ export class Storage {
 
     logger.warn('Exhausted Dangling Cache Entry purge attempts; returning cache miss.')
   }
-
-  /**
-   * True iff the entry's storage physically exists. A merged entry is confirmed
-   * by its merged object; an unmerged entry by its first Part. Parts deleted
-   * without a completed merge means the data is gone. See ADR-0005.
-   */
-  private async storageHasData(location: {
-    folderName: string
-    partCount: number
-    mergedAt: number | null
-    partsDeletedAt: number | null
-  }) {
-    if (location.mergedAt) return this.adapter.objectExists(`${location.folderName}/merged`)
-    if (location.partsDeletedAt || location.partCount === 0) return false
-    // ponytail: single-part HEAD, not a full LIST of parts. External drift wipes
-    // the whole folder and the server never produces partial Part loss, so
-    // Part 0's absence is a sufficient proxy. Won't catch surgical deletion of
-    // an interior Part. See ADR-0005.
-    return this.adapter.objectExists(`${location.folderName}/parts/0`)
-  }
-
-  private async purgeDanglingCacheEntry(cacheEntryId: string, locationId: string) {
-    await this.db.transaction().execute(async (tx) => {
-      await tx.deleteFrom('cache_entries').where('id', '=', cacheEntryId).execute()
-      // Reap the now-childless Storage Location too: an Orphaned Storage sweep
-      // scans physical storage and can never see a row whose data is already
-      // gone. Respects reader leases per ADR-0002.
-      await deleteStorageLocationIfUnread(tx, locationId)
-    })
-  }
 }
 
 export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
@@ -698,15 +698,6 @@ function accumulateFolder(
 }
 
 class S3Adapter implements StorageAdapter {
-  private s3
-  private bucket
-  private keyPrefix = 'gh-actions-cache'
-
-  constructor({ bucket, s3 }: { s3: S3Client; bucket: string }) {
-    this.s3 = s3
-    this.bucket = bucket
-  }
-
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 's3' }>) {
     const bucket = env.STORAGE_S3_BUCKET
     const agent = new Agent({
@@ -739,49 +730,13 @@ class S3Adapter implements StorageAdapter {
     return new S3Adapter({ s3, bucket })
   }
 
-  async createDownloadStream(objectName: string) {
-    try {
-      const response = await this.s3.send(
-        new GetObjectCommand({
-          Bucket: this.bucket,
-          Key: `${this.keyPrefix}/${objectName}`,
-        }),
-      )
-      if (!response.Body) throw new Error('No body in S3 get object response')
+  private s3
+  private bucket
+  private keyPrefix = 'gh-actions-cache'
 
-      return response.Body as Readable
-    } catch (err: any) {
-      if (err.name === 'NoSuchKey') throw new ObjectNotFoundError(objectName)
-      throw err
-    }
-  }
-
-  async objectExists(objectName: string) {
-    try {
-      await this.s3.send(
-        new HeadObjectCommand({
-          Bucket: this.bucket,
-          Key: `${this.keyPrefix}/${objectName}`,
-        }),
-      )
-      return true
-    } catch (err: any) {
-      if (
-        err.name === 'NotFound' ||
-        err.name === 'NoSuchKey' ||
-        err.$metadata?.httpStatusCode === 404
-      )
-        return false
-      throw err
-    }
-  }
-
-  async deleteFolder(folderName: string) {
-    return this.deleteByPrefix(`${this.keyPrefix}/${folderName}/`)
-  }
-
-  async clear() {
-    await this.deleteByPrefix(`${this.keyPrefix}/`)
+  constructor({ bucket, s3 }: { s3: S3Client; bucket: string }) {
+    this.s3 = s3
+    this.bucket = bucket
   }
 
   private async *listObjectsByPrefix(prefix: string) {
@@ -851,6 +806,51 @@ class S3Adapter implements StorageAdapter {
     return deleted
   }
 
+  async createDownloadStream(objectName: string) {
+    try {
+      const response = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: `${this.keyPrefix}/${objectName}`,
+        }),
+      )
+      if (!response.Body) throw new Error('No body in S3 get object response')
+
+      return response.Body as Readable
+    } catch (err: any) {
+      if (err.name === 'NoSuchKey') throw new ObjectNotFoundError(objectName)
+      throw err
+    }
+  }
+
+  async objectExists(objectName: string) {
+    try {
+      await this.s3.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: `${this.keyPrefix}/${objectName}`,
+        }),
+      )
+      return true
+    } catch (err: any) {
+      if (
+        err.name === 'NotFound' ||
+        err.name === 'NoSuchKey' ||
+        err.$metadata?.httpStatusCode === 404
+      )
+        return false
+      throw err
+    }
+  }
+
+  async deleteFolder(folderName: string) {
+    return this.deleteByPrefix(`${this.keyPrefix}/${folderName}/`)
+  }
+
+  async clear() {
+    await this.deleteByPrefix(`${this.keyPrefix}/`)
+  }
+
   async uploadStream(objectName: string, iterator: AsyncIterable<Uint8Array>) {
     await new S3Upload({
       client: this.s3,
@@ -879,12 +879,13 @@ class S3Adapter implements StorageAdapter {
     const prefix = `${this.keyPrefix}/`
 
     for await (const response of this.listObjectsByPrefix(prefix)) {
-      for (const object of response.Contents ?? []) {
+      const contents = response.Contents ?? []
+      for (const object of contents) {
         if (!object.Key) continue
         if (!object.LastModified)
           throw new Error(`S3 did not return a modification time for object "${object.Key}"`)
         const relativeName = object.Key.slice(prefix.length)
-        const folderName = relativeName.split('/')[0]
+        const folderName = relativeName.split('/', 1)[0]
         if (!folderName) continue
 
         accumulateFolder(folders, folderName, object.Size ?? 0, object.LastModified.getTime())
@@ -909,6 +910,17 @@ class S3Adapter implements StorageAdapter {
 }
 
 class FileSystemAdapter implements StorageAdapter {
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'filesystem' }>) {
+    const rootFolder = env.STORAGE_FILESYSTEM_PATH
+    await fs.mkdir(rootFolder, {
+      recursive: true,
+    })
+
+    return new FileSystemAdapter({
+      rootFolder,
+    })
+  }
+
   private rootFolder
 
   constructor({ rootFolder }: { rootFolder: string }) {
@@ -922,15 +934,29 @@ class FileSystemAdapter implements StorageAdapter {
     return resolved
   }
 
-  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'filesystem' }>) {
-    const rootFolder = env.STORAGE_FILESYSTEM_PATH
-    await fs.mkdir(rootFolder, {
-      recursive: true,
-    })
-
-    return new FileSystemAdapter({
-      rootFolder,
-    })
+  private async inspectPath(entryPath: string, folderName: string) {
+    const folder: StorageFolder = { folderName, objectCount: 0, bytes: 0, updatedAt: 0 }
+    const inspect = async (currentPath: string): Promise<void> => {
+      let stat
+      try {
+        stat = await fs.lstat(currentPath)
+      } catch (err: any) {
+        if (err.code === 'ENOENT') return
+        throw err
+      }
+      folder.updatedAt = Math.max(folder.updatedAt, stat.mtimeMs)
+      if (stat.isSymbolicLink())
+        throw new Error(`Refusing to inspect symbolic link in owned storage: ${currentPath}`)
+      if (!stat.isDirectory()) {
+        folder.objectCount++
+        folder.bytes += stat.size
+        return
+      }
+      const children = await fs.readdir(currentPath)
+      for (const child of children) await inspect(path.join(currentPath, child))
+    }
+    await inspect(entryPath)
+    return folder
   }
 
   async createDownloadStream(objectName: string) {
@@ -1008,41 +1034,9 @@ class FileSystemAdapter implements StorageAdapter {
       folders.push(await this.inspectPath(this.safePath(entry.name), entry.name))
     return folders
   }
-
-  private async inspectPath(entryPath: string, folderName: string) {
-    const folder: StorageFolder = { folderName, objectCount: 0, bytes: 0, updatedAt: 0 }
-    const inspect = async (currentPath: string): Promise<void> => {
-      let stat
-      try {
-        stat = await fs.lstat(currentPath)
-      } catch (err: any) {
-        if (err.code === 'ENOENT') return
-        throw err
-      }
-      folder.updatedAt = Math.max(folder.updatedAt, stat.mtimeMs)
-      if (stat.isSymbolicLink())
-        throw new Error(`Refusing to inspect symbolic link in owned storage: ${currentPath}`)
-      if (!stat.isDirectory()) {
-        folder.objectCount++
-        folder.bytes += stat.size
-        return
-      }
-      const children = await fs.readdir(currentPath)
-      for (const child of children) await inspect(path.join(currentPath, child))
-    }
-    await inspect(entryPath)
-    return folder
-  }
 }
 
 class GcsAdapter implements StorageAdapter {
-  private bucket
-  private keyPrefix = 'gh-actions-cache'
-
-  constructor({ bucket, gcs }: { bucket: string; gcs: GcsClient }) {
-    this.bucket = gcs.bucket(bucket)
-  }
-
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'gcs' }>) {
     const bucketName = env.STORAGE_GCS_BUCKET
 
@@ -1058,6 +1052,13 @@ class GcsAdapter implements StorageAdapter {
       bucket: bucketName,
       gcs,
     })
+  }
+
+  private bucket
+  private keyPrefix = 'gh-actions-cache'
+
+  constructor({ bucket, gcs }: { bucket: string; gcs: GcsClient }) {
+    this.bucket = gcs.bucket(bucket)
   }
 
   async createDownloadStream(objectName: string) {
@@ -1118,7 +1119,7 @@ class GcsAdapter implements StorageAdapter {
     const prefix = `${this.keyPrefix}/`
 
     for (const file of files) {
-      const folderName = file.name.slice(prefix.length).split('/')[0]
+      const folderName = file.name.slice(prefix.length).split('/', 1)[0]
       if (!folderName) continue
       const updatedAt = Date.parse(file.metadata.updated ?? '')
       if (!Number.isFinite(updatedAt))

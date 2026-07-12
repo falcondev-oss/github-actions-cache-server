@@ -1,5 +1,5 @@
 import type { Hookable } from 'hookable'
-import type { Migration } from 'kysely'
+import type { Migration } from 'kysely/migration'
 import type { Env } from './schemas'
 import { Storage } from './storage'
 

@@ -1,10 +1,10 @@
-/* eslint-disable no-shadow */
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { createSingletonPromise } from '@antfu/utils'
 import SQLite from 'better-sqlite3'
 import { createHooks } from 'hookable'
-import { Kysely, Migrator, MysqlDialect, PostgresDialect, SqliteDialect } from 'kysely'
+import { Kysely, MysqlDialect, PostgresDialect, SqliteDialect } from 'kysely'
+import { Migrator } from 'kysely/migration'
 import { createPool } from 'mysql2'
 import pg from 'pg'
 import { match } from 'ts-pattern'

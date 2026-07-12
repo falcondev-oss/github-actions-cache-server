@@ -17,7 +17,7 @@ describe.skipIf((process.env.VITEST_STORAGE_DRIVER ?? 'filesystem') !== 'filesys
 
         const failingStream = new Readable({
           read() {
-            this.destroy(new Error('interrupted upload'))
+            failingStream.destroy(new Error('interrupted upload'))
           },
         })
         await expect(adapter.uploadStream(`${folderName}/parts/1`, failingStream)).rejects.toThrow(

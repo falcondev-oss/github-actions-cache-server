@@ -18,8 +18,7 @@ export async function startResultsOrigin() {
       return
     }
 
-    const bodyChunks: Buffer[] = []
-    for await (const chunk of request) bodyChunks.push(chunk)
+    const bodyChunks: Buffer[] = await Array.fromAsync(request)
     requests.push({
       body: Buffer.concat(bodyChunks).toString(),
       headers: request.headers,

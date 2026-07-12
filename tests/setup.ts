@@ -1,4 +1,5 @@
-/* eslint-disable no-shadow */
+/* eslint-disable unicorn/no-top-level-assignment-in-function */
+
 import type { ResultPromise } from 'execa'
 
 import type { Nitro } from 'nitropack'
@@ -190,7 +191,8 @@ export async function setup() {
             host: 9000,
           })
           .withHealthCheck({
-            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/storage/v1/b'],
+            // fake-gcs-server's image ships wget, not curl
+            test: ['CMD-SHELL', 'wget -qO- http://localhost:9000/storage/v1/b'],
             interval: 1000,
             retries: 30,
             startPeriod: 1000,

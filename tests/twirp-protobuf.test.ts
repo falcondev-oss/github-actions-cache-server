@@ -1,3 +1,4 @@
+/* eslint-disable unicorn/no-top-level-assignment-in-function */
 import crypto from 'node:crypto'
 
 import { SignJWT } from 'jose'

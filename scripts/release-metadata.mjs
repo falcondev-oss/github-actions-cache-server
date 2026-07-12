@@ -18,7 +18,7 @@ function readChartField(chart, field) {
 function replaceChartField(chart, field, value, quoted = false) {
   return chart.replace(
     new RegExp(`^${field}:.*$`, 'm'),
-    `${field}: ${quoted ? `'${value}'` : value}`,
+    () => `${field}: ${quoted ? `'${value}'` : value}`,
   )
 }
 
@@ -51,9 +51,20 @@ async function bumpChartVersion(bump) {
   const metadata = await readMetadata()
   let { major, minor, patch } = parseSemver(metadata.chartVersion, 'chart version')
 
-  if (bump === 'major') [major, minor, patch] = [major + 1, 0, 0]
-  if (bump === 'minor') [minor, patch] = [minor + 1, 0]
-  if (bump === 'patch') patch += 1
+  switch (bump) {
+    case 'major': {
+      ;[major, minor, patch] = [major + 1, 0, 0]
+      break
+    }
+    case 'minor': {
+      ;[minor, patch] = [minor + 1, 0]
+      break
+    }
+    case 'patch': {
+      patch += 1
+      break
+    }
+  }
 
   const chartVersion = `${major}.${minor}.${patch}`
   const chart = replaceChartField(

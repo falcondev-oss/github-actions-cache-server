@@ -39,9 +39,9 @@ function readChart(directory: string) {
 }
 
 afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true })),
-  )
+  const directories = [...temporaryDirectories]
+  temporaryDirectories.length = 0
+  await Promise.all(directories.map((directory) => fs.rm(directory, { recursive: true })))
 })
 
 describe('release metadata CLI', () => {
