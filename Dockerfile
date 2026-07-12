@@ -4,7 +4,7 @@ FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
 
-RUN --mount=type=cache,target=/root/.npm npm install -g pnpm@latest-10
+RUN --mount=type=cache,target=/root/.npm npm install -g pnpm@latest-11
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
