@@ -95,6 +95,9 @@ importers:
       pg:
         specifier: ^8.20.0
         version: 8.20.0
+      protobufjs:
+        specifier: ^7.5.4
+        version: 7.5.4
       remeda:
         specifier: ^2.33.6
         version: 2.33.6
@@ -12846,7 +12849,7 @@ snapshots:
 
   vite@7.3.1(@types/node@25.5.0)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
-      esbuild: 0.27.3
+      esbuild: 0.27.4
       fdir: 6.5.0(picomatch@4.0.3)
       picomatch: 4.0.3
       postcss: 8.5.8

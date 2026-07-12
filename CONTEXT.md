@@ -36,6 +36,12 @@ _Avoid_: Orphan blob, orphaned storage location
 A Cache Entry whose Storage Location references storage that no longer physically exists, caused by external mutation of storage the server owns (bucket wipe, external lifecycle expiry, out-of-sync database restore). The mirror of Orphaned Storage.
 _Avoid_: stale entry, missing cache
 
+**Cache Hit**:
+A download-URL request that matched an existing Cache Entry — by exact key or by a restore-key prefix — and passed dangling-entry validation.
+
+**Cache Miss**:
+A download-URL request that found no usable Cache Entry. Includes the case where the only match was a Dangling Cache Entry that was purged with no fallback match.
+
 **Results Passthrough**:
 The transparent forwarding of a Results request that the cache server does not handle, and its response, without interpreting either.
 

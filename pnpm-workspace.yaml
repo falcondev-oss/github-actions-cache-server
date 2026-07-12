@@ -1,8 +1,8 @@
-onlyBuiltDependencies:
-  - '@parcel/watcher'
-  - better-sqlite3
-  - cpu-features
-  - esbuild
-  - protobufjs
-  - ssh2
-  - unrs-resolver
+allowBuilds:
+  '@parcel/watcher': true
+  better-sqlite3: true
+  cpu-features: true
+  esbuild: true
+  protobufjs: true
+  ssh2: true
+  unrs-resolver: true
