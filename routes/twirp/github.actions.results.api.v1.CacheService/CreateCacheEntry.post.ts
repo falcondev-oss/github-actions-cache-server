@@ -2,24 +2,21 @@ import { z } from 'zod'
 import { env } from '~/lib/env'
 import { getCacheScope } from '~/lib/scope'
 import { getStorage } from '~/lib/storage'
+import { readTwirpRequest, sendTwirpResponse, TwirpMessage } from '~/lib/twirp'
 
 const bodySchema = z.object({
-  key: z.string(),
-  version: z.string(),
+  key: z.string().min(1),
+  version: z.string().min(1),
 })
 
 export default defineEventHandler(async (event) => {
   const { scopes, repoId } = await getCacheScope(event)
 
-  const body = (await readBody(event)) as unknown
-  const parsedBody = bodySchema.safeParse(body)
-  if (!parsedBody.success)
-    throw createError({
-      statusCode: 400,
-      statusMessage: `Invalid body: ${parsedBody.error.message}`,
-    })
-
-  const { key, version } = parsedBody.data
+  const { key, version } = await readTwirpRequest(
+    event,
+    bodySchema,
+    TwirpMessage.CreateCacheEntryRequest,
+  )
 
   const storage = await getStorage()
   const writeScope = scopes.find((s) => s.Permission >= 2)
@@ -27,13 +24,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 403, message: 'No scope with write permission found' })
 
   const upload = await storage.createUpload({ key, version, scope: writeScope.Scope, repoId })
-  if (!upload)
-    return {
-      ok: false,
-    }
 
-  return {
-    ok: true,
-    signed_upload_url: `${env.API_BASE_URL}/devstoreaccount1/upload/${upload.id}`,
-  }
+  return sendTwirpResponse(
+    event,
+    upload
+      ? { ok: true, signed_upload_url: `${env.API_BASE_URL}/devstoreaccount1/upload/${upload.id}` }
+      : { ok: false },
+    TwirpMessage.CreateCacheEntryResponse,
+  )
 })

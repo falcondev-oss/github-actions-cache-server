@@ -1,4 +1,3 @@
-/* eslint-disable no-shadow */
 /* eslint-disable ts/method-signature-style */
 import type { Kysely } from 'kysely'
 import type { ReadableStream } from 'node:stream/web'
@@ -17,6 +16,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -31,6 +31,21 @@ import { getDatabase } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
 import { logger } from './logger'
+import {
+  acquireMergeLease,
+  createReaderLease,
+  DIRECT_DOWNLOAD_LEASE_DURATION_MS,
+  LEASE_RENEWAL_MS,
+  releaseMergeLease,
+  releaseReaderLease,
+  renewMergeLease,
+  renewReaderLease,
+} from './storage-leases'
+import { deleteStorageLocationIfUnread } from './storage-lifecycle'
+
+// Bounds the self-heal retry when matching keeps surfacing Dangling Cache
+// Entries for the same prefix — caps a pathological scan (ADR-0005).
+const MAX_DANGLING_PURGE_ATTEMPTS = 10
 
 function escapeLikePattern(value: string) {
   return value
@@ -47,13 +62,11 @@ export class ObjectNotFoundError extends Error {
 }
 
 export class Storage {
-  adapter
-  private db
-  private mergeStreamPromises = new Set<Promise<void>>()
-
-  private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
-    this.adapter = adapter
-    this.db = db
+  static async fromEnv() {
+    return new Storage({
+      adapter: await this.getAdapterFromEnv(),
+      db: await getDatabase(),
+    })
   }
 
   static async getAdapterFromEnv() {
@@ -64,10 +77,122 @@ export class Storage {
       .exhaustive()
   }
 
-  static async fromEnv() {
-    return new Storage({
-      adapter: await Storage.getAdapterFromEnv(),
-      db: await getDatabase(),
+  private db
+  private mergeStreamPromises = new Set<Promise<void>>()
+  adapter
+
+  private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
+    this.adapter = adapter
+    this.db = db
+  }
+
+  private async abandonUpload(uploadId: number, folderName: string, reason: Error): Promise<never> {
+    await this.db.deleteFrom('uploads').where('id', '=', uploadId).execute()
+    try {
+      await this.adapter.deleteFolder(folderName)
+    } catch (err) {
+      throw new AggregateError([reason, err], reason.message)
+    }
+    throw reason
+  }
+
+  private protectDownloadStream(stream: Readable, readerLeaseId: string) {
+    const renewalTimer = setInterval(() => {
+      void renewReaderLease(this.db, readerLeaseId)
+        .then((renewed) => {
+          if (!renewed) stream.destroy(new Error('Storage Reader Lease was lost'))
+        })
+        .catch((err) => stream.destroy(err))
+    }, LEASE_RENEWAL_MS)
+    renewalTimer.unref()
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      clearInterval(renewalTimer)
+      void releaseReaderLease(this.db, readerLeaseId)
+    }
+    stream.once('end', release)
+    stream.once('close', release)
+    stream.once('error', release)
+    return stream
+  }
+
+  private async ensurePartsExist(location: StorageLocation) {
+    const partsFolder = `${location.folderName}/parts`
+    const actualPartCount = await this.adapter.countFilesInFolder(partsFolder)
+    if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
+  }
+
+  private async downloadFromCacheEntryLocation(location: StorageLocation) {
+    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
+
+    await this.ensurePartsExist(location)
+    return Readable.from(this.streamParts(location))
+  }
+
+  private async pumpPartsToStreams(
+    location: StorageLocation,
+    responseStream: PassThrough,
+    mergerStream: PassThrough,
+  ) {
+    if (location.partsDeletedAt) throw new Error('No parts to feed')
+
+    for await (const chunk of this.streamParts(location)) {
+      const responseWantsMore = responseStream.write(chunk)
+      const mergerWantsMore = mergerStream.write(chunk)
+
+      if (!responseWantsMore) await once(responseStream, 'drain')
+      if (!mergerWantsMore) await once(mergerStream, 'drain')
+    }
+
+    responseStream.end()
+    mergerStream.end()
+
+    await globalThis.gc?.()
+  }
+
+  private async *streamParts(location: StorageLocation) {
+    if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
+
+    for (let i = 0; i < location.partCount; i++) {
+      const partStream = await this.adapter.createDownloadStream(
+        `${location.folderName}/parts/${i}`,
+      )
+
+      for await (const chunk of partStream) yield chunk
+
+      await globalThis.gc?.()
+    }
+  }
+
+  /**
+   * True iff the entry's storage physically exists. A merged entry is confirmed
+   * by its merged object; an unmerged entry by its first Part. Parts deleted
+   * without a completed merge means the data is gone. See ADR-0005.
+   */
+  private async storageHasData(location: {
+    folderName: string
+    partCount: number
+    mergedAt: number | null
+    partsDeletedAt: number | null
+  }) {
+    if (location.mergedAt) return this.adapter.objectExists(`${location.folderName}/merged`)
+    if (location.partsDeletedAt || location.partCount === 0) return false
+    // ponytail: single-part HEAD, not a full LIST of parts. External drift wipes
+    // the whole folder and the server never produces partial Part loss, so
+    // Part 0's absence is a sufficient proxy. Won't catch surgical deletion of
+    // an interior Part. See ADR-0005.
+    return this.adapter.objectExists(`${location.folderName}/parts/0`)
+  }
+
+  private async purgeDanglingCacheEntry(cacheEntryId: string, locationId: string) {
+    await this.db.transaction().execute(async (tx) => {
+      await tx.deleteFrom('cache_entries').where('id', '=', cacheEntryId).execute()
+      // Reap the now-childless Storage Location too: an Orphaned Storage sweep
+      // scans physical storage and can never see a row whose data is already
+      // gone. Respects reader leases per ADR-0002.
+      await deleteStorageLocationIfUnread(tx, locationId)
     })
   }
 
@@ -128,22 +253,31 @@ export class Storage {
     if (!upload) return
 
     if (upload.finishedPartUploadCount === 0) {
-      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
-      throw new Error('No parts have been uploaded')
+      return this.abandonUpload(
+        upload.id,
+        upload.folderName,
+        new Error('No parts have been uploaded'),
+      )
     }
 
     if (upload.startedPartUploadCount !== upload.finishedPartUploadCount) {
-      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
-      throw new Error(
-        `Not all parts have been uploaded (only ${upload.finishedPartUploadCount} of ${upload.startedPartUploadCount} parts uploaded)`,
+      return this.abandonUpload(
+        upload.id,
+        upload.folderName,
+        new Error(
+          `Not all parts have been uploaded (only ${upload.finishedPartUploadCount} of ${upload.startedPartUploadCount} parts uploaded)`,
+        ),
       )
     }
 
     const partCount = await this.adapter.countFilesInFolder(`${upload.folderName}/parts`)
     if (partCount !== upload.finishedPartUploadCount) {
-      await this.db.deleteFrom('uploads').where('id', '=', upload.id).execute()
-      throw new Error(
-        `Uploaded part count does not match actual part count in storage (expected ${upload.finishedPartUploadCount} but found ${partCount})`,
+      return this.abandonUpload(
+        upload.id,
+        upload.folderName,
+        new Error(
+          `Uploaded part count does not match actual part count in storage (expected ${upload.finishedPartUploadCount} but found ${partCount})`,
+        ),
       )
     }
 
@@ -169,7 +303,7 @@ export class Storage {
         .where('scope', '=', scope)
         .where('repoId', '=', repoId)
         .innerJoin('storage_locations', 'storage_locations.id', 'cache_entries.locationId')
-        .select(['cache_entries.id', 'cache_entries.locationId', 'storage_locations.folderName'])
+        .select(['cache_entries.id', 'cache_entries.locationId'])
         .executeTakeFirst()
 
       if (existingCacheEntry) {
@@ -181,11 +315,6 @@ export class Storage {
           })
           .where('id', '=', existingCacheEntry.id)
           .execute()
-        await tx
-          .deleteFrom('storage_locations')
-          .where('id', '=', existingCacheEntry.locationId)
-          .execute()
-        await this.adapter.deleteFolder(existingCacheEntry.folderName)
       } else
         await tx
           .insertInto('cache_entries')
@@ -207,13 +336,21 @@ export class Storage {
   }
 
   async download(cacheEntryId: string): Promise<Readable | undefined> {
-    const storageLocation = await this.db
-      .selectFrom('storage_locations')
-      .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
-      .where('cache_entries.id', '=', cacheEntryId)
-      .selectAll('storage_locations')
-      .executeTakeFirst()
-    if (!storageLocation) return
+    const protectedLocation = await this.db.transaction().execute(async (tx) => {
+      let query = tx
+        .selectFrom('storage_locations')
+        .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
+        .where('cache_entries.id', '=', cacheEntryId)
+        .selectAll('storage_locations')
+      if (env.DB_DRIVER !== 'sqlite') query = query.forUpdate()
+      const storageLocation = await query.executeTakeFirst()
+      if (!storageLocation) return
+      const readerScope = storageLocation.mergedAt ? 'storage' : 'parts'
+      const readerLeaseId = await createReaderLease(tx, storageLocation.id, readerScope)
+      return { storageLocation, readerLeaseId }
+    })
+    if (!protectedLocation) return
+    const { storageLocation, readerLeaseId } = protectedLocation
 
     void this.db
       .updateTable('storage_locations')
@@ -224,10 +361,18 @@ export class Storage {
       .execute()
 
     try {
-      if (storageLocation.mergedAt || storageLocation.mergeStartedAt)
-        return await this.downloadFromCacheEntryLocation(storageLocation)
+      if (storageLocation.mergedAt) {
+        const stream = await this.downloadFromCacheEntryLocation(storageLocation)
+        return this.protectDownloadStream(stream, readerLeaseId)
+      }
 
       await this.ensurePartsExist(storageLocation)
+
+      const mergeToken = await acquireMergeLease(this.db, storageLocation.id)
+      if (!mergeToken) {
+        const stream = await this.downloadFromCacheEntryLocation(storageLocation)
+        return this.protectDownloadStream(stream, readerLeaseId)
+      }
 
       await this.db
         .updateTable('storage_locations')
@@ -239,26 +384,32 @@ export class Storage {
 
       const responseStream = new PassThrough()
       const mergerStream = new PassThrough()
+      const renewalTimer = setInterval(() => {
+        void renewMergeLease(this.db, storageLocation.id, mergeToken)
+      }, LEASE_RENEWAL_MS)
+      renewalTimer.unref()
 
+      // Uploading straight to the final object is safe: uploads are atomically
+      // visible (see StorageAdapter.uploadStream) and Parts are immutable, so a
+      // merger that lost its lease can only overwrite `merged` with identical
+      // bytes — the fence only needs to guard who flips `mergedAt`.
       const mergePromise = this.adapter
         .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
         .then(async () => {
-          await this.db
-            .updateTable('storage_locations')
-            .set({
-              mergedAt: Date.now(),
-            })
-            .where('id', '=', storageLocation.id)
-            .execute()
           await this.db.transaction().execute(async (tx) => {
+            let leaseQuery = tx
+              .selectFrom('merge_leases')
+              .select(['token', 'expiresAt'])
+              .where('storageLocationId', '=', storageLocation.id)
+            if (env.DB_DRIVER !== 'sqlite') leaseQuery = leaseQuery.forUpdate()
+            const lease = await leaseQuery.executeTakeFirst()
+            if (lease?.token !== mergeToken || lease.expiresAt <= Date.now())
+              throw new Error('Merge lease was lost before completion')
             await tx
               .updateTable('storage_locations')
-              .set({
-                partsDeletedAt: Date.now(),
-              })
+              .set({ mergedAt: Date.now() })
               .where('id', '=', storageLocation.id)
               .execute()
-            await this.adapter.deleteFolder(`${storageLocation.folderName}/parts`)
           })
         })
         .catch(async () => {
@@ -269,8 +420,21 @@ export class Storage {
               mergeStartedAt: null,
             })
             .where('id', '=', storageLocation.id)
+            .where((eb) =>
+              eb.exists(
+                eb
+                  .selectFrom('merge_leases')
+                  .select('storageLocationId')
+                  .whereRef('storageLocationId', '=', 'storage_locations.id')
+                  .where('token', '=', mergeToken),
+              ),
+            )
             .execute()
           mergerStream.destroy()
+        })
+        .finally(async () => {
+          clearInterval(renewalTimer)
+          await releaseMergeLease(this.db, storageLocation.id, mergeToken)
         })
       this.mergeStreamPromises.add(mergePromise)
       mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
@@ -282,61 +446,14 @@ export class Storage {
           logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
       })
 
-      return responseStream
+      return this.protectDownloadStream(responseStream, readerLeaseId)
     } catch (err) {
+      await releaseReaderLease(this.db, readerLeaseId)
       if (err instanceof ObjectNotFoundError) {
         logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
         return
       }
       throw err
-    }
-  }
-
-  private async ensurePartsExist(location: StorageLocation) {
-    const partsFolder = `${location.folderName}/parts`
-    const actualPartCount = await this.adapter.countFilesInFolder(partsFolder)
-    if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
-  }
-
-  private async downloadFromCacheEntryLocation(location: StorageLocation) {
-    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
-
-    await this.ensurePartsExist(location)
-    return Readable.from(this.streamParts(location))
-  }
-
-  private async pumpPartsToStreams(
-    location: StorageLocation,
-    responseStream: PassThrough,
-    mergerStream: PassThrough,
-  ) {
-    if (location.partsDeletedAt) throw new Error('No parts to feed')
-
-    for await (const chunk of this.streamParts(location)) {
-      const responseWantsMore = responseStream.write(chunk)
-      const mergerWantsMore = mergerStream.write(chunk)
-
-      if (!responseWantsMore) await once(responseStream, 'drain')
-      if (!mergerWantsMore) await once(mergerStream, 'drain')
-    }
-
-    responseStream.end()
-    mergerStream.end()
-
-    await globalThis.gc?.()
-  }
-
-  private async *streamParts(location: StorageLocation) {
-    if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
-
-    for (let i = 0; i < location.partCount; i++) {
-      const partStream = await this.adapter.createDownloadStream(
-        `${location.folderName}/parts/${i}`,
-      )
-
-      for await (const chunk of partStream) yield chunk
-
-      await globalThis.gc?.()
     }
   }
 
@@ -382,7 +499,7 @@ export class Storage {
   }
 
   async matchCacheEntry({
-    keys: [primaryKey, ...restoreKeys],
+    keys,
     version,
     scopes,
     repoId,
@@ -392,6 +509,7 @@ export class Storage {
     scopes: string[]
     repoId: string
   }) {
+    const [primaryKey, ...restoreKeys] = keys
     for (const scope of scopes) {
       const exactPrimaryMatch = await this.db
         .selectFrom('cache_entries')
@@ -465,56 +583,121 @@ export class Storage {
   }
 
   async getCacheEntryWithDownloadUrl(args: Parameters<typeof this.matchCacheEntry>[0]) {
-    const cacheEntry = await this.matchCacheEntry(args)
-    if (!cacheEntry) return
+    // Returning a download URL is a promise the data exists — the client commits
+    // to downloading and can't walk a later 404 back to a cache miss (BuildKit
+    // hard-fails the build). So validate storage before handing out a URL: a
+    // Dangling Cache Entry is self-healed and matching retried, so a valid
+    // candidate under another restore key still wins. See ADR-0005.
+    for (let attempt = 0; attempt < MAX_DANGLING_PURGE_ATTEMPTS; attempt++) {
+      const cacheEntry = await this.matchCacheEntry(args)
+      if (!cacheEntry) return
 
-    const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
+      const location = await this.db
+        .selectFrom('storage_locations')
+        .where('id', '=', cacheEntry.match.locationId)
+        .select(['id', 'folderName', 'partCount', 'mergedAt', 'partsDeletedAt'])
+        .executeTakeFirst()
 
-    if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl)
-      return {
-        downloadUrl: defaultUrl,
-        cacheEntry: cacheEntry.match,
+      if (!location || !(await this.storageHasData(location))) {
+        logger.warn(
+          `Cache entry ${cacheEntry.match.id} (${cacheEntry.match.key}) is a Dangling Cache Entry, purging.`,
+        )
+        await this.purgeDanglingCacheEntry(cacheEntry.match.id, cacheEntry.match.locationId)
+        continue
       }
 
-    const location = await this.db
-      .selectFrom('storage_locations')
-      .where('id', '=', cacheEntry.match.locationId)
-      .select(['folderName', 'mergedAt'])
-      .executeTakeFirst()
-    if (!location) throw new Error('Storage location not found')
+      const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
 
-    const downloadUrl = location.mergedAt
-      ? await this.adapter.createDownloadUrl(`${location.folderName}/merged`)
-      : defaultUrl
+      if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl || !location.mergedAt)
+        return {
+          downloadUrl: defaultUrl,
+          cacheEntry: cacheEntry.match,
+        }
 
-    return {
-      downloadUrl,
-      cacheEntry: cacheEntry.match,
+      // Merged entry with direct downloads enabled: take a reader lease bounded
+      // by the signed URL lifetime, then sign.
+      const directDownloadExpiresAt = Date.now() + DIRECT_DOWNLOAD_LEASE_DURATION_MS
+      const leased = await this.db.transaction().execute(async (tx) => {
+        let query = tx
+          .selectFrom('storage_locations')
+          .where('id', '=', location.id)
+          .select(['id', 'folderName', 'mergedAt'])
+        if (env.DB_DRIVER !== 'sqlite') query = query.forUpdate()
+        const current = await query.executeTakeFirst()
+        if (!current?.mergedAt) return current
+        await createReaderLease(tx, current.id, 'storage', directDownloadExpiresAt)
+        await tx
+          .updateTable('storage_locations')
+          .set({ lastDownloadedAt: Date.now() })
+          .where('id', '=', current.id)
+          .execute()
+        return current
+      })
+      if (!leased) throw new Error('Storage location not found')
+
+      // The merge could have been undone between validation and the lease read.
+      const downloadUrl = leased.mergedAt
+        ? await this.adapter.createDownloadUrl(
+            `${leased.folderName}/merged`,
+            directDownloadExpiresAt,
+          )
+        : defaultUrl
+
+      return {
+        downloadUrl,
+        cacheEntry: cacheEntry.match,
+      }
     }
+
+    logger.warn('Exhausted Dangling Cache Entry purge attempts; returning cache miss.')
   }
 }
 
 export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
 
-interface StorageAdapter {
+export interface StorageAdapter {
   createDownloadStream(objectName: string): Promise<Readable>
+  /**
+   * Uploads must be atomically visible: an object never exists partially, and
+   * overwriting an object never disturbs active readers of the previous
+   * version. Object stores give this natively; the filesystem adapter writes
+   * to a temp path and renames. See ADR-0004.
+   */
   uploadStream(objectName: string, stream: Readable): Promise<void>
-  deleteFolder(folderName: string): Promise<void>
+  objectExists(objectName: string): Promise<boolean>
+  deleteFolder(folderName: string): Promise<StorageDeletion>
   countFilesInFolder(folderName: string): Promise<number>
-  createDownloadUrl?(objectName: string): Promise<string>
+  listStorageFolders(): Promise<StorageFolder[]>
+  createDownloadUrl?(objectName: string, expiresAt: number): Promise<string>
   clear(): Promise<void>
 }
 
+export interface StorageFolder {
+  folderName: string
+  objectCount: number
+  bytes: number
+  updatedAt: number
+}
+
+export interface StorageDeletion {
+  objects: number
+  bytes: number
+}
+
+function accumulateFolder(
+  folders: Map<string, StorageFolder>,
+  folderName: string,
+  size: number,
+  updatedAt: number,
+) {
+  const existing = folders.get(folderName) ?? { folderName, objectCount: 0, bytes: 0, updatedAt: 0 }
+  existing.objectCount++
+  existing.bytes += size
+  existing.updatedAt = Math.max(existing.updatedAt, updatedAt)
+  folders.set(folderName, existing)
+}
+
 class S3Adapter implements StorageAdapter {
-  private s3
-  private bucket
-  private keyPrefix = 'gh-actions-cache'
-
-  constructor({ bucket, s3 }: { s3: S3Client; bucket: string }) {
-    this.s3 = s3
-    this.bucket = bucket
-  }
-
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 's3' }>) {
     const bucket = env.STORAGE_S3_BUCKET
     const agent = new Agent({
@@ -527,7 +710,7 @@ class S3Adapter implements StorageAdapter {
       region: env.AWS_REGION,
       requestHandler: new NodeHttpHandler({
         httpsAgent: agent,
-        socketTimeout: 3000,
+        socketTimeout: env.STORAGE_S3_SOCKET_TIMEOUT_MS,
       }),
     })
 
@@ -547,6 +730,82 @@ class S3Adapter implements StorageAdapter {
     return new S3Adapter({ s3, bucket })
   }
 
+  private s3
+  private bucket
+  private keyPrefix = 'gh-actions-cache'
+
+  constructor({ bucket, s3 }: { s3: S3Client; bucket: string }) {
+    this.s3 = s3
+    this.bucket = bucket
+  }
+
+  private async *listObjectsByPrefix(prefix: string) {
+    let continuationToken: string | undefined
+
+    do {
+      const response = await this.s3.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        }),
+      )
+
+      yield response
+
+      if (!response.IsTruncated) return
+      if (!response.NextContinuationToken)
+        throw new Error(
+          `S3 listing for prefix "${prefix}" was truncated without a continuation token`,
+        )
+
+      continuationToken = response.NextContinuationToken
+    } while (continuationToken)
+  }
+
+  private async deleteByPrefix(prefix: string) {
+    const deleted = { objects: 0, bytes: 0 }
+    while (true) {
+      const listResponse = await this.s3.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix }),
+      )
+      if (!listResponse.Contents || listResponse.Contents.length === 0) break
+
+      deleted.objects += listResponse.Contents.length
+      deleted.bytes += listResponse.Contents.reduce(
+        (total, object) => total + (object.Size ?? 0),
+        0,
+      )
+
+      const responses = await Promise.all(
+        chunk(
+          listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
+          1000,
+        ).map((chunkedObjects) =>
+          this.s3.send(
+            new DeleteObjectsCommand({
+              Bucket: this.bucket,
+              Delete: {
+                Objects: chunkedObjects.map((obj) => ({
+                  Key: obj.Key,
+                })),
+                Quiet: true,
+              },
+            }),
+          ),
+        ),
+      )
+      const errors = responses.flatMap((response) => response.Errors ?? [])
+      if (errors.length > 0)
+        throw new Error(
+          `S3 failed to delete ${errors.length} object(s): ${errors
+            .map((error) => `${error.Key ?? '<unknown>'} (${error.Code ?? 'unknown error'})`)
+            .join(', ')}`,
+        )
+    }
+    return deleted
+  }
+
   async createDownloadStream(objectName: string) {
     try {
       const response = await this.s3.send(
@@ -564,42 +823,32 @@ class S3Adapter implements StorageAdapter {
     }
   }
 
+  async objectExists(objectName: string) {
+    try {
+      await this.s3.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: `${this.keyPrefix}/${objectName}`,
+        }),
+      )
+      return true
+    } catch (err: any) {
+      if (
+        err.name === 'NotFound' ||
+        err.name === 'NoSuchKey' ||
+        err.$metadata?.httpStatusCode === 404
+      )
+        return false
+      throw err
+    }
+  }
+
   async deleteFolder(folderName: string) {
     return this.deleteByPrefix(`${this.keyPrefix}/${folderName}/`)
   }
 
   async clear() {
-    return this.deleteByPrefix(this.keyPrefix)
-  }
-
-  private async deleteByPrefix(prefix: string) {
-    const listResponse = await this.s3.send(
-      new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: prefix,
-      }),
-    )
-
-    if (!listResponse.Contents || listResponse.Contents.length === 0) return
-
-    await Promise.all(
-      chunk(
-        listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
-        1000,
-      ).map((chunkedObjects) =>
-        this.s3.send(
-          new DeleteObjectsCommand({
-            Bucket: this.bucket,
-            Delete: {
-              Objects: chunkedObjects.map((obj) => ({
-                Key: obj.Key,
-              })),
-              Quiet: true,
-            },
-          }),
-        ),
-      ),
-    )
+    await this.deleteByPrefix(`${this.keyPrefix}/`)
   }
 
   async uploadStream(objectName: string, iterator: AsyncIterable<Uint8Array>) {
@@ -617,17 +866,36 @@ class S3Adapter implements StorageAdapter {
   }
 
   async countFilesInFolder(folderName: string) {
-    const listResponse = await this.s3.send(
-      new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: `${this.keyPrefix}/${folderName}/`,
-      }),
-    )
+    let count = 0
 
-    return listResponse.KeyCount ?? 0
+    for await (const listResponse of this.listObjectsByPrefix(`${this.keyPrefix}/${folderName}/`))
+      count += listResponse.Contents?.length ?? 0
+
+    return count
   }
 
-  async createDownloadUrl(objectName: string) {
+  async listStorageFolders() {
+    const folders = new Map<string, StorageFolder>()
+    const prefix = `${this.keyPrefix}/`
+
+    for await (const response of this.listObjectsByPrefix(prefix)) {
+      const contents = response.Contents ?? []
+      for (const object of contents) {
+        if (!object.Key) continue
+        if (!object.LastModified)
+          throw new Error(`S3 did not return a modification time for object "${object.Key}"`)
+        const relativeName = object.Key.slice(prefix.length)
+        const folderName = relativeName.split('/', 1)[0]
+        if (!folderName) continue
+
+        accumulateFolder(folders, folderName, object.Size ?? 0, object.LastModified.getTime())
+      }
+    }
+
+    return [...folders.values()]
+  }
+
+  async createDownloadUrl(objectName: string, expiresAt: number) {
     return getSignedUrl(
       this.s3,
       new GetObjectCommand({
@@ -635,13 +903,24 @@ class S3Adapter implements StorageAdapter {
         Key: `${this.keyPrefix}/${objectName}`,
       }),
       {
-        expiresIn: 10 * 60 * 1000, // 10min
+        expiresIn: Math.max(1, Math.floor((expiresAt - Date.now()) / 1000)),
       },
     )
   }
 }
 
 class FileSystemAdapter implements StorageAdapter {
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'filesystem' }>) {
+    const rootFolder = env.STORAGE_FILESYSTEM_PATH
+    await fs.mkdir(rootFolder, {
+      recursive: true,
+    })
+
+    return new FileSystemAdapter({
+      rootFolder,
+    })
+  }
+
   private rootFolder
 
   constructor({ rootFolder }: { rootFolder: string }) {
@@ -655,15 +934,29 @@ class FileSystemAdapter implements StorageAdapter {
     return resolved
   }
 
-  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'filesystem' }>) {
-    const rootFolder = env.STORAGE_FILESYSTEM_PATH
-    await fs.mkdir(rootFolder, {
-      recursive: true,
-    })
-
-    return new FileSystemAdapter({
-      rootFolder,
-    })
+  private async inspectPath(entryPath: string, folderName: string) {
+    const folder: StorageFolder = { folderName, objectCount: 0, bytes: 0, updatedAt: 0 }
+    const inspect = async (currentPath: string): Promise<void> => {
+      let stat
+      try {
+        stat = await fs.lstat(currentPath)
+      } catch (err: any) {
+        if (err.code === 'ENOENT') return
+        throw err
+      }
+      folder.updatedAt = Math.max(folder.updatedAt, stat.mtimeMs)
+      if (stat.isSymbolicLink())
+        throw new Error(`Refusing to inspect symbolic link in owned storage: ${currentPath}`)
+      if (!stat.isDirectory()) {
+        folder.objectCount++
+        folder.bytes += stat.size
+        return
+      }
+      const children = await fs.readdir(currentPath)
+      for (const child of children) await inspect(path.join(currentPath, child))
+    }
+    await inspect(entryPath)
+    return folder
   }
 
   async createDownloadStream(objectName: string) {
@@ -676,11 +969,22 @@ class FileSystemAdapter implements StorageAdapter {
     return createReadStream(filePath)
   }
 
+  async objectExists(objectName: string) {
+    try {
+      await fs.access(this.safePath(objectName))
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async deleteFolder(folderName: string) {
+    const folder = await this.inspectPath(this.safePath(folderName), folderName)
     await fs.rm(this.safePath(folderName), {
       recursive: true,
       force: true,
     })
+    return { objects: folder.objectCount, bytes: folder.bytes }
   }
 
   async clear() {
@@ -695,8 +999,20 @@ class FileSystemAdapter implements StorageAdapter {
 
   async uploadStream(objectName: string, stream: Readable) {
     const filePath = this.safePath(objectName)
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await pipeline(stream, createWriteStream(filePath))
+    // Write to a top-level temp entry and rename for atomic visibility. Temp
+    // entries orphaned by a crash are unauthorized top-level storage, so
+    // cleanup:orphaned-storage reclaims them after the grace period. Each
+    // upload gets its own entry — a shared temp directory would stay
+    // perpetually fresh and never age out.
+    const tempPath = this.safePath(`tmp-${randomUUID()}`)
+    try {
+      await pipeline(stream, createWriteStream(tempPath))
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.rename(tempPath, filePath)
+    } catch (err) {
+      await fs.rm(tempPath, { force: true })
+      throw err
+    }
   }
 
   async countFilesInFolder(folderName: string) {
@@ -710,16 +1026,17 @@ class FileSystemAdapter implements StorageAdapter {
       throw err
     }
   }
+
+  async listStorageFolders() {
+    const entries = await fs.readdir(this.rootFolder, { withFileTypes: true })
+    const folders: StorageFolder[] = []
+    for (const entry of entries)
+      folders.push(await this.inspectPath(this.safePath(entry.name), entry.name))
+    return folders
+  }
 }
 
 class GcsAdapter implements StorageAdapter {
-  private bucket
-  private keyPrefix = 'gh-actions-cache'
-
-  constructor({ bucket, gcs }: { bucket: string; gcs: GcsClient }) {
-    this.bucket = gcs.bucket(bucket)
-  }
-
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'gcs' }>) {
     const bucketName = env.STORAGE_GCS_BUCKET
 
@@ -737,6 +1054,13 @@ class GcsAdapter implements StorageAdapter {
     })
   }
 
+  private bucket
+  private keyPrefix = 'gh-actions-cache'
+
+  constructor({ bucket, gcs }: { bucket: string; gcs: GcsClient }) {
+    this.bucket = gcs.bucket(bucket)
+  }
+
   async createDownloadStream(objectName: string) {
     const file = this.bucket.file(`${this.keyPrefix}/${objectName}`)
     const [exists] = await file.exists()
@@ -744,15 +1068,24 @@ class GcsAdapter implements StorageAdapter {
     return file.createReadStream()
   }
 
+  async objectExists(objectName: string) {
+    const [exists] = await this.bucket.file(`${this.keyPrefix}/${objectName}`).exists()
+    return exists
+  }
+
   async deleteFolder(folderName: string) {
-    await this.bucket.deleteFiles({
-      prefix: `${this.keyPrefix}/${folderName}/`,
-    })
+    const prefix = `${this.keyPrefix}/${folderName}/`
+    const [files] = await this.bucket.getFiles({ prefix, autoPaginate: true })
+    await this.bucket.deleteFiles({ prefix })
+    return {
+      objects: files.length,
+      bytes: files.reduce((total, file) => total + Number(file.metadata.size ?? 0), 0),
+    }
   }
 
   async clear() {
     await this.bucket.deleteFiles({
-      prefix: this.keyPrefix,
+      prefix: `${this.keyPrefix}/`,
     })
   }
 
@@ -777,12 +1110,32 @@ class GcsAdapter implements StorageAdapter {
       .then((res) => res[0].length)
   }
 
-  async createDownloadUrl(objectName: string) {
+  async listStorageFolders() {
+    const [files] = await this.bucket.getFiles({
+      prefix: `${this.keyPrefix}/`,
+      autoPaginate: true,
+    })
+    const folders = new Map<string, StorageFolder>()
+    const prefix = `${this.keyPrefix}/`
+
+    for (const file of files) {
+      const folderName = file.name.slice(prefix.length).split('/', 1)[0]
+      if (!folderName) continue
+      const updatedAt = Date.parse(file.metadata.updated ?? '')
+      if (!Number.isFinite(updatedAt))
+        throw new Error(`GCS did not return a modification time for object "${file.name}"`)
+      accumulateFolder(folders, folderName, Number(file.metadata.size ?? 0), updatedAt)
+    }
+
+    return [...folders.values()]
+  }
+
+  async createDownloadUrl(objectName: string, expiresAt: number) {
     return this.bucket
       .file(`${this.keyPrefix}/${objectName}`)
       .getSignedUrl({
         action: 'read',
-        expires: Date.now() + 10 * 60 * 1000, // 10min
+        expires: expiresAt,
       })
       .then((res) => res[0])
   }

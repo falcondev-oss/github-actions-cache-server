@@ -1,7 +1,9 @@
-/* eslint-disable no-shadow */
+/* eslint-disable unicorn/no-top-level-assignment-in-function */
+
 import type { ResultPromise } from 'execa'
 
 import type { Nitro } from 'nitropack'
+import type { Server } from 'node:http'
 import type { StartedTestContainer } from 'testcontainers'
 import type { Env, envBaseSchema, envDbDriverSchema, envStorageDriverSchema } from '~/lib/schemas'
 
@@ -16,6 +18,7 @@ import { build, createNitro, prepare } from 'nitropack'
 import { GenericContainer } from 'testcontainers'
 import { match } from 'ts-pattern'
 import { envSchema } from '~/lib/schemas'
+import { startResultsOrigin } from './results-origin'
 
 export const TEST_TEMP_DIR = 'tests/temp'
 
@@ -34,9 +37,11 @@ const TESTING_ENV_BASE = {
 } satisfies Omit<
   typeof envBaseSchema.infer,
   | 'CACHE_CLEANUP_OLDER_THAN_DAYS'
+  | 'ORPHANED_STORAGE_GRACE_PERIOD_HOURS'
   | 'ENABLE_DIRECT_DOWNLOADS'
   | 'BENCHMARK'
   | 'SKIP_TOKEN_VALIDATION'
+  | 'ACTIONS_TOKEN_ISSUER'
 > &
   Record<string, string>
 
@@ -74,6 +79,7 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     STORAGE_DRIVER: 's3',
     AWS_REGION: 'us-east-1',
     STORAGE_S3_BUCKET: 'vitest',
+    STORAGE_S3_SOCKET_TIMEOUT_MS: 10_000,
     AWS_ACCESS_KEY_ID: 'minioadmin',
     AWS_SECRET_ACCESS_KEY: 'minioadmin',
     AWS_ENDPOINT_URL: 'http://localhost:9000',
@@ -96,11 +102,16 @@ let server: ResultPromise<{
   node: true
   stdio: 'inherit'
 }>
+let resultsOrigin: Server
 const testContainers: (StartedTestContainer | undefined)[] = []
 export async function setup() {
+  const resultsOriginFixture = await startResultsOrigin()
+  resultsOrigin = resultsOriginFixture.server
+
   Object.assign(
     process.env,
     TESTING_ENV_BASE,
+    { DEFAULT_ACTIONS_RESULTS_URL: resultsOriginFixture.url },
     TESTING_ENV_BY_DB_DRIVER[env.VITEST_DB_DRIVER],
     TESTING_ENV_BY_STORAGE_DRIVER[env.VITEST_STORAGE_DRIVER],
   )
@@ -180,7 +191,8 @@ export async function setup() {
             host: 9000,
           })
           .withHealthCheck({
-            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/storage/v1/b'],
+            // fake-gcs-server's image ships wget, not curl
+            test: ['CMD-SHELL', 'wget -qO- http://localhost:9000/storage/v1/b'],
             interval: 1000,
             retries: 30,
             startPeriod: 1000,
@@ -218,6 +230,9 @@ export async function setup() {
 export async function teardown() {
   await server?.kill()
   await nitro?.close()
+  await new Promise<void>((resolve, reject) =>
+    resultsOrigin?.close((error) => (error ? reject(error) : resolve())),
+  )
   await Promise.all(
     testContainers.map((container) => container?.stop({ remove: true, removeVolumes: true })),
   )

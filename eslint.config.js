@@ -5,7 +5,7 @@ export default eslintConfig({
   nuxt: false,
 })
   .append({
-    files: ['routes/**/*.*'],
+    files: ['routes/**/*.*', 'CONTEXT.md', 'AGENTS.md', 'CLAUDE.md'],
     rules: {
       'unicorn/filename-case': 'off',
     },

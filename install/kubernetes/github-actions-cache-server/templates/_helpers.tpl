@@ -127,6 +127,8 @@ Generate environment variables from config values.
   value: {{ .Values.config.enableDirectDownloads | quote }}
 - name: CACHE_CLEANUP_OLDER_THAN_DAYS
   value: {{ .Values.config.cacheCleanupOlderThanDays | quote }}
+- name: ORPHANED_STORAGE_GRACE_PERIOD_HOURS
+  value: {{ .Values.config.orphanedStorageGracePeriodHours | quote }}
 {{- if .Values.config.disableCleanupJobs }}
 - name: DISABLE_CLEANUP_JOBS
   value: "true"
@@ -167,6 +169,8 @@ Generate environment variables from config values.
 - name: AWS_SECRET_ACCESS_KEY
   value: {{ .secretAccessKey | quote }}
 {{- end }}
+- name: STORAGE_S3_SOCKET_TIMEOUT_MS
+  value: {{ .socketTimeoutMs | quote }}
 {{- end }}
 {{- else if eq .Values.config.storage.driver "gcs" }}
 {{- with .Values.config.storage.gcs }}

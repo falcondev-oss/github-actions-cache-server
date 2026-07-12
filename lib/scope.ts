@@ -4,9 +4,11 @@ import { hasAtLeast } from 'remeda'
 import { env } from './env'
 import { logger } from './logger'
 
-const JWKS = jose.createRemoteJWKSet(
-  new URL('https://token.actions.githubusercontent.com/.well-known/jwks'),
-)
+// ponytail: JWKS URL derived from the issuer as GitHub (and GHES, sharing the
+// same Actions stack) serves it at `{issuer}/.well-known/jwks`. Add an explicit
+// JWKS override var if a real GHES layout ever splits the JWKS host from the issuer.
+const issuer = env.ACTIONS_TOKEN_ISSUER.replace(/\/$/, '')
+const JWKS = jose.createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks`))
 
 function getBearerToken(event: H3Event) {
   const authHeader = getHeader(event, 'authorization')
@@ -23,7 +25,7 @@ async function verifyGitHubActionsToken(token: string) {
 
   return jose
     .jwtVerify(token, JWKS, {
-      issuer: 'https://token.actions.githubusercontent.com',
+      issuer: env.ACTIONS_TOKEN_ISSUER,
     })
     .then((res) => res.payload)
 }

@@ -19,7 +19,8 @@ export default defineNitroPlugin(async (nitro) => {
 
     for (const signal of ['SIGTERM', 'SIGINT'] satisfies NodeJS.Signals[]) {
       process.on(signal, () => {
-        for (const worker of Object.values(cluster.workers ?? {})) {
+        const workers = Object.values(cluster.workers ?? {})
+        for (const worker of workers) {
           worker?.process.kill(signal)
         }
       })

@@ -4,6 +4,7 @@ export const envStorageDriverSchema = type.or(
   {
     'STORAGE_DRIVER': type.unit('s3'),
     'STORAGE_S3_BUCKET': 'string',
+    'STORAGE_S3_SOCKET_TIMEOUT_MS': 'number.integer >= 0 = 10000',
     'AWS_REGION': "string = 'us-east-1'",
     'AWS_ENDPOINT_URL?': 'string.url',
     'AWS_ACCESS_KEY_ID?': 'string',
@@ -59,7 +60,9 @@ export const envBaseSchema = type({
   'API_BASE_URL': 'string.url',
   'DEFAULT_ACTIONS_RESULTS_URL':
     "string.url = 'https://results-receiver.actions.githubusercontent.com'",
+  'ACTIONS_TOKEN_ISSUER': "string.url = 'https://token.actions.githubusercontent.com'",
   'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 90',
+  'ORPHANED_STORAGE_GRACE_PERIOD_HOURS': 'number.integer >= 1 = 24',
   'DISABLE_CLEANUP_JOBS?': 'boolean',
   'DEBUG?': 'unknown',
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',

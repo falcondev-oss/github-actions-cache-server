@@ -1,23 +1,22 @@
 import { z } from 'zod'
+import { cacheUploadsTotal } from '~/lib/metrics'
 import { getCacheScope } from '~/lib/scope'
 import { getStorage } from '~/lib/storage'
+import { readTwirpRequest, sendTwirpResponse, TwirpMessage } from '~/lib/twirp'
 
 const bodySchema = z.object({
-  key: z.string(),
-  version: z.string(),
+  key: z.string().min(1),
+  version: z.string().min(1),
 })
 
 export default defineEventHandler(async (event) => {
   const { scopes, repoId } = await getCacheScope(event)
 
-  const parsedBody = bodySchema.safeParse(await readBody(event))
-  if (!parsedBody.success)
-    throw createError({
-      statusCode: 400,
-      statusMessage: `Invalid body: ${parsedBody.error.message}`,
-    })
-
-  const { key, version } = parsedBody.data
+  const { key, version } = await readTwirpRequest(
+    event,
+    bodySchema,
+    TwirpMessage.FinalizeCacheEntryUploadRequest,
+  )
 
   const storage = await getStorage()
   const writeScope = scopes.find((s) => s.Permission >= 2)
@@ -31,8 +30,11 @@ export default defineEventHandler(async (event) => {
       statusMessage: 'Upload not found',
     })
 
-  return {
-    ok: true,
-    entry_id: upload.id.toString(),
-  }
+  cacheUploadsTotal.inc()
+
+  return sendTwirpResponse(
+    event,
+    { ok: true, entry_id: upload.id.toString() },
+    TwirpMessage.FinalizeCacheEntryUploadResponse,
+  )
 })

@@ -42,6 +42,10 @@ config:
   # -- Number of days to keep stale cache data before deleting it. Set to 0 to disable.
   cacheCleanupOlderThanDays: 90
 
+  # -- Hours an unreferenced storage folder must remain untouched before it is deleted.
+  # Must be at least 1 hour.
+  orphanedStorageGracePeriodHours: 24
+
   # -- Disable all periodic cleanup jobs.
   # disableCleanupJobs: false
 
@@ -78,6 +82,8 @@ config:
       # accessKeyId: ''
       # -- AWS secret access key. Can also be provided via existingSecret.
       # secretAccessKey: ''
+      # -- Socket inactivity timeout in milliseconds. Set to 0 to disable.
+      socketTimeoutMs: 10000
 
     # -- Google Cloud Storage driver settings
     # See https://gha-cache-server.falcondev.io/storage-drivers/google-cloud-storage

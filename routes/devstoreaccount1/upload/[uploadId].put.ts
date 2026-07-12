@@ -56,9 +56,9 @@ function getChunkIndexFromBlockId(blockIdBase64: string) {
 
   // 64 bytes used by docker buildx
   // 48 bytes used by everything else
-  if (base64Decoded.length === 64) {
-    return base64Decoded.readUInt32BE(16)
-  } else if (base64Decoded.length === 48) {
+  if (base64Decoded.length === 64) return base64Decoded.readUInt32BE(16)
+
+  if (base64Decoded.length === 48) {
     const decoded = base64Decoded.toString('utf8')
 
     // slice off uuid and convert to number
