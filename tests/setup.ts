@@ -30,6 +30,7 @@ const env = createEnv({
 const TESTING_ENV_BASE = {
   API_BASE_URL: 'http://localhost:3000',
   DEFAULT_ACTIONS_RESULTS_URL: 'https://results-receiver.actions.xxxxxx.ghe.com',
+  CACHE_FILESYSTEM_MAX_USAGE_PERCENT: '100',
   RUNNER_TEMP: path.join(TEST_TEMP_DIR, 'runner-temp'),
   ACTIONS_RESULTS_URL: 'http://localhost:3000/',
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
@@ -37,6 +38,7 @@ const TESTING_ENV_BASE = {
 } satisfies Omit<
   typeof envBaseSchema.infer,
   | 'CACHE_CLEANUP_OLDER_THAN_DAYS'
+  | 'CACHE_FILESYSTEM_MAX_USAGE_PERCENT'
   | 'ORPHANED_STORAGE_GRACE_PERIOD_HOURS'
   | 'ENABLE_DIRECT_DOWNLOADS'
   | 'BENCHMARK'

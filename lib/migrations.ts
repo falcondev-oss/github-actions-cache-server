@@ -193,5 +193,13 @@ export function migrations(
         await db.schema.dropTable('merge_leases').execute()
       },
     },
+    $5_storage_location_sizes: {
+      async up(db) {
+        await db.schema.alterTable('storage_locations').addColumn('sizeBytes', 'bigint').execute()
+      },
+      async down(db) {
+        await db.schema.alterTable('storage_locations').dropColumn('sizeBytes').execute()
+      },
+    },
   } satisfies Record<string, Migration>
 }

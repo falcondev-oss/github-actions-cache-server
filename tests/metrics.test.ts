@@ -67,5 +67,9 @@ describe('prometheus metrics', () => {
     expect(readCounter(after, 'cache_requests_total{result="miss"}')).toBeGreaterThan(
       readCounter(before, 'cache_requests_total{result="miss"}'),
     )
+
+    // Scrape-time gauge: present and non-negative (collect() ran without throwing).
+    expect(after).toContain('cache_storage_bytes')
+    expect(readCounter(after, 'cache_storage_bytes')).toBeGreaterThanOrEqual(0)
   })
 })

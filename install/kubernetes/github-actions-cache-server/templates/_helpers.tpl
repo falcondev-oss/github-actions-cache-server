@@ -127,6 +127,12 @@ Generate environment variables from config values.
   value: {{ .Values.config.enableDirectDownloads | quote }}
 - name: CACHE_CLEANUP_OLDER_THAN_DAYS
   value: {{ .Values.config.cacheCleanupOlderThanDays | quote }}
+{{- if .Values.config.cacheMaxSizeBytes }}
+- name: CACHE_MAX_SIZE_BYTES
+  value: {{ .Values.config.cacheMaxSizeBytes | quote }}
+{{- end }}
+- name: CACHE_FILESYSTEM_MAX_USAGE_PERCENT
+  value: {{ .Values.config.cacheFilesystemMaxUsagePercent | quote }}
 - name: ORPHANED_STORAGE_GRACE_PERIOD_HOURS
   value: {{ .Values.config.orphanedStorageGracePeriodHours | quote }}
 {{- if .Values.config.disableCleanupJobs }}

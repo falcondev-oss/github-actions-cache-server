@@ -62,6 +62,8 @@ export const envBaseSchema = type({
     "string.url = 'https://results-receiver.actions.githubusercontent.com'",
   'ACTIONS_TOKEN_ISSUER': "string.url = 'https://token.actions.githubusercontent.com'",
   'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 90',
+  'CACHE_MAX_SIZE_BYTES?': 'number.integer > 0',
+  'CACHE_FILESYSTEM_MAX_USAGE_PERCENT': 'number > 0 & number <= 100 = 90',
   'ORPHANED_STORAGE_GRACE_PERIOD_HOURS': 'number.integer >= 1 = 24',
   'DISABLE_CLEANUP_JOBS?': 'boolean',
   'DEBUG?': 'unknown',

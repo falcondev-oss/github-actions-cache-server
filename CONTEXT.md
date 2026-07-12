@@ -7,6 +7,30 @@ This context describes the cache data managed by the server throughout its lifec
 **Cache Entry**:
 A cache item available for matching and restoration by a workflow.
 
+**Storage Budget**:
+The maximum amount of cache-server-managed, finalized cache payloads that may occupy storage before capacity-based eviction reclaims space. An explicit byte-based maximum may define it for any storage backend; otherwise it is a configurable percentage of the filesystem capacity, defaulting to 90%. Object-storage backends have no budget unless an explicit maximum is configured.
+_Avoid_: Storage limit, disk limit
+
+**Filesystem Capacity**:
+The total capacity and occupancy of the mounted volume that contains filesystem storage, including data outside the cache directory.
+_Avoid_: Cache directory size
+
+**Capacity-based Eviction**:
+Removal of finalized cache entries after an upload completes to bring cache storage within its Storage Budget, ordered by Cache Recency. Each eviction pass reclaims space until use is 90% of the budget.
+_Avoid_: Cache rotation, cleanup at X%
+
+**Storage Reconciliation**:
+A resumable, one-time startup measurement that records byte usage for stored cache data predating size tracking.
+_Avoid_: Size backfill, bucket scan
+
+**Cache Access**:
+Authorization to retrieve a cache payload, either by starting a proxied download or issuing a direct-download URL. It determines a cache payload's recency even when completion cannot be observed.
+_Avoid_: Successful download
+
+**Cache Recency**:
+The ordering value for Capacity-based Eviction: a cache payload's most recent Cache Access, falling back to the time its cache entry was last saved or replaced.
+_Avoid_: Cache age
+
 **Upload**:
 Cache data that is being received but has not yet become a Cache Entry.
 
