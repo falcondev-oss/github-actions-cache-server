@@ -3,7 +3,7 @@ import { PassThrough, Readable, Writable } from 'node:stream'
 import { describe, expect, test } from 'vitest'
 import { Storage } from '~/lib/storage'
 
-function pacedSink (delayMs: number, onByte: (n: number) => void) {
+function pacedSink(delayMs: number, onByte: (n: number) => void) {
   return new Writable({
     highWaterMark: 16 * 1024,
     write(chunk, _enc, cb) {
