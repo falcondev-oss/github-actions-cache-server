@@ -141,11 +141,11 @@ export class Storage {
     if (location.partsDeletedAt) throw new Error('No parts to feed')
 
     for await (const chunk of this.streamParts(location)) {
-      const responseWantsMore = responseStream.write(chunk)
-      const mergerWantsMore = mergerStream.write(chunk)
-
-      if (!responseWantsMore) await once(responseStream, 'drain')
-      if (!mergerWantsMore) await once(mergerStream, 'drain')
+      // attach both drain listeners simultaneously to prevent a race condition where the second stream being faster hangs forever
+      const drains = []
+      if (!responseStream.write(chunk)) drains.push(once(responseStream, 'drain'))
+      if (!mergerStream.write(chunk)) drains.push(once(mergerStream, 'drain'))
+      await Promise.all(drains)
     }
 
     responseStream.end()
@@ -491,7 +491,8 @@ export class Storage {
               .execute()
           })
         })
-        .catch(async () => {
+        .catch(async (err) => {
+          logger.error(`Merge failed for storage location ${storageLocation.id}`, { error: err })
           await this.db
             .updateTable('storage_locations')
             .set({

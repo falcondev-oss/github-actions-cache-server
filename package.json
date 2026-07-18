@@ -1,11 +1,10 @@
 {
   "name": "@falcondev-oss/github-actions-cache-server",
   "type": "module",
-  "version": "9.6.0",
+  "version": "9.6.1",
   "private": true,
   "engines": {
-    "node": "25",
-    "pnpm": "11"
+    "node": "25"
   },
   "scripts": {
     "prepare": "nitropack prepare",
@@ -71,5 +70,12 @@
     "testcontainers": "^12.0.4",
     "tsx": "^4.23.0",
     "vitest": "^4.1.10"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.11.0",
+      "onFail": "warn"
+    }
   }
 }

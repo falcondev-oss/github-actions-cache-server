@@ -258,9 +258,14 @@ describe('cleanup lifecycle', () => {
       expect(await storage.adapter.countFilesInFolder(`${folderName}/parts`)).toBe(1)
 
       for await (const _chunk of activePartsDownload!) void _chunk
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      await task.run({} as never)
-      expect(await storage.adapter.countFilesInFolder(`${folderName}/parts`)).toBe(0)
+
+      await vi.waitFor(
+        async () => {
+          await task.run({} as never)
+          expect(await storage.adapter.countFilesInFolder(`${folderName}/parts`)).toBe(0)
+        },
+        { timeout: 5000, interval: 100 },
+      )
 
       const mergedDownload = await storage.download(entryId)
       expect(mergedDownload).toBeDefined()
@@ -314,9 +319,14 @@ describe('cleanup lifecycle', () => {
     expect(await storage.adapter.countFilesInFolder(folderName)).toBe(1)
 
     for await (const _chunk of download!) void _chunk
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    await task.run({} as never)
-    expect(await storage.adapter.countFilesInFolder(folderName)).toBe(0)
+
+    await vi.waitFor(
+      async () => {
+        await task.run({} as never)
+        expect(await storage.adapter.countFilesInFolder(folderName)).toBe(0)
+      },
+      { timeout: 5000, interval: 100 },
+    )
   })
 
   test.skipIf(process.env.VITEST_STORAGE_DRIVER !== 's3')(
