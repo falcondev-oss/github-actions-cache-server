@@ -491,7 +491,8 @@ export class Storage {
               .execute()
           })
         })
-        .catch(async () => {
+        .catch(async (err) => {
+          logger.error(`Merge failed for storage location ${storageLocation.id}`, { error: err })
           await this.db
             .updateTable('storage_locations')
             .set({

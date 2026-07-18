@@ -35,7 +35,9 @@ export default defineEventHandler(async (event) => {
     // long downloads are expected (cancelled jobs, parallel runners), so we
     // log and swallow once headers are out.
     if (event.node.res.headersSent) {
-      logger.debug(`Client aborted /download/${cacheEntryId}: ${(err as Error).message}`)
+      if (event.node.req.destroyed)
+        logger.debug(`Client aborted /download/${cacheEntryId}: ${(err as Error).message}`)
+      else logger.error(`Download stream failed for ${cacheEntryId}`, { error: err })
       return
     }
     throw err
