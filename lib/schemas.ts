@@ -57,7 +57,7 @@ export const envDbDriverSchema = type.or(
 )
 
 export const envBaseSchema = type({
-  'API_BASE_URL': 'string.url',
+  'API_BASE_URL': type('string.url').pipe((s) => s.replace(/\/+$/, '')),
   'DEFAULT_ACTIONS_RESULTS_URL':
     "string.url = 'https://results-receiver.actions.githubusercontent.com'",
   'ACTIONS_TOKEN_ISSUER': "string.url = 'https://token.actions.githubusercontent.com'",
