@@ -1,14 +1,29 @@
 import { type } from 'arkenv'
 
+const envS3StorageDriverBaseSchema = {
+  'STORAGE_DRIVER': type.unit('s3'),
+  'STORAGE_S3_BUCKET': 'string',
+  'STORAGE_S3_SOCKET_TIMEOUT_MS': 'number.integer >= 0 = 10000',
+  'AWS_REGION': "string = 'us-east-1'",
+  'AWS_ENDPOINT_URL?': 'string.url',
+} as const
+
 export const envStorageDriverSchema = type.or(
   {
-    'STORAGE_DRIVER': type.unit('s3'),
-    'STORAGE_S3_BUCKET': 'string',
-    'STORAGE_S3_SOCKET_TIMEOUT_MS': 'number.integer >= 0 = 10000',
-    'AWS_REGION': "string = 'us-east-1'",
-    'AWS_ENDPOINT_URL?': 'string.url',
-    'AWS_ACCESS_KEY_ID?': 'string',
-    'AWS_SECRET_ACCESS_KEY?': 'string',
+    ...envS3StorageDriverBaseSchema,
+    'AWS_ACCESS_KEY_ID': 'string',
+    'AWS_SECRET_ACCESS_KEY': 'string',
+    'AWS_ROLE_ARN?': 'undefined',
+    'AWS_WEB_IDENTITY_TOKEN_FILE?': 'undefined',
+    'AWS_ROLE_SESSION_NAME?': 'undefined',
+  },
+  {
+    ...envS3StorageDriverBaseSchema,
+    'AWS_ROLE_ARN': 'string',
+    'AWS_WEB_IDENTITY_TOKEN_FILE': 'string',
+    'AWS_ROLE_SESSION_NAME?': 'string',
+    'AWS_ACCESS_KEY_ID?': 'undefined',
+    'AWS_SECRET_ACCESS_KEY?': 'undefined',
   },
   {
     STORAGE_DRIVER: type.unit('filesystem'),
