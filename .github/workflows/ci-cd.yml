@@ -57,7 +57,6 @@ jobs:
           VITEST_STORAGE_DRIVER: ${{ matrix.storage-driver }}
 
   deploy:
-    if: github.event.ref == 'refs/heads/dev'
     name: 🚀 Build and push
     permissions:
       packages: write
@@ -67,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: dev
+          ref: ${{ github.ref_name }}
 
       - name: Get build hash
         id: build_hash
@@ -79,7 +78,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            dev
+            ${{ github.ref_name }}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
@@ -111,7 +110,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            dev-caged
+            ${{ github.ref_name }}-caged
 
       - name: Build and push (caged)
         uses: docker/build-push-action@v7
@@ -124,3 +123,42 @@ jobs:
           build-args: |
             BUILD_HASH=${{ steps.build_hash.outputs.COMMIT_SHA }}
             BASE_IMAGE=platformatic/node-caged:25-alpine
+
+  deploy-chart:
+    name: 🚀 Build and push Helm chart
+    permissions:
+      packages: write
+      contents: read
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    env:
+      CHART_DIR: install/kubernetes/github-actions-cache-server
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Bump version
+        id: bump-version
+        run: |
+          export VERSION=$(node -p "require('./package.json').version")
+          node scripts/release-metadata.mjs bump dev
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package Helm chart
+        run: helm package . --destination packaged
+        working-directory: ${{ env.CHART_DIR }}
+
+      - name: Push Helm chart to GHCR
+        run: |
+          shopt -s nullglob
+          for pkg in ${{ env.CHART_DIR }}/packaged/*.tgz; do
+            echo "Pushing $pkg to ghcr.io/${{ github.repository_owner }}/charts"
+            helm push "$pkg" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          done
