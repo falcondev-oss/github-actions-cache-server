@@ -276,7 +276,9 @@ describe('cleanup lifecycle', () => {
       await db.deleteFrom('storage_locations').where('id', '=', locationId).execute()
       await storage.adapter.deleteFolder(folderName)
     }
-  })
+    // the `vi.waitFor` above may use the full 5s on its own, which is the whole
+    // default test timeout — leave room for the surrounding storage and db work
+  }, 30_000)
 
   test('storage-location cleanup waits for an active merged download', async () => {
     const db = await getDatabase()
@@ -327,7 +329,7 @@ describe('cleanup lifecycle', () => {
       },
       { timeout: 5000, interval: 100 },
     )
-  })
+  }, 30_000)
 
   test.skipIf(process.env.VITEST_STORAGE_DRIVER !== 's3')(
     'a direct-download reader lease covers the signed URL lifetime',
