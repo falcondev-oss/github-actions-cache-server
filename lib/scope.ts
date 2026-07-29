@@ -4,11 +4,52 @@ import { hasAtLeast } from 'remeda'
 import { env } from './env'
 import { logger } from './logger'
 
-// ponytail: JWKS URL derived from the issuer as GitHub (and GHES, sharing the
-// same Actions stack) serves it at `{issuer}/.well-known/jwks`. Add an explicit
-// JWKS override var if a real GHES layout ever splits the JWKS host from the issuer.
 const issuer = env.ACTIONS_TOKEN_ISSUER.replace(/\/$/, '')
-const JWKS = jose.createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks`))
+
+const fallbackJwksUrl = `${issuer}/.well-known/jwks`
+
+/**
+ * The JWKS URL can't be derived from the issuer: an enterprise with a custom
+ * issuer value (`{host}/{enterpriseSlug}`) still serves its JWKS at `{host}`.
+ * Ask the OIDC discovery document instead.
+ */
+export async function discoverJwksUrl() {
+  const discoveryUrl = `${issuer}/.well-known/openid-configuration`
+
+  const res = await fetch(discoveryUrl)
+  if (!res.ok) throw new Error(`Unexpected status ${res.status} ${res.statusText}`)
+
+  const config = (await res.json()) as { jwks_uri?: unknown }
+  if (typeof config.jwks_uri !== 'string')
+    throw new Error(`Discovery document at ${discoveryUrl} has no \`jwks_uri\``)
+
+  return config.jwks_uri
+}
+
+const createJwks = (url: string) => jose.createRemoteJWKSet(new URL(url))
+
+const overrideJwks = env.ACTIONS_TOKEN_JWKS_URL ? createJwks(env.ACTIONS_TOKEN_JWKS_URL) : undefined
+const fallbackJwks = createJwks(fallbackJwksUrl)
+// holder object instead of a bare `let`, which can't be assigned to from inside
+// a function (`unicorn/no-top-level-assignment-in-function`)
+const cache: { jwks?: jose.JWTVerifyGetKey } = {}
+
+async function getJwks() {
+  if (overrideJwks) return overrideJwks
+  if (cache.jwks) return cache.jwks
+
+  try {
+    return (cache.jwks = createJwks(await discoverJwksUrl()))
+  } catch (err) {
+    logger.warn(
+      `OIDC discovery failed, falling back to ${fallbackJwksUrl}. Set ACTIONS_TOKEN_JWKS_URL if token validation keeps failing.`,
+      err,
+    )
+    // Deliberately not cached, so the next request retries discovery instead of
+    // pinning the process to a URL that may well be the wrong one.
+    return fallbackJwks
+  }
+}
 
 function getBearerToken(event: H3Event) {
   const authHeader = getHeader(event, 'authorization')
@@ -23,11 +64,8 @@ async function verifyGitHubActionsToken(token: string) {
     return jose.decodeJwt(token)
   }
 
-  return jose
-    .jwtVerify(token, JWKS, {
-      issuer: env.ACTIONS_TOKEN_ISSUER,
-    })
-    .then((res) => res.payload)
+  const { payload } = await jose.jwtVerify(token, await getJwks(), { issuer })
+  return payload
 }
 
 function parseJsonScopes(json: string) {

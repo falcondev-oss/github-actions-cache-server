@@ -27,7 +27,7 @@ import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
 import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
-import { getDatabase } from './db'
+import { getDatabase, retryOnLockConflict } from './db'
 import { env } from './env'
 import { generateNumberId } from './helpers'
 import { logger } from './logger'
@@ -475,21 +475,25 @@ export class Storage {
       const mergePromise = this.adapter
         .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
         .then(async () => {
-          await this.db.transaction().execute(async (tx) => {
-            let leaseQuery = tx
-              .selectFrom('merge_leases')
-              .select(['token', 'expiresAt'])
-              .where('storageLocationId', '=', storageLocation.id)
-            if (env.DB_DRIVER !== 'sqlite') leaseQuery = leaseQuery.forUpdate()
-            const lease = await leaseQuery.executeTakeFirst()
-            if (lease?.token !== mergeToken || lease.expiresAt <= Date.now())
-              throw new Error('Merge lease was lost before completion')
-            await tx
-              .updateTable('storage_locations')
-              .set({ mergedAt: Date.now() })
-              .where('id', '=', storageLocation.id)
-              .execute()
-          })
+          // The merged object is already written, so losing a deadlock here must
+          // not throw the merge away — the fence is re-checked on every attempt.
+          await retryOnLockConflict(() =>
+            this.db.transaction().execute(async (tx) => {
+              let leaseQuery = tx
+                .selectFrom('merge_leases')
+                .select(['token', 'expiresAt'])
+                .where('storageLocationId', '=', storageLocation.id)
+              if (env.DB_DRIVER !== 'sqlite') leaseQuery = leaseQuery.forUpdate()
+              const lease = await leaseQuery.executeTakeFirst()
+              if (lease?.token !== mergeToken || lease.expiresAt <= Date.now())
+                throw new Error('Merge lease was lost before completion')
+              await tx
+                .updateTable('storage_locations')
+                .set({ mergedAt: Date.now() })
+                .where('id', '=', storageLocation.id)
+                .execute()
+            }),
+          )
         })
         .catch(async (err) => {
           logger.error(`Merge failed for storage location ${storageLocation.id}`, { error: err })
