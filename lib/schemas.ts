@@ -61,6 +61,7 @@ export const envBaseSchema = type({
   'DEFAULT_ACTIONS_RESULTS_URL':
     "string.url = 'https://results-receiver.actions.githubusercontent.com'",
   'ACTIONS_TOKEN_ISSUER': "string.url = 'https://token.actions.githubusercontent.com'",
+  'ACTIONS_TOKEN_JWKS_URL?': 'string.url',
   'CACHE_CLEANUP_OLDER_THAN_DAYS': 'number = 90',
   'CACHE_MAX_SIZE_BYTES?': 'number.integer > 0',
   'CACHE_FILESYSTEM_MAX_USAGE_PERCENT': 'number > 0 & number <= 100 = 90',

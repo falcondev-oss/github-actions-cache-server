@@ -81,6 +81,37 @@ export interface Database {
 
 const dbLogger = logger.withTag('db')
 
+// mysql2 `ER_LOCK_DEADLOCK` / `ER_LOCK_WAIT_TIMEOUT`, and the SQL states for
+// postgres `deadlock_detected` / `serialization_failure`.
+const RETRYABLE_LOCK_ERRORS = new Set([
+  'ER_LOCK_DEADLOCK',
+  'ER_LOCK_WAIT_TIMEOUT',
+  '40001',
+  '40P01',
+])
+
+function isRetryableLockError(err: unknown) {
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === 'string' && RETRYABLE_LOCK_ERRORS.has(code)
+}
+
+/**
+ * Runs a transaction, retrying it whole if the database picks it as a deadlock
+ * victim. Concurrent writers take row locks on `storage_locations` and the lease
+ * tables in differing orders, so a deadlock is expected rather than exceptional
+ * — the loser has to start over. Only wrap transactions that are safe to repeat.
+ */
+export async function retryOnLockConflict<T>(run: () => Promise<T>, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run()
+    } catch (err) {
+      if (attempt >= attempts || !isRetryableLockError(err)) throw err
+      dbLogger.warn(`Retrying transaction after lock conflict (attempt ${attempt})`, { error: err })
+    }
+  }
+}
+
 export const getDatabase = createSingletonPromise(async () => {
   if (process.env.NODE_CAGED === 'true' && env.DB_DRIVER === 'sqlite')
     throw new Error('SQLite is not supported with `caged` image variant.')
