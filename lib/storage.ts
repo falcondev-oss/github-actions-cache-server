@@ -1360,18 +1360,21 @@ class AzBlobAdapter implements StorageAdapter {
   }
 
   async listStorageFolders(): Promise<StorageFolder[]> {
-    const total: StorageFolder[] = []
-    const blobs = this.containerClient.listBlobsFlat({
-      prefix: this.blobKey(''),
-    })
+    const folders = new Map<string, StorageFolder>()
+    const prefix = this.blobKey('')
+
+    const blobs = this.containerClient.listBlobsFlat({ prefix })
     for await (const blob of blobs) {
-      const result = {
-        size: blob.properties.contentLength ?? 0
-        byte: blob.properties.co
-      }
-      size += blob.properties.contentLength ?? 0
+      const relativeName = blob.name.slice(prefix.length)
+      const folderName = relativeName.split('/', 1)[0]
+      if (!folderName) continue
+
+      const size = blob.properties.contentLength ?? 0
+      const updatedAt = blob.properties.lastModified?.getTime() ?? 0
+      accumulateFolder(folders, folderName, size, updatedAt)
     }
-    return total
+
+    return [...folders.values()]
   }
 
   async createDownloadUrl(_objectName: string, _expiresAt: number): Promise<string> {
