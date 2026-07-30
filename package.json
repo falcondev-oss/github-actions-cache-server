@@ -25,6 +25,8 @@
     "@aws-sdk/client-s3": "^3.1085.0",
     "@aws-sdk/lib-storage": "^3.1085.0",
     "@aws-sdk/s3-request-presigner": "^3.1085.0",
+    "@azure/identity": "^4.13.1",
+    "@azure/storage-blob": "^12.33.0",
     "@google-cloud/storage": "^7.21.0",
     "@orpc/client": "^1.14.7",
     "@orpc/json-schema": "^1.14.7",
