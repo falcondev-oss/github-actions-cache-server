@@ -22,6 +22,9 @@ import {
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { DefaultAzureCredential } from '@azure/identity'
+import { BlobServiceClient } from '@azure/storage-blob'
+import type { BlobServiceClient as BlobServiceClientType } from '@azure/storage-blob'
 import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
@@ -76,6 +79,7 @@ export class Storage {
       .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
       .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
       .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
+      .with({ STORAGE_DRIVER: 'azblob' }, AzBlobAdapter.fromEnv)
       .exhaustive()
   }
 
@@ -1255,5 +1259,124 @@ class GcsAdapter implements StorageAdapter {
         expires: expiresAt,
       })
       .then((res) => res[0])
+  }
+}
+
+class AzBlobAdapter implements StorageAdapter {
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'azblob' }>) {
+    const account = env.STORAGE_AZBLOB_ACCOUNT
+    const accountUrl = `https://${account}.blob.core.windows.net`
+    const container = env.STORAGE_AZBLOB_CONTAINER
+
+    const client = new BlobServiceClient(accountUrl, new DefaultAzureCredential())
+    const containerClient = client.getContainerClient(container)
+    await containerClient.createIfNotExists()
+
+    return new AzBlobAdapter({
+      client,
+      account,
+      container,
+    })
+  }
+
+  private client
+  private account
+  private container
+  private keyPrefix = 'gh-actions-cache'
+
+  constructor({
+    client,
+    account,
+    container,
+  }: {
+    client: BlobServiceClientType
+    account: string
+    container: string
+  }) {
+    this.client = client
+    this.account = account
+    this.container = container
+  }
+
+  private get containerClient() {
+    return this.client.getContainerClient(this.container)
+  }
+
+  private blobKey(objectName: string) {
+    return `${this.keyPrefix}/${objectName}`
+  }
+
+  async createDownloadStream(objectName: string): Promise<Readable> {}
+
+  async uploadStream(objectName: string, stream: AsyncIterable<Uint8Array>): Promise<void> {
+    // const blockBlobClient = this.containerClient.getBlockBlobClient(this.blobKey(objectName))
+    // // TODO: consider blockSize / concurrency tuning similar to S3Upload options
+    // await blockBlobClient.uploadStream(Readable.from(stream))
+  }
+
+  async objectExists(objectName: string): Promise<boolean> {
+    return this.containerClient.getBlobClient(this.blobKey(objectName)).exists()
+  }
+
+  async deleteFolder(folderName: string): Promise<StorageDeletion> {
+    const deleted = { objects: 0, bytes: 0 }
+    const blobs = this.containerClient.listBlobsFlat({
+      prefix: this.blobKey(folderName),
+    })
+    for await (const blob of blobs) {
+      deleted.objects++
+      deleted.bytes += blob.properties.contentLength ?? 0
+      await this.containerClient.deleteBlob(blob.name)
+    }
+    return deleted
+  }
+
+  async clear(): Promise<void> {
+    const blobs = this.containerClient.listBlobsFlat({ prefix: this.blobKey('') })
+    for await (const blob of blobs) {
+      await this.containerClient.deleteBlob(blob.name)
+    }
+  }
+
+  async countFilesInFolder(folderName: string): Promise<number> {
+    let count = 0
+    const blobs = this.containerClient.listBlobsFlat({ prefix: this.blobKey(folderName) })
+    for await (const _ of blobs) {
+      count++
+    }
+    return count
+  }
+
+  // TODO: Is it possible to get the data directly or do we need to loop over everything ?
+  async getFolderSize(folderName: string): Promise<number> {
+    const blobs = this.containerClient.listBlobsFlat({
+      prefix: this.blobKey(folderName),
+    })
+    let size = 0
+    for await (const blob of blobs) {
+      size += blob.properties.contentLength ?? 0
+    }
+    return size
+  }
+
+  async listStorageFolders(): Promise<StorageFolder[]> {
+    const total: StorageFolder[] = []
+    const blobs = this.containerClient.listBlobsFlat({
+      prefix: this.blobKey(''),
+    })
+    for await (const blob of blobs) {
+      const result = {
+        size: blob.properties.contentLength ?? 0
+        byte: blob.properties.co
+      }
+      size += blob.properties.contentLength ?? 0
+    }
+    return total
+  }
+
+  async createDownloadUrl(_objectName: string, _expiresAt: number): Promise<string> {
+    // TODO: Use client.getUserDelegationKey() to get a delegation key from DefaultAzureCredential,
+    // then call generateBlobSASQueryParameters() to produce a time-limited SAS URL.
+    throw new Error('AzBlobAdapter.createDownloadUrl is not yet implemented.')
   }
 }
