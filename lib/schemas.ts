@@ -21,9 +21,11 @@ export const envStorageDriverSchema = type.or(
     'STORAGE_GCS_ENDPOINT?': 'string.url',
   },
   {
-    STORAGE_DRIVER: type.unit('azblob'),
-    STORAGE_AZBLOB_ACCOUNT: 'string',
-    STORAGE_AZBLOB_CONTAINER: 'string',
+    'STORAGE_DRIVER': type.unit('azblob'),
+    'STORAGE_AZBLOB_ACCOUNT': 'string',
+    'STORAGE_AZBLOB_CONTAINER': 'string',
+    'STORAGE_AZBLOB_CONNECTION_STRING?': 'string',
+    'STORAGE_AZBLOB_ENDPOINT?': 'string.url',
   },
 )
 export const envDbDriverSchema = type.or(

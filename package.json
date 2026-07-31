@@ -15,7 +15,7 @@
     "lint:fix": "eslint --fix --cache . && prettier --write --cache .",
     "type-check": "tsc --noEmit",
     "test:run": "DEBUG=true vitest run",
-    "test:matrix": "for db in sqlite postgres mysql; do for st in filesystem s3 gcs; do echo \"### $db + $st\"; VITEST_DB_DRIVER=$db VITEST_STORAGE_DRIVER=$st pnpm run test:run || exit 1; done; done"
+    "test:matrix": "for db in sqlite postgres mysql; do for st in filesystem s3 gcs azblob; do echo \"### $db + $st\"; VITEST_DB_DRIVER=$db VITEST_STORAGE_DRIVER=$st pnpm run test:run || exit 1; done; done"
   },
   "changelogithub": {
     "extends": "gh:falcondev-it/configs/changelogithub"
