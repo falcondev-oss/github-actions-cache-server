@@ -218,6 +218,18 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 70
 
+# -- Pod Disruption Budget configuration.
+# Disabled by default. When enabled, defaults to maxUnavailable: 1.
+podDisruptionBudget:
+  # -- Enable/disable the PodDisruptionBudget.
+  enabled: false
+  # -- Number of pods that can be unavailable during a disruption.
+  # Ignored if minAvailable is set.
+  maxUnavailable: 1
+  # -- Number of pods that must be available during a disruption.
+  # Takes precedence over maxUnavailable when set.
+  minAvailable: ''
+
 # -- Persistent volume claim for data storage.
 # Automatically enabled when using filesystem storage or sqlite database driver.
 # Can be manually overridden with persistentVolumeClaim.enabled = true/false.
