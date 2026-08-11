@@ -67,7 +67,7 @@ config:
   # -- Storage driver configuration
   # See https://gha-cache-server.falcondev.io/storage-drivers
   storage:
-    # -- Storage driver to use: "filesystem", "s3", or "gcs"
+    # -- Storage driver to use: "filesystem", "s3", "gcs", or "azblob"
     driver: filesystem
 
     # -- Filesystem storage driver settings
@@ -100,6 +100,17 @@ config:
       # -- Path to service account key file (optional, uses ADC if not set)
       # serviceAccountKey: ''
       # -- Custom GCS API endpoint
+      # endpoint: ''
+
+    # -- Azure Blob Storage driver settings
+    azblob:
+      # -- Azure Storage account name (required when driver is "azblob")
+      # account: ''
+      # -- Azure Blob container name (required when driver is "azblob")
+      # container: ''
+      # -- Azure Storage connection string. Can also be provided via existingSecret.
+      # connectionString: ''
+      # -- Custom Azure Blob Storage endpoint URL (optional, defaults URL created using account name)
       # endpoint: ''
 
   # -- Database driver configuration

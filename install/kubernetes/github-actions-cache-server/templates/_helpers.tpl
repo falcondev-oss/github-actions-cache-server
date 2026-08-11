@@ -193,6 +193,25 @@ Generate environment variables from config values.
   value: {{ .endpoint | quote }}
 {{- end }}
 {{- end }}
+{{- else if eq .Values.config.storage.driver "azblob" }}
+{{- with .Values.config.storage.azblob }}
+{{- if .account }}
+- name: STORAGE_AZBLOB_ACCOUNT
+  value: {{ .account | quote }}
+{{- end }}
+{{- if .container }}
+- name: STORAGE_AZBLOB_CONTAINER
+  value: {{ .container | quote }}
+{{- end }}
+{{- if .connectionString }}
+- name: STORAGE_AZBLOB_CONNECTION_STRING
+  value: {{ .connectionString | quote }}
+{{- end }}
+{{- if .endpoint }}
+- name: STORAGE_AZBLOB_ENDPOINT
+  value: {{ .endpoint | quote }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{/* Database driver */}}
 - name: DB_DRIVER
