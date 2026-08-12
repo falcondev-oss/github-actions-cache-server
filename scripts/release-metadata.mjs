@@ -44,7 +44,7 @@ async function readMetadata() {
 }
 
 async function bumpChartVersion(bump) {
-  if (!['patch', 'minor', 'major'].includes(bump)) {
+  if (!['patch', 'minor', 'major', 'dev'].includes(bump)) {
     fail(`chart bump must be one of patch, minor, or major, received "${bump ?? ''}"`)
   }
 
@@ -60,13 +60,16 @@ async function bumpChartVersion(bump) {
       ;[minor, patch] = [minor + 1, 0]
       break
     }
-    case 'patch': {
+    case 'patch' || 'dev': {
       patch += 1
       break
     }
   }
 
-  const chartVersion = `${major}.${minor}.${patch}`
+  let chartVersion = `${major}.${minor}.${patch}`
+  if (bump === 'dev') {
+    chartVersion += '-dev'
+  }
   const chart = replaceChartField(
     replaceChartField(metadata.chart, 'version', chartVersion),
     'appVersion',
