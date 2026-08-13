@@ -42,6 +42,7 @@ import {
   renewReaderLease,
 } from './storage-leases'
 import { deleteStorageLocationIfUnread, noActiveReaderLease } from './storage-lifecycle'
+import { signQuery, urlSigningConfigFromEnv } from './url-signing'
 
 // Bounds the self-heal retry when matching keeps surfacing Dangling Cache
 // Entries for the same prefix — caps a pathological scan (ADR-0005).
@@ -690,11 +691,17 @@ export class Storage {
         continue
       }
 
-      const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
+      // The signed proxied URL — computed lazily so the HMAC is only minted on
+      // the code paths that actually emit it.
+      const proxiedDownloadUrl = () =>
+        `${env.API_BASE_URL}/download/${cacheEntry.match.id}${signQuery(
+          `/download/${cacheEntry.match.id}`,
+          urlSigningConfigFromEnv(),
+        )}`
 
       if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl || !location.mergedAt)
         return {
-          downloadUrl: defaultUrl,
+          downloadUrl: proxiedDownloadUrl(),
           cacheEntry: cacheEntry.match,
         }
 
@@ -725,7 +732,7 @@ export class Storage {
             `${leased.folderName}/merged`,
             directDownloadExpiresAt,
           )
-        : defaultUrl
+        : proxiedDownloadUrl()
 
       return {
         downloadUrl,
