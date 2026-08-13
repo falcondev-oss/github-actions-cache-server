@@ -44,6 +44,7 @@ const TESTING_ENV_BASE = {
   | 'BENCHMARK'
   | 'SKIP_TOKEN_VALIDATION'
   | 'ACTIONS_TOKEN_ISSUER'
+  | 'URL_SIGNING_ENABLED'
 > &
   Record<string, string>
 

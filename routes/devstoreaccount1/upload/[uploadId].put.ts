@@ -6,12 +6,17 @@ import { z } from 'zod'
 import { logger } from '~/lib/logger'
 
 import { getStorage } from '~/lib/storage'
+import { urlSigningConfigFromEnv, verifySignedRequest } from '~/lib/url-signing'
 
 const pathParamsSchema = z.object({
   uploadId: z.coerce.number(),
 })
 
 export default defineEventHandler(async (event) => {
+  // Verify before the comp=blocklist short-circuit so finalization is protected too.
+  // Use the raw param (not the zod-coerced number) to match the signed canonical path.
+  verifySignedRequest(event, `/upload/${event.context.params?.uploadId}`, urlSigningConfigFromEnv())
+
   const parsedPathParams = pathParamsSchema.safeParse(event.context.params)
   if (!parsedPathParams.success)
     throw createError({

@@ -2,6 +2,7 @@ import { Readable } from 'node:stream'
 import { z } from 'zod'
 import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
+import { urlSigningConfigFromEnv, verifySignedRequest } from '~/lib/url-signing'
 
 const pathParamsSchema = z.object({
   cacheEntryId: z.string(),
@@ -16,6 +17,8 @@ export default defineEventHandler(async (event) => {
     })
 
   const { cacheEntryId } = parsedPathParams.data
+
+  verifySignedRequest(event, `/download/${cacheEntryId}`, urlSigningConfigFromEnv())
 
   const storage = await getStorage()
   const stream = await storage.download(cacheEntryId)

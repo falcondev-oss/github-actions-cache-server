@@ -72,7 +72,39 @@ export const envBaseSchema = type({
   'BENCHMARK': 'boolean = false',
   'SKIP_TOKEN_VALIDATION': 'boolean = false',
   'MANAGEMENT_API_KEY?': 'string',
+  'URL_SIGNING_ENABLED': 'boolean = false',
+  'URL_SIGNING_SECRET?': type('string').pipe((s) => s.trim()),
+  'URL_SIGNING_SECRET_SECONDARY?': type('string').pipe((s) => s.trim()),
 })
 
 export const envSchema = envBaseSchema.and(envStorageDriverSchema).and(envDbDriverSchema)
 export type Env = typeof envSchema.infer
+
+const URL_SIGNING_SECRET_MIN_LENGTH = 16
+
+/**
+ * Cross-field validation for the signing secrets, used by `lib/env.ts`. Separate
+ * from `envSchema` because arkenv's `.get()` throws on a narrowed schema, and
+ * `tests/setup.ts` calls `envSchema.get(...)`.
+ *
+ * Validation only — arkenv drops object morphs on a narrowed root, so `lib/env.ts`
+ * re-applies them via `envSchema.assert(...)` and the predicate must `.trim()` the
+ * secrets itself (it sees the raw, un-morphed value).
+ */
+export const envSchemaValidated = envSchema.narrow((data, ctx) => {
+  if (!data.URL_SIGNING_ENABLED) return true
+
+  const secret = data.URL_SIGNING_SECRET?.trim()
+  if (!secret || secret.length < URL_SIGNING_SECRET_MIN_LENGTH)
+    return ctx.reject(
+      `URL_SIGNING_ENABLED requires URL_SIGNING_SECRET (>= ${URL_SIGNING_SECRET_MIN_LENGTH} chars)`,
+    )
+
+  const secondary = data.URL_SIGNING_SECRET_SECONDARY?.trim()
+  if (secondary && secondary.length < URL_SIGNING_SECRET_MIN_LENGTH)
+    return ctx.reject(
+      `URL_SIGNING_SECRET_SECONDARY must be >= ${URL_SIGNING_SECRET_MIN_LENGTH} chars when set`,
+    )
+
+  return true
+})

@@ -6,6 +6,9 @@ import { getDatabase } from '~/lib/db'
 import { env } from '~/lib/env'
 import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
+import { redactSignedPath } from '~/lib/url-signing'
+
+const logPath = (event: { path: string }) => redactSignedPath(event.path)
 
 export default defineNitroPlugin(async (nitro) => {
   const version = useRuntimeConfig().version
@@ -47,17 +50,17 @@ export default defineNitroPlugin(async (nitro) => {
     }
 
     logger.error(
-      `Response: ${event.method} ${event.path} > ${error instanceof H3Error ? error.statusCode : '[no status code]'}\n`,
+      `Response: ${event.method} ${logPath(event)} > ${error instanceof H3Error ? error.statusCode : '[no status code]'}\n`,
       error,
     )
   })
 
   if (env.DEBUG) {
     nitro.hooks.hook('request', (event) => {
-      logger.debug(`Request: ${event.method} ${event.path}`)
+      logger.debug(`Request: ${event.method} ${logPath(event)}`)
     })
     nitro.hooks.hook('afterResponse', (event) => {
-      logger.debug(`Response: ${event.method} ${event.path} > ${getResponseStatus(event)}`)
+      logger.debug(`Response: ${event.method} ${logPath(event)} > ${getResponseStatus(event)}`)
     })
   }
 
