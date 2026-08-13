@@ -93,7 +93,7 @@ export function verifySignedRequest(
     typeof exp !== 'string' || // reject array-valued exp (repeated query param)
     typeof sig !== 'string' || // reject array-valued sig (repeated query param)
     !/^[1-9]\d*$/.test(exp) || // digits only, no leading zeros so exp round-trips through Number()
-    sig.length === 0           // reject empty sig
+    sig.length === 0 // reject empty sig
   )
     throw createError({ statusCode: 401 })
 

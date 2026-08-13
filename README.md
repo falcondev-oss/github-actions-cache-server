@@ -34,11 +34,11 @@ The server-proxied upload and download URLs (`/devstoreaccount1/upload/{id}` and
 `/download/{id}`) are unauthenticated by default. You can enable an expiring HMAC signature
 on them:
 
-| Env var | Description |
-| - | - |
-| `URL_SIGNING_ENABLED` | `boolean`, default `false`. When `true`, upload/download URLs are signed on generation and strictly verified on the handlers (no unsigned fallback). |
-| `URL_SIGNING_SECRET` | The active signing secret, **≥ 16 chars**. Signs every issued URL and is the first candidate on verification. Required when signing is enabled — boot fails otherwise. |
-| `URL_SIGNING_SECRET_SECONDARY` | Optional verify-only rotation secret, **≥ 16 chars when set**. Never signs; accepted on verification so URLs minted with the previous secret keep working. |
+| Env var                        | Description                                                                                                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `URL_SIGNING_ENABLED`          | `boolean`, default `false`. When `true`, upload/download URLs are signed on generation and strictly verified on the handlers (no unsigned fallback).                   |
+| `URL_SIGNING_SECRET`           | The active signing secret, **≥ 16 chars**. Signs every issued URL and is the first candidate on verification. Required when signing is enabled — boot fails otherwise. |
+| `URL_SIGNING_SECRET_SECONDARY` | Optional verify-only rotation secret, **≥ 16 chars when set**. Never signs; accepted on verification so URLs minted with the previous secret keep working.             |
 
 Notes:
 
