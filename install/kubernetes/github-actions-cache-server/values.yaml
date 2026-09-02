@@ -299,3 +299,12 @@ extraVolumeMounts: []
   # - name: custom-secret
   #   mountPath: /etc/secrets
   #   readOnly: true
+
+# Extra init containers to add to the pod.
+extraInitContainers: []
+  # - name: cloud-sql-proxy
+  #   image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2
+  #   restartPolicy: Always
+  #   args:
+  #     - --auto-iam-authn
+  #     - <project>:<region>:<instance>
