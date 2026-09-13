@@ -49,7 +49,7 @@ _Avoid_: pre-merge, upfront merge
 
 **Server-side Merge**:
 A Merge the storage backend performs by copying Parts into the merged object without their bytes passing through the server (S3 `UploadPartCopy`). Requires every Part to satisfy the backend's limits.
-_Avoid_: server-side copy, compose
+_Avoid_: server-side copy
 
 **Merge Lease**:
 A time-bound, fenced claim granting one worker authority to complete a Merge.

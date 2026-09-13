@@ -29,7 +29,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
-import { chunk, range } from 'remeda'
+import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
 import { getDatabase, retryOnLockConflict } from './db'
 import { env } from './env'
@@ -226,14 +226,14 @@ export class Storage {
 
   /**
    * Runs a Merge under a Merge Lease. `write` produces `${folderName}/merged`;
-   * a lease-fenced transaction then marks the Merge complete. Returns nothing
+   * a lease-fenced transaction then marks the Merge complete. Returns false
    * when another worker holds the lease. Writing straight to the final object
    * is safe (ADR-0004). The returned promise never rejects: failures are logged
    * and the merge state rolled back.
    */
   private async startMerge(location: StorageLocation, write: () => Promise<void>) {
     const mergeToken = await acquireMergeLease(this.db, location.id)
-    if (!mergeToken) return
+    if (!mergeToken) return false
 
     await this.db
       .updateTable('storage_locations')
@@ -299,14 +299,13 @@ export class Storage {
    * these Parts, otherwise the streaming merge right away. Only the lease
    * acquisition is awaited; the Merge itself runs in the background.
    */
-  private async mergeEagerly(location: StorageLocation, partSizes: (number | undefined)[]) {
+  private async mergeEagerly(location: StorageLocation, partSizes: number[]) {
     const compose = this.adapter.composeParts
     const composable =
       compose &&
       partSizes.length <= compose.maxParts &&
       partSizes.every(
         (bytes, index) =>
-          bytes !== undefined &&
           bytes <= compose.maxPartBytes &&
           (index === partSizes.length - 1 || bytes >= compose.minPartBytes),
       )
@@ -406,8 +405,9 @@ export class Storage {
       )
     }
 
-    const sizeByIndex = new Map(parts.map(({ name, bytes }) => [Number(name), bytes]))
-    const partSizes = Array.from({ length: partCount }, (_, index) => sizeByIndex.get(index))
+    const partSizes = parts
+      .toSorted((a, b) => Number(a.name) - Number(b.name))
+      .map(({ bytes }) => bytes)
     const location: StorageLocation = {
       id: randomUUID(),
       folderName: upload.folderName,
@@ -418,7 +418,6 @@ export class Storage {
       lastDownloadedAt: null,
       sizeBytes: parts.reduce((sum, { bytes }) => sum + bytes, 0),
     }
-    const locationId = location.id
 
     await this.db.transaction().execute(async (tx) => {
       await tx.insertInto('storage_locations').values(location).execute()
@@ -438,7 +437,7 @@ export class Storage {
           .updateTable('cache_entries')
           .set({
             updatedAt: Date.now(),
-            locationId,
+            locationId: location.id,
           })
           .where('id', '=', existingCacheEntry.id)
           .execute()
@@ -450,7 +449,7 @@ export class Storage {
             version: upload.version,
             id: randomUUID(),
             updatedAt: Date.now(),
-            locationId,
+            locationId: location.id,
             scope,
             repoId,
           })
@@ -798,7 +797,7 @@ export interface StorageAdapter {
   objectExists(objectName: string): Promise<boolean>
   deleteFolder(folderName: string): Promise<StorageDeletion>
   countFilesInFolder(folderName: string): Promise<number>
-  /** Direct children of a folder, names relative to it. */
+  /** Objects under a folder, names relative to it. */
   listFolder(folderName: string): Promise<StorageObject[]>
   listStorageFolders(): Promise<StorageFolder[]>
   createDownloadUrl?(objectName: string, expiresAt: number): Promise<string>
@@ -897,27 +896,17 @@ class S3Adapter implements StorageAdapter {
       if (!UploadId) throw new Error('S3 did not return an UploadId')
       try {
         const Parts = []
-        const batches = chunk(range(0, partCount), 8)
-        for (const indexes of batches) {
-          const copies = await Promise.all(
-            indexes.map((index) =>
-              this.s3.send(
-                new UploadPartCopyCommand({
-                  Bucket,
-                  Key,
-                  UploadId,
-                  PartNumber: index + 1,
-                  CopySource: `${Bucket}/${this.keyPrefix}/${folderName}/parts/${index}`,
-                }),
-              ),
-            ),
+        for (let PartNumber = 1; PartNumber <= partCount; PartNumber++) {
+          const copy = await this.s3.send(
+            new UploadPartCopyCommand({
+              Bucket,
+              Key,
+              UploadId,
+              PartNumber,
+              CopySource: `${Bucket}/${this.keyPrefix}/${folderName}/parts/${PartNumber - 1}`,
+            }),
           )
-          Parts.push(
-            ...copies.map((copy, offset) => ({
-              PartNumber: indexes[offset]! + 1,
-              ETag: copy.CopyPartResult?.ETag,
-            })),
-          )
+          Parts.push({ PartNumber, ETag: copy.CopyPartResult?.ETag })
         }
         await this.s3.send(
           new CompleteMultipartUploadCommand({ Bucket, Key, UploadId, MultipartUpload: { Parts } }),

@@ -63,23 +63,36 @@ describe('eager merge', () => {
     }
   })
 
+  test('leaves the merge to the first download when disabled', async () => {
+    env.EAGER_MERGE = false
+    const storage = await Storage.fromEnv()
+
+    const location = await uploadParts(storage, [Buffer.alloc(1024, 'a')])
+    try {
+      await storage.waitForOngoingMerges()
+      expect(location.mergedAt).toBeNull()
+      expect(await storage.adapter.objectExists(`${location.folderName}/merged`)).toBe(false)
+    } finally {
+      await storage.adapter.deleteFolder(location.folderName)
+    }
+  })
+
   test.skipIf(process.env.VITEST_STORAGE_DRIVER !== 's3')(
     'composes parts server-side when they satisfy the multipart limits',
     { timeout: 60_000 },
     async () => {
       const storage = await Storage.fromEnv()
       const parts = [Buffer.alloc(5 * 1024 * 1024, 'a'), Buffer.alloc(1024, 'b')]
-      const uploadStream = vi.spyOn(storage.adapter, 'uploadStream')
+      const run = vi.spyOn(storage.adapter.composeParts!, 'run')
 
       const location = await uploadParts(storage, parts)
       try {
-        uploadStream.mockClear()
         await storage.waitForOngoingMerges()
-        expect(uploadStream).not.toHaveBeenCalled()
+        expect(run).toHaveBeenCalledOnce()
         const merged = await mergedBytes(storage, location.folderName)
         expect(merged.equals(Buffer.concat(parts))).toBe(true)
       } finally {
-        uploadStream.mockRestore()
+        run.mockRestore()
         await storage.adapter.deleteFolder(location.folderName)
       }
     },
