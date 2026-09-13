@@ -39,6 +39,12 @@ config:
   # The runner must be able to reach the storage provider directly.
   enableDirectDownloads: false
 
+  # -- Merge cache parts right after upload instead of on first download, so
+  # the first restore can be a direct download. On S3 the merge happens inside
+  # the bucket (UploadPartCopy) when every part but the last is at least 5 MiB.
+  # Doubles storage per entry until the parts cleanup job runs.
+  eagerMerge: false
+
   # -- Number of days to keep stale cache data before deleting it. Set to 0 to disable.
   cacheCleanupOlderThanDays: 90
 
