@@ -217,6 +217,25 @@ autoscaling:
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 70
+  # -- Scaling behavior for the HPA (`spec.behavior`), passed through verbatim.
+  # Empty by default, so Kubernetes applies its own defaults.
+  # Useful to damp scale-down flapping, e.g.
+  # `scaleDown: {stabilizationWindowSeconds: 900, policies: [{type: Pods, value: 1, periodSeconds: 300}]}`.
+  behavior: {}
+
+# -- Container lifecycle hooks (`lifecycle`), passed through verbatim.
+# Empty by default. A `preStop` hook is the usual way to let in-flight requests
+# finish: the container keeps serving while the Service endpoint removal
+# propagates to ingress controllers, which is asynchronous. For example
+# `preStop: {exec: {command: [/bin/sh, -c, sleep 30]}}` — pair it with a
+# terminationGracePeriodSeconds larger than the sleep, or the kubelet will
+# SIGKILL the container mid-hook.
+lifecycle: {}
+
+# -- Grace period for pod termination (`terminationGracePeriodSeconds`).
+# Empty by default, so Kubernetes applies its default of 30.
+# Must exceed any `lifecycle.preStop` sleep above.
+terminationGracePeriodSeconds: ''
 
 # -- Pod Disruption Budget configuration.
 # Disabled by default. When enabled, defaults to maxUnavailable: 1.
