@@ -38,6 +38,10 @@ spec:
       {{- if .Values.topologySpreadConstraints }}
       topologySpreadConstraints: {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
       {{- end }}
+      {{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
