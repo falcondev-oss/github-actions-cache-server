@@ -1281,6 +1281,35 @@ class GcsAdapter implements StorageAdapter {
   private bucket
   private keyPrefix = 'gh-actions-cache'
 
+  // GCS compose takes at most 32 sources per call and has no minimum size:
+  // https://cloud.google.com/storage/docs/composing-objects
+  composeParts = {
+    minPartBytes: 0,
+    maxPartBytes: 5 * 1024 ** 4,
+    maxParts: Infinity,
+    run: async (folderName: string, partCount: number) => {
+      const sources = Array.from({ length: partCount }, (_, index) =>
+        this.bucket.file(`${this.keyPrefix}/${folderName}/parts/${index}`),
+      )
+      // Folds batches into a top-level temp object (reclaimed as Orphaned
+      // Storage if we crash) so `merged` only ever appears in one final,
+      // atomic compose (ADR-0004).
+      const temp = this.bucket.file(`${this.keyPrefix}/tmp-${randomUUID()}`)
+      try {
+        while (sources.length > 32) {
+          await this.bucket.combine(sources.splice(0, 32), temp)
+          sources.unshift(temp)
+        }
+        await this.bucket.combine(
+          sources,
+          this.bucket.file(`${this.keyPrefix}/${folderName}/merged`),
+        )
+      } finally {
+        if (partCount > 32) await temp.delete({ ignoreNotFound: true })
+      }
+    },
+  }
+
   constructor({ bucket, gcs }: { bucket: string; gcs: GcsClient }) {
     this.bucket = gcs.bucket(bucket)
   }

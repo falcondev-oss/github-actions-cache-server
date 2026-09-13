@@ -77,8 +77,8 @@ describe('eager merge', () => {
     }
   })
 
-  test.skipIf(process.env.VITEST_STORAGE_DRIVER !== 's3')(
-    'composes parts server-side when they satisfy the multipart limits',
+  test.skipIf((process.env.VITEST_STORAGE_DRIVER ?? 'filesystem') === 'filesystem')(
+    'composes parts server-side when they satisfy the backend limits',
     { timeout: 60_000 },
     async () => {
       const storage = await Storage.fromEnv()
@@ -93,6 +93,26 @@ describe('eager merge', () => {
         expect(merged.equals(Buffer.concat(parts))).toBe(true)
       } finally {
         run.mockRestore()
+        await storage.adapter.deleteFolder(location.folderName)
+      }
+    },
+  )
+
+  test.skipIf(process.env.VITEST_STORAGE_DRIVER !== 'gcs')(
+    'folds more than 32 parts through a temp object and removes it',
+    { timeout: 60_000 },
+    async () => {
+      const storage = await Storage.fromEnv()
+      const parts = Array.from({ length: 33 }, (_, index) => Buffer.alloc(1024, String(index % 10)))
+
+      const location = await uploadParts(storage, parts)
+      try {
+        await storage.waitForOngoingMerges()
+        const merged = await mergedBytes(storage, location.folderName)
+        expect(merged.equals(Buffer.concat(parts))).toBe(true)
+        const folders = await storage.adapter.listStorageFolders()
+        expect(folders.filter(({ folderName }) => folderName.startsWith('tmp-'))).toEqual([])
+      } finally {
         await storage.adapter.deleteFolder(location.folderName)
       }
     },
