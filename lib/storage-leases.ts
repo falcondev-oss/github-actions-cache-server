@@ -1,6 +1,7 @@
 import type { Kysely } from 'kysely'
 import type { Database, StorageReaderLeaseScope } from './db'
 import { randomUUID } from 'node:crypto'
+import { retryOnLockConflict } from './db'
 import { env } from './env'
 
 export const LEASE_DURATION_MS = 2 * 60 * 1000
@@ -86,5 +87,8 @@ export async function renewReaderLease(db: Kysely<Database>, id: string) {
 }
 
 export async function releaseReaderLease(db: Kysely<Database>, id: string) {
-  await db.deleteFrom('storage_reader_leases').where('id', '=', id).execute()
+  // races cascade deletes of the storage location, which lock rows in the opposite order
+  await retryOnLockConflict(() =>
+    db.deleteFrom('storage_reader_leases').where('id', '=', id).execute(),
+  )
 }

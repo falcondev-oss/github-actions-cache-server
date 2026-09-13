@@ -116,7 +116,10 @@ export class Storage {
       if (released) return
       released = true
       clearInterval(renewalTimer)
-      void releaseReaderLease(this.db, readerLeaseId)
+      // an unreleased lease only delays cleanup until it expires
+      releaseReaderLease(this.db, readerLeaseId).catch((err) =>
+        logger.warn(`Failed to release Storage Reader Lease ${readerLeaseId}`, { error: err }),
+      )
     }
     stream.once('end', release)
     stream.once('close', release)
