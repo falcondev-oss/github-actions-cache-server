@@ -201,5 +201,18 @@ export function migrations(
         await db.schema.alterTable('storage_locations').dropColumn('sizeBytes').execute()
       },
     },
+    $6_cache_entries_locationId_index: {
+      async up(db) {
+        await db.schema
+          .createIndex('idx_cache_entries_locationId')
+          .on('cache_entries')
+          .columns(['locationId'])
+          .execute()
+      },
+      async down(db) {
+        const dropIndex = db.schema.dropIndex('idx_cache_entries_locationId')
+        await (driver === 'mysql' ? dropIndex.on('cache_entries') : dropIndex).execute()
+      },
+    },
   } satisfies Record<string, Migration>
 }
