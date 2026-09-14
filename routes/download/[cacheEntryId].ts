@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { z } from 'zod'
 import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
@@ -25,19 +25,26 @@ export default defineEventHandler(async (event) => {
       message: 'Cache file not found',
     })
 
+  // Not h3's `sendStream`: its web-stream path neither applies backpressure nor
+  // notices the client hanging up, so an aborted download keeps draining the
+  // backend read into a socket nobody is reading. `pipeline` destroys the
+  // source when the response closes, which also releases the reader lease the
+  // stream carries.
+  event._handled = true
   try {
-    await sendStream(event, Readable.toWeb(stream) as ReadableStream)
+    await pipeline(stream, event.node.res)
   } catch (err) {
-    // Once the response has started flushing, we can't surface stream errors
-    // as an HTTP error — Nitro's default error handler would call
-    // `setResponseHeaders` after headers were already sent and crash with
-    // ERR_HTTP_HEADERS_SENT (logged as an unhandled error). Client aborts on
-    // long downloads are expected (cancelled jobs, parallel runners), so we
-    // log and swallow once headers are out.
+    // The client went away mid-body. Expected on long downloads (cancelled
+    // jobs, parallel runners) and there is nowhere left to report it.
+    if ((err as NodeJS.ErrnoException).code === 'ERR_STREAM_PREMATURE_CLOSE') {
+      logger.debug(`Client aborted /download/${cacheEntryId}: ${(err as Error).message}`)
+      return
+    }
+    // Headers are already out, so this cannot become an HTTP error response;
+    // Nitro's handler would call `setResponseHeaders` after the fact and crash
+    // with ERR_HTTP_HEADERS_SENT.
     if (event.node.res.headersSent) {
-      if (event.node.req.destroyed)
-        logger.debug(`Client aborted /download/${cacheEntryId}: ${(err as Error).message}`)
-      else logger.error(`Download stream failed for ${cacheEntryId}`, { error: err })
+      logger.error(`Download stream failed for ${cacheEntryId}`, { error: err })
       return
     }
     throw err
