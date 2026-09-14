@@ -249,7 +249,7 @@ describe('cleanup lifecycle', () => {
       const activePartsDownload = await storage.download(entryId)
       expect(mergingDownload).toBeDefined()
       expect(activePartsDownload).toBeDefined()
-      for await (const _chunk of mergingDownload!) void _chunk
+      for await (const _chunk of mergingDownload!.stream) void _chunk
       await storage.waitForOngoingMerges()
 
       const taskModule = await import('~/tasks/cleanup/parts')
@@ -257,7 +257,7 @@ describe('cleanup lifecycle', () => {
       await task.run({} as never)
       expect(await storage.adapter.countFilesInFolder(`${folderName}/parts`)).toBe(1)
 
-      for await (const _chunk of activePartsDownload!) void _chunk
+      for await (const _chunk of activePartsDownload!.stream) void _chunk
 
       await vi.waitFor(
         async () => {
@@ -270,7 +270,7 @@ describe('cleanup lifecycle', () => {
       const mergedDownload = await storage.download(entryId)
       expect(mergedDownload).toBeDefined()
       let restored = ''
-      for await (const chunk of mergedDownload!) restored += chunk.toString()
+      for await (const chunk of mergedDownload!.stream) restored += chunk.toString()
       expect(restored).toBe('cache-data')
     } finally {
       await db.deleteFrom('storage_locations').where('id', '=', locationId).execute()
@@ -320,7 +320,7 @@ describe('cleanup lifecycle', () => {
     await task.run({} as never)
     expect(await storage.adapter.countFilesInFolder(folderName)).toBe(1)
 
-    for await (const _chunk of download!) void _chunk
+    for await (const _chunk of download!.stream) void _chunk
 
     await vi.waitFor(
       async () => {
@@ -446,7 +446,7 @@ describe('cleanup lifecycle', () => {
     try {
       const download = await storage.download(entryId)
       expect(download).toBeDefined()
-      download!.on('error', () => undefined)
+      download!.stream.on('error', () => undefined)
       await db
         .deleteFrom('storage_reader_leases')
         .where('storageLocationId', '=', locationId)
@@ -456,9 +456,10 @@ describe('cleanup lifecycle', () => {
       // The renewal fires on the fake timer, but the lease-lost DB query resolves on a
       // real round-trip — wait for the resulting destroy instead of asserting synchronously.
       // Plain 'close' wait (not events.once, which rejects on the error-destroy).
-      if (!download!.destroyed) await new Promise((resolve) => download!.once('close', resolve))
+      if (!download!.stream.destroyed)
+        await new Promise((resolve) => download!.stream.once('close', resolve))
 
-      expect(download!.destroyed).toBe(true)
+      expect(download!.stream.destroyed).toBe(true)
     } finally {
       vi.useRealTimers()
       await db.deleteFrom('storage_locations').where('id', '=', locationId).execute()

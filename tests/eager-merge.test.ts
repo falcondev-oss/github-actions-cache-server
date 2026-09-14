@@ -29,7 +29,7 @@ async function uploadParts(storage: Storage, parts: Buffer[]) {
 }
 
 async function mergedBytes(storage: Storage, folderName: string) {
-  const stream = await storage.adapter.createDownloadStream(`${folderName}/merged`)
+  const { stream } = await storage.adapter.createDownloadStream(`${folderName}/merged`)
   return Buffer.concat(await stream.toArray())
 }
 

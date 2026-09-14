@@ -65,6 +65,49 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
+/**
+ * The requested range starts at or beyond the end of the object (HTTP 416).
+ * `size` is the object's size when the backend told us and is omitted
+ * otherwise, so the route never advertises a made-up `content-range: bytes *\/0`.
+ */
+export class RangeNotSatisfiableError extends Error {
+  constructor(
+    objectName: string,
+    public readonly size?: number,
+  ) {
+    super(`Range not satisfiable for ${objectName}${size === undefined ? '' : ` (size ${size})`}`)
+    this.name = 'RangeNotSatisfiableError'
+  }
+}
+
+/**
+ * A range as requested: inclusive `start-end`, or open-ended (`bytes=N-`) when
+ * `end` is omitted. Passed to the backend as-is so the backend, not this
+ * server, resolves the end against the object length.
+ */
+export interface RangeRequest {
+  start: number
+  end?: number
+}
+
+/** A resolved, inclusive byte range: what was actually served. */
+export interface ByteRange {
+  start: number
+  end: number
+}
+
+/**
+ * What an adapter hands back for a download. `range` is the range actually
+ * served (clamped to the object), present only when the request asked for one
+ * AND the adapter honoured it — the route turns that into a 206 with
+ * `content-range`. `size` is the whole object's size when known.
+ */
+export interface DownloadStream {
+  stream: Readable
+  size?: number
+  range?: ByteRange
+}
+
 export class Storage {
   static async fromEnv() {
     const storage = new Storage({
@@ -133,11 +176,18 @@ export class Storage {
     if (actualPartCount < location.partCount) throw new ObjectNotFoundError(partsFolder)
   }
 
-  private async downloadFromCacheEntryLocation(location: StorageLocation) {
-    if (location.mergedAt) return this.adapter.createDownloadStream(`${location.folderName}/merged`)
+  private async downloadFromCacheEntryLocation(
+    location: StorageLocation,
+    range?: RangeRequest,
+  ): Promise<DownloadStream> {
+    if (location.mergedAt)
+      return this.adapter.createDownloadStream(`${location.folderName}/merged`, range)
 
     await this.ensurePartsExist(location)
-    return Readable.from(this.streamParts(location))
+    // No `range` here: an unmerged entry is concatenated from its Parts as it
+    // is read, so there is nothing to seek into. The route serves those whole
+    // under a 200, which is always a correct answer to a Range request.
+    return { stream: Readable.from(this.streamParts(location)) }
   }
 
   private async pumpPartsToStreams(
@@ -165,7 +215,7 @@ export class Storage {
     if (location.partsDeletedAt) throw new Error('No parts to feed for location with deleted parts')
 
     for (let i = 0; i < location.partCount; i++) {
-      const partStream = await this.adapter.createDownloadStream(
+      const { stream: partStream } = await this.adapter.createDownloadStream(
         `${location.folderName}/parts/${i}`,
       )
 
@@ -524,7 +574,7 @@ export class Storage {
     }
   }
 
-  async download(cacheEntryId: string): Promise<Readable | undefined> {
+  async download(cacheEntryId: string, range?: RangeRequest): Promise<DownloadStream | undefined> {
     const protectedLocation = await this.db.transaction().execute(async (tx) => {
       let query = tx
         .selectFrom('storage_locations')
@@ -551,8 +601,8 @@ export class Storage {
 
     try {
       if (storageLocation.mergedAt) {
-        const stream = await this.downloadFromCacheEntryLocation(storageLocation)
-        return this.protectDownloadStream(stream, readerLeaseId)
+        const download = await this.downloadFromCacheEntryLocation(storageLocation, range)
+        return { ...download, stream: this.protectDownloadStream(download.stream, readerLeaseId) }
       }
 
       await this.ensurePartsExist(storageLocation)
@@ -568,8 +618,8 @@ export class Storage {
           }),
       )
       if (!merge) {
-        const stream = await this.downloadFromCacheEntryLocation(storageLocation)
-        return this.protectDownloadStream(stream, readerLeaseId)
+        const download = await this.downloadFromCacheEntryLocation(storageLocation, range)
+        return { ...download, stream: this.protectDownloadStream(download.stream, readerLeaseId) }
       }
 
       this.pumpPartsToStreams(storageLocation, responseStream, mergerStream).catch((err) => {
@@ -579,7 +629,7 @@ export class Storage {
           logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
       })
 
-      return this.protectDownloadStream(responseStream, readerLeaseId)
+      return { stream: this.protectDownloadStream(responseStream, readerLeaseId) }
     } catch (err) {
       await releaseReaderLease(this.db, readerLeaseId)
       if (err instanceof ObjectNotFoundError) {
@@ -789,7 +839,7 @@ export class Storage {
 export const getStorage = createSingletonPromise(async () => Storage.fromEnv())
 
 export interface StorageAdapter {
-  createDownloadStream(objectName: string): Promise<Readable>
+  createDownloadStream(objectName: string, range?: RangeRequest): Promise<DownloadStream>
   /**
    * Uploads must be atomically visible: an object never exists partially, and
    * overwriting an object never disturbs active readers of the previous
@@ -995,19 +1045,39 @@ class S3Adapter implements StorageAdapter {
     return deleted
   }
 
-  async createDownloadStream(objectName: string) {
+  async createDownloadStream(objectName: string, range?: RangeRequest): Promise<DownloadStream> {
     try {
       const response = await this.s3.send(
         new GetObjectCommand({
           Bucket: this.bucket,
           Key: `${this.keyPrefix}/${objectName}`,
+          // Passed straight through to S3 rather than sliced here: the point is
+          // to avoid pulling a whole object into the server to serve a slice of
+          // it. An open-ended request stays open-ended (`bytes=N-`) so S3
+          // resolves the end itself and we never depend on it clamping a
+          // sentinel we made up.
+          Range: range ? `bytes=${range.start}-${range.end ?? ''}` : undefined,
         }),
       )
       if (!response.Body) throw new Error('No body in S3 get object response')
 
-      return response.Body as Readable
+      const stream = response.Body as Readable
+      // 200 means S3 served the whole object: no Range, or one it ignored.
+      if (response.$metadata.httpStatusCode !== 206) return { stream, size: response.ContentLength }
+
+      // 206 means the body is a slice, and `bytes <start>-<end>/<size>` is the
+      // only description of which slice. Without it the slice could only go out
+      // under a 200, where a client cannot tell it from the whole object.
+      const served = parseContentRange(response.ContentRange)
+      if (!served) {
+        stream.destroy()
+        throw new Error(`S3 answered 206 with unparseable Content-Range: ${response.ContentRange}`)
+      }
+      return { stream, size: served.size, range: { start: served.start, end: served.end } }
     } catch (err: any) {
       if (err.name === 'NoSuchKey') throw new ObjectNotFoundError(objectName)
+      if (err.name === 'InvalidRange')
+        throw new RangeNotSatisfiableError(objectName, parseActualObjectSize(err))
       throw err
     }
   }
@@ -1160,14 +1230,20 @@ class FileSystemAdapter implements StorageAdapter {
     return folder
   }
 
-  async createDownloadStream(objectName: string) {
+  async createDownloadStream(objectName: string, range?: RangeRequest): Promise<DownloadStream> {
     const filePath = this.safePath(objectName)
+    let size: number
     try {
-      await fs.access(filePath)
+      const stat = await fs.stat(filePath)
+      size = stat.size
     } catch {
       throw new ObjectNotFoundError(objectName)
     }
-    return createReadStream(filePath)
+    if (!range) return { stream: createReadStream(filePath), size }
+
+    const served = clampRange(range, size)
+    if (!served) throw new RangeNotSatisfiableError(objectName, size)
+    return { stream: createReadStream(filePath, served), size, range: served }
   }
 
   async objectExists(objectName: string) {
@@ -1317,11 +1393,24 @@ class GcsAdapter implements StorageAdapter {
     this.bucket = gcs.bucket(bucket)
   }
 
-  async createDownloadStream(objectName: string) {
+  async createDownloadStream(objectName: string, range?: RangeRequest): Promise<DownloadStream> {
     const file = this.bucket.file(`${this.keyPrefix}/${objectName}`)
-    const [exists] = await file.exists()
-    if (!exists) throw new ObjectNotFoundError(objectName)
-    return file.createReadStream()
+    // `getMetadata` both proves the object exists and carries its size, so the
+    // whole-object path reports `size` like the other adapters do instead of
+    // paying a second round-trip for it.
+    let size: number
+    try {
+      const [metadata] = await file.getMetadata()
+      size = Number(metadata.size)
+    } catch (err: any) {
+      if (err.code === 404) throw new ObjectNotFoundError(objectName)
+      throw err
+    }
+    if (!range) return { stream: file.createReadStream(), size }
+
+    const served = clampRange(range, size)
+    if (!served) throw new RangeNotSatisfiableError(objectName, size)
+    return { stream: file.createReadStream(served), size, range: served }
   }
 
   async objectExists(objectName: string) {
@@ -1404,4 +1493,29 @@ class GcsAdapter implements StorageAdapter {
       })
       .then((res) => res[0])
   }
+}
+
+/** Resolve a request against an object of `size` bytes; undefined when it starts past the end. */
+function clampRange(range: RangeRequest, size: number): ByteRange | undefined {
+  if (range.start >= size) return
+  return { start: range.start, end: Math.min(range.end ?? size - 1, size - 1) }
+}
+
+const CONTENT_RANGE_RE = /^bytes (\d+)-(\d+)\/(\d+)$/
+
+function parseContentRange(header: string | undefined) {
+  if (!header) return
+  const m = CONTENT_RANGE_RE.exec(header)
+  if (!m) return
+  return { start: Number(m[1]), end: Number(m[2]), size: Number(m[3]) }
+}
+
+/**
+ * S3's InvalidRange error carries the object size as `ActualObjectSize`
+ * (AWS and MinIO do; not verified on every S3-compatible implementation).
+ */
+function parseActualObjectSize(err: unknown): number | undefined {
+  const raw = (err as { ActualObjectSize?: unknown }).ActualObjectSize
+  const size = Number(raw)
+  return Number.isSafeInteger(size) && size >= 0 ? size : undefined
 }
