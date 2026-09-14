@@ -65,11 +65,7 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
-/**
- * The requested range starts at or beyond the end of the object (HTTP 416).
- * `size` is the object's size when the backend told us and is omitted
- * otherwise, so the route never advertises a made-up `content-range: bytes *\/0`.
- */
+/** `size` is omitted when the backend didn't report one, so the route can skip `content-range`. */
 export class RangeNotSatisfiableError extends Error {
   constructor(
     objectName: string,
@@ -80,28 +76,18 @@ export class RangeNotSatisfiableError extends Error {
   }
 }
 
-/**
- * A range as requested: inclusive `start-end`, or open-ended (`bytes=N-`) when
- * `end` is omitted. Passed to the backend as-is so the backend, not this
- * server, resolves the end against the object length.
- */
+/** An omitted `end` means open-ended; the backend resolves it against the object length. */
 export interface RangeRequest {
   start: number
   end?: number
 }
 
-/** A resolved, inclusive byte range: what was actually served. */
 export interface ByteRange {
   start: number
   end: number
 }
 
-/**
- * What an adapter hands back for a download. `range` is the range actually
- * served (clamped to the object), present only when the request asked for one
- * AND the adapter honoured it — the route turns that into a 206 with
- * `content-range`. `size` is the whole object's size when known.
- */
+/** `range` is set only when a range was requested and the adapter honoured it. */
 export interface DownloadStream {
   stream: Readable
   size?: number
@@ -184,9 +170,8 @@ export class Storage {
       return this.adapter.createDownloadStream(`${location.folderName}/merged`, range)
 
     await this.ensurePartsExist(location)
-    // No `range` here: an unmerged entry is concatenated from its Parts as it
-    // is read, so there is nothing to seek into. The route serves those whole
-    // under a 200, which is always a correct answer to a Range request.
+    // No `range`: an unmerged entry is concatenated from its parts as it is read, so
+    // there is nothing to seek into. Served whole under a 200, which Range allows.
     return { stream: Readable.from(this.streamParts(location)) }
   }
 
@@ -1051,23 +1036,14 @@ class S3Adapter implements StorageAdapter {
         new GetObjectCommand({
           Bucket: this.bucket,
           Key: `${this.keyPrefix}/${objectName}`,
-          // Passed straight through to S3 rather than sliced here: the point is
-          // to avoid pulling a whole object into the server to serve a slice of
-          // it. An open-ended request stays open-ended (`bytes=N-`) so S3
-          // resolves the end itself and we never depend on it clamping a
-          // sentinel we made up.
           Range: range ? `bytes=${range.start}-${range.end ?? ''}` : undefined,
         }),
       )
       if (!response.Body) throw new Error('No body in S3 get object response')
 
       const stream = response.Body as Readable
-      // 200 means S3 served the whole object: no Range, or one it ignored.
       if (response.$metadata.httpStatusCode !== 206) return { stream, size: response.ContentLength }
 
-      // 206 means the body is a slice, and `bytes <start>-<end>/<size>` is the
-      // only description of which slice. Without it the slice could only go out
-      // under a 200, where a client cannot tell it from the whole object.
       const served = parseContentRange(response.ContentRange)
       if (!served) {
         stream.destroy()
@@ -1395,9 +1371,7 @@ class GcsAdapter implements StorageAdapter {
 
   async createDownloadStream(objectName: string, range?: RangeRequest): Promise<DownloadStream> {
     const file = this.bucket.file(`${this.keyPrefix}/${objectName}`)
-    // `getMetadata` both proves the object exists and carries its size, so the
-    // whole-object path reports `size` like the other adapters do instead of
-    // paying a second round-trip for it.
+    // `getMetadata` proves existence and carries the size, so no second round-trip.
     let size: number
     try {
       const [metadata] = await file.getMetadata()
@@ -1495,7 +1469,6 @@ class GcsAdapter implements StorageAdapter {
   }
 }
 
-/** Resolve a request against an object of `size` bytes; undefined when it starts past the end. */
 function clampRange(range: RangeRequest, size: number): ByteRange | undefined {
   if (range.start >= size) return
   return { start: range.start, end: Math.min(range.end ?? size - 1, size - 1) }
@@ -1510,10 +1483,7 @@ function parseContentRange(header: string | undefined) {
   return { start: Number(m[1]), end: Number(m[2]), size: Number(m[3]) }
 }
 
-/**
- * S3's InvalidRange error carries the object size as `ActualObjectSize`
- * (AWS and MinIO do; not verified on every S3-compatible implementation).
- */
+// AWS and MinIO put the object size here; other S3-compatible servers may not.
 function parseActualObjectSize(err: unknown): number | undefined {
   const raw = (err as { ActualObjectSize?: unknown }).ActualObjectSize
   const size = Number(raw)
