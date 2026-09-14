@@ -44,6 +44,13 @@ export default defineEventHandler(async (event) => {
     download = await storage.download(cacheEntryId, range)
   } catch (err) {
     if (err instanceof RangeNotSatisfiableError) {
+      // An empty object has no satisfiable range, but S3 answers `bytes=0-` with an
+      // empty 200 while the other adapters raise. Normalise to the 200 so the
+      // response does not depend on which backend is configured.
+      if (err.size === 0) {
+        setHeader(event, 'content-length', 0)
+        return send(event)
+      }
       setResponseStatus(event, 416, 'Range Not Satisfiable')
       if (err.size !== undefined) setHeader(event, 'content-range', `bytes */${err.size}`)
       return send(event)
@@ -70,6 +77,7 @@ export default defineEventHandler(async (event) => {
 
   // Take over the response from h3: `sendStream` applies no backpressure and does not
   // notice client aborts, whereas `pipeline` destroys the source and releases its lease.
+  // `_handled` is an h3 v1 internal and will need replacing when h3 v2 lands.
   event._handled = true
   try {
     await pipeline(download.stream, event.node.res)
