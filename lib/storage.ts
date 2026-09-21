@@ -26,6 +26,12 @@ import {
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { DefaultAzureCredential } from '@azure/identity'
+import {
+  BlobSASPermissions,
+  BlobServiceClient,
+  generateBlobSASQueryParameters,
+} from '@azure/storage-blob'
 import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
@@ -80,6 +86,7 @@ export class Storage {
       .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
       .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
       .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
+      .with({ STORAGE_DRIVER: 'azblob' }, AzBlobAdapter.fromEnv)
       .exhaustive()
   }
 
@@ -1403,5 +1410,181 @@ class GcsAdapter implements StorageAdapter {
         expires: expiresAt,
       })
       .then((res) => res[0])
+  }
+}
+
+class AzBlobAdapter implements StorageAdapter {
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'azblob' }>) {
+    const container = env.STORAGE_AZBLOB_CONTAINER
+
+    const usesSharedKey = Boolean(env.STORAGE_AZBLOB_CONNECTION_STRING)
+    const client = env.STORAGE_AZBLOB_CONNECTION_STRING
+      ? BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
+      : new BlobServiceClient(
+          env.STORAGE_AZBLOB_ENDPOINT ??
+            `https://${env.STORAGE_AZBLOB_ACCOUNT}.blob.core.windows.net`,
+          new DefaultAzureCredential(),
+        )
+
+    const containerClient = client.getContainerClient(container)
+    await containerClient.createIfNotExists()
+
+    return new AzBlobAdapter({
+      client,
+      account: client.accountName,
+      container,
+      usesSharedKey,
+    })
+  }
+
+  private client
+  private account
+  private container
+  private usesSharedKey
+  private keyPrefix = 'gh-actions-cache'
+
+  constructor({
+    client,
+    account,
+    container,
+    usesSharedKey,
+  }: {
+    client: BlobServiceClient
+    account: string
+    container: string
+    usesSharedKey: boolean
+  }) {
+    this.client = client
+    this.account = account
+    this.container = container
+    this.usesSharedKey = usesSharedKey
+  }
+
+  private get containerClient() {
+    return this.client.getContainerClient(this.container)
+  }
+
+  private blobKey(objectName: string) {
+    return `${this.keyPrefix}/${objectName}`
+  }
+
+  async createDownloadStream(objectName: string): Promise<Readable> {
+    const blockBlobClient = this.containerClient.getBlockBlobClient(this.blobKey(objectName))
+    const response = await blockBlobClient.download()
+    if (!response.readableStreamBody) throw new Error(`No stream for blob "${objectName}"`)
+    return Readable.from(response.readableStreamBody)
+  }
+
+  async uploadStream(objectName: string, stream: AsyncIterable<Uint8Array>): Promise<void> {
+    const blockBlobClient = this.containerClient.getBlockBlobClient(this.blobKey(objectName))
+    // TODO: consider blockSize / concurrency tuning similar to S3Upload options
+    await blockBlobClient.uploadStream(Readable.from(stream))
+  }
+
+  async objectExists(objectName: string): Promise<boolean> {
+    return this.containerClient.getBlobClient(this.blobKey(objectName)).exists()
+  }
+
+  async deleteByPrefix(prefix: string): Promise<StorageDeletion> {
+    // Azure caps a batch at 256 subrequests - align LIST paging with that so each page = one batch.
+    const BATCH_SIZE = 256
+    const deleted = { objects: 0, bytes: 0 }
+    const batchClient = this.containerClient.getBlobBatchClient()
+
+    const pages = this.containerClient.listBlobsFlat({ prefix }).byPage({ maxPageSize: BATCH_SIZE })
+
+    for await (const page of pages) {
+      const blobs = page.segment.blobItems
+      if (blobs.length === 0) continue
+
+      const clients = blobs.map((blob) => {
+        deleted.objects += 1
+        deleted.bytes += blob.properties.contentLength ?? 0
+        return this.containerClient.getBlobClient(blob.name)
+      })
+
+      await batchClient.deleteBlobs(clients)
+    }
+
+    return deleted
+  }
+
+  async deleteFolder(folderName: string): Promise<StorageDeletion> {
+    return this.deleteByPrefix(`${this.blobKey(folderName)}/`)
+  }
+
+  async clear(): Promise<void> {
+    await this.deleteByPrefix(this.blobKey(''))
+  }
+
+  async countFilesInFolder(folderName: string): Promise<number> {
+    let count = 0
+    const blobs = this.containerClient.listBlobsFlat({
+      prefix: `${this.blobKey(folderName)}/`,
+    })
+    for await (const _ of blobs) {
+      count++
+    }
+    return count
+  }
+
+  async listFolder(folderName: string): Promise<StorageObject[]> {
+    const prefix = `${this.blobKey(folderName)}/`
+    const objects: StorageObject[] = []
+    const blobs = this.containerClient.listBlobsFlat({ prefix })
+    for await (const blob of blobs) {
+      objects.push({
+        name: blob.name.slice(prefix.length),
+        bytes: blob.properties.contentLength ?? 0,
+      })
+    }
+    return objects
+  }
+
+  async listStorageFolders(): Promise<StorageFolder[]> {
+    const folders = new Map<string, StorageFolder>()
+    const prefix = this.blobKey('')
+
+    const blobs = this.containerClient.listBlobsFlat({ prefix })
+    for await (const blob of blobs) {
+      const relativeName = blob.name.slice(prefix.length)
+      const folderName = relativeName.split('/', 1)[0]
+      if (!folderName) continue
+
+      const size = blob.properties.contentLength ?? 0
+      const updatedAt = blob.properties.lastModified?.getTime() ?? 0
+      accumulateFolder(folders, folderName, size, updatedAt)
+    }
+
+    return [...folders.values()]
+  }
+
+  async createDownloadUrl(objectName: string, expiresAt: number): Promise<string> {
+    // Backdate start by 5 minutes so clock skew doesn't cause "not yet valid" rejections.
+    const CLOCK_SKEW_MS = 5 * 60 * 1000
+    const startsOn = new Date(Date.now() - CLOCK_SKEW_MS)
+    const expiresOn = new Date(expiresAt)
+    const permissions = BlobSASPermissions.parse('r')
+    const blobClient = this.containerClient.getBlobClient(this.blobKey(objectName))
+
+    // Shared-key connection strings can't request a user delegation key
+    // (that requires Entra ID), so sign directly against the shared key.
+    if (this.usesSharedKey) {
+      return blobClient.generateSasUrl({ permissions, startsOn, expiresOn })
+    }
+
+    const delegationKey = await this.client.getUserDelegationKey(startsOn, expiresOn)
+    const sasParams = generateBlobSASQueryParameters(
+      {
+        containerName: this.container,
+        blobName: this.blobKey(objectName),
+        permissions,
+        startsOn,
+        expiresOn,
+      },
+      delegationKey,
+      this.account,
+    )
+    return `${blobClient.url}?${sasParams.toString()}`
   }
 }
