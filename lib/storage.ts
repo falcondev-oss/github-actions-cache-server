@@ -1528,15 +1528,17 @@ class AzBlobAdapter implements StorageAdapter {
     return count
   }
 
-  async getFolderSize(folderName: string): Promise<number> {
-    const blobs = this.containerClient.listBlobsFlat({
-      prefix: `${this.blobKey(folderName)}/`,
-    })
-    let size = 0
+  async listFolder(folderName: string): Promise<StorageObject[]> {
+    const prefix = `${this.blobKey(folderName)}/`
+    const objects: StorageObject[] = []
+    const blobs = this.containerClient.listBlobsFlat({ prefix })
     for await (const blob of blobs) {
-      size += blob.properties.contentLength ?? 0
+      objects.push({
+        name: blob.name.slice(prefix.length),
+        bytes: blob.properties.contentLength ?? 0,
+      })
     }
-    return size
+    return objects
   }
 
   async listStorageFolders(): Promise<StorageFolder[]> {

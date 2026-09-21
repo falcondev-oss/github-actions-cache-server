@@ -12,7 +12,9 @@ describe('storage folder isolation', () => {
       await adapter.uploadStream('abc123/merged', Readable.from('bb'))
 
       expect(await adapter.countFilesInFolder('abc')).toBe(1)
-      expect(await adapter.getFolderSize('abc')).toBe(1)
+      const objects = await adapter.listFolder('abc')
+      expect(objects).toHaveLength(1)
+      expect(objects.reduce((total, o) => total + o.bytes, 0)).toBe(1)
 
       expect(await adapter.deleteFolder('abc')).toEqual({ objects: 1, bytes: 1 })
 
