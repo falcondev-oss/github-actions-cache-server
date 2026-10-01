@@ -10,6 +10,7 @@ import type { Env, envBaseSchema, envDbDriverSchema, envStorageDriverSchema } fr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { MySqlContainer } from '@testcontainers/mysql'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
 import { createEnv } from 'arkenv'
@@ -83,8 +84,8 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     AWS_REGION: 'us-east-1',
     STORAGE_S3_BUCKET: 'vitest',
     STORAGE_S3_SOCKET_TIMEOUT_MS: 10_000,
-    AWS_ACCESS_KEY_ID: 'minioadmin',
-    AWS_SECRET_ACCESS_KEY: 'minioadmin',
+    AWS_ACCESS_KEY_ID: 'rustfsadmin',
+    AWS_SECRET_ACCESS_KEY: 'rustfsadmin',
     AWS_ENDPOINT_URL: 'http://localhost:9000',
   },
   gcs: {
@@ -163,23 +164,38 @@ export async function setup() {
       .with('s3', async () => {
         const env = TESTING_ENV_BY_STORAGE_DRIVER.s3
 
-        return new GenericContainer('quay.io/minio/minio:latest')
-          .withEntrypoint(['sh'])
-          .withCommand([
-            `-c`,
-            `mkdir -p /data/${env.STORAGE_S3_BUCKET} && /usr/bin/minio server /data`,
-          ])
+        const container = await new GenericContainer('rustfs/rustfs:1.0.0-glibc')
+          .withEnvironment({
+            RUSTFS_ACCESS_KEY: env.AWS_ACCESS_KEY_ID,
+            RUSTFS_SECRET_KEY: env.AWS_SECRET_ACCESS_KEY,
+          })
           .withExposedPorts({
             container: 9000,
             host: 9000,
           })
           .withHealthCheck({
-            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/minio/health/ready'],
+            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/health'],
             interval: 1000,
             retries: 30,
             startPeriod: 1000,
           })
           .start()
+
+        const s3 = new S3Client({
+          endpoint: env.AWS_ENDPOINT_URL,
+          region: env.AWS_REGION,
+          credentials: {
+            accessKeyId: env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+          },
+          forcePathStyle: true,
+        })
+        try {
+          await s3.send(new CreateBucketCommand({ Bucket: env.STORAGE_S3_BUCKET }))
+        } finally {
+          s3.destroy()
+        }
+        return container
       })
       .with('gcs', async () => {
         const env = TESTING_ENV_BY_STORAGE_DRIVER.gcs
