@@ -123,4 +123,4 @@ jobs:
           labels: ${{ steps.meta-caged.outputs.labels }}
           build-args: |
             BUILD_HASH=${{ steps.build_hash.outputs.COMMIT_SHA }}
-            BASE_IMAGE=platformatic/node-caged:25-alpine
+            BASE_IMAGE=platformatic/node-caged:26-alpine

@@ -4,7 +4,7 @@
   "version": "9.8.0",
   "private": true,
   "engines": {
-    "node": "25"
+    "node": "26"
   },
   "scripts": {
     "prepare": "nitropack prepare",
@@ -34,7 +34,7 @@
     "@smithy/node-http-handler": "^4.9.5",
     "@t3-oss/env-core": "^0.13.11",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.3",
     "@types/pg": "^8.20.0",
     "arkenv": "^0.12.2",
     "arktype": "^2.2.3",

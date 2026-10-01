@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: lts/*
+          node-version-file: package.json
 
       - name: ⬆️ Bump version
         if: github.event_name == 'workflow_dispatch'
@@ -183,7 +183,7 @@ jobs:
           tags: ${{ steps.meta-caged.outputs.tags }}
           labels: ${{ steps.meta-caged.outputs.labels }}
           build-args: |
-            BASE_IMAGE=platformatic/node-caged:25-alpine
+            BASE_IMAGE=platformatic/node-caged:26-alpine
 
   deploy-chart:
     name: 🚀 Build and push Helm chart
