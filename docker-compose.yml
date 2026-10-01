@@ -17,9 +17,9 @@ services:
   #     MYSQL_DATABASE: mysql
 
   minio:
-    image: quay.io/minio/minio:latest
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
     entrypoint: sh
-    command: -c 'mkdir -p /data/test && /usr/bin/minio server /data --console-address ":9001"'
+    command: -c 'mkdir -p /data/test && /usr/bin/silo server /data --console-address ":9001"'
     ports:
       - 9000:9000
       - 9001:9001

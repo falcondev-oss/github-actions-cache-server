@@ -163,11 +163,11 @@ export async function setup() {
       .with('s3', async () => {
         const env = TESTING_ENV_BY_STORAGE_DRIVER.s3
 
-        return new GenericContainer('quay.io/minio/minio:latest')
+        return new GenericContainer('pgsty/silo:RELEASE.2026-09-16T00-00-00Z')
           .withEntrypoint(['sh'])
           .withCommand([
             `-c`,
-            `mkdir -p /data/${env.STORAGE_S3_BUCKET} && /usr/bin/minio server /data`,
+            `mkdir -p /data/${env.STORAGE_S3_BUCKET} && /usr/bin/silo server /data`,
           ])
           .withExposedPorts({
             container: 9000,
