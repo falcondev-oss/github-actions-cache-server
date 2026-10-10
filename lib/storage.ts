@@ -1443,6 +1443,38 @@ class AzBlobAdapter implements StorageAdapter {
   private usesSharedKey
   private keyPrefix = 'gh-actions-cache'
 
+  // Put Block From URL, service version 2020-04-08+: 4000 MiB per block, 50000 blocks per blob.
+  // https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-from-url
+  composeParts = {
+    minPartBytes: 0,
+    maxPartBytes: 4000 * 1024 ** 2,
+    maxParts: 50_000,
+    run: async (folderName: string, partCount: number) => {
+      const mergedBlobClient = this.containerClient.getBlockBlobClient(
+        this.blobKey(`${folderName}/merged`),
+      )
+      // stageBlockFromURL needs an authenticated URL to each source part.
+      const expiresAt = Date.now() + DIRECT_DOWNLOAD_LEASE_DURATION_MS
+      const blockIds: string[] = []
+      for (let index = 0; index < partCount; index++) {
+        const blockId = Buffer.from(String(index).padStart(10, '0')).toString('base64')
+        const sourceUrl = await this.createDownloadUrl(`${folderName}/parts/${index}`, expiresAt)
+        try {
+          await mergedBlobClient.stageBlockFromURL(blockId, sourceUrl)
+        } catch (err) {
+          logger.error('AzBlob stageBlockFromURL failed', {
+            error: err,
+            sourceUrl,
+            blockId,
+          })
+          throw err
+        }
+        blockIds.push(blockId)
+      }
+      await mergedBlobClient.commitBlockList(blockIds)
+    },
+  }
+
   constructor({
     client,
     account,
