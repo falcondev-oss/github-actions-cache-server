@@ -13,12 +13,16 @@ import { PassThrough, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createSingletonPromise } from '@antfu/utils'
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   S3Client,
+  UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
@@ -119,7 +123,10 @@ export class Storage {
       if (released) return
       released = true
       clearInterval(renewalTimer)
-      void releaseReaderLease(this.db, readerLeaseId)
+      // an unreleased lease only delays cleanup until it expires
+      releaseReaderLease(this.db, readerLeaseId).catch((err) =>
+        logger.warn(`Failed to release Storage Reader Lease ${readerLeaseId}`, { error: err }),
+      )
     }
     stream.once('end', release)
     stream.once('close', release)
@@ -227,6 +234,101 @@ export class Storage {
     }
   }
 
+  /**
+   * Runs a Merge under a Merge Lease. `write` produces `${folderName}/merged`;
+   * a lease-fenced transaction then marks the Merge complete. Returns false
+   * when another worker holds the lease. Writing straight to the final object
+   * is safe (ADR-0004). The returned promise never rejects: failures are logged
+   * and the merge state rolled back.
+   */
+  private async startMerge(location: StorageLocation, write: () => Promise<void>) {
+    const mergeToken = await acquireMergeLease(this.db, location.id)
+    if (!mergeToken) return false
+
+    await this.db
+      .updateTable('storage_locations')
+      .set({ mergeStartedAt: Date.now() })
+      .where('id', '=', location.id)
+      .execute()
+
+    const renewalTimer = setInterval(() => {
+      void renewMergeLease(this.db, location.id, mergeToken)
+    }, LEASE_RENEWAL_MS)
+    renewalTimer.unref()
+
+    const mergePromise = write()
+      .then(async () => {
+        // The merged object is already written, so losing a deadlock here must
+        // not throw the merge away — the fence is re-checked on every attempt.
+        await retryOnLockConflict(() =>
+          this.db.transaction().execute(async (tx) => {
+            let leaseQuery = tx
+              .selectFrom('merge_leases')
+              .select(['token', 'expiresAt'])
+              .where('storageLocationId', '=', location.id)
+            if (env.DB_DRIVER !== 'sqlite') leaseQuery = leaseQuery.forUpdate()
+            const lease = await leaseQuery.executeTakeFirst()
+            if (lease?.token !== mergeToken || lease.expiresAt <= Date.now())
+              throw new Error('Merge lease was lost before completion')
+            await tx
+              .updateTable('storage_locations')
+              .set({ mergedAt: Date.now() })
+              .where('id', '=', location.id)
+              .execute()
+          }),
+        )
+      })
+      .catch(async (err) => {
+        logger.error(`Merge failed for storage location ${location.id}`, { error: err })
+        await this.db
+          .updateTable('storage_locations')
+          .set({ mergedAt: null, mergeStartedAt: null })
+          .where('id', '=', location.id)
+          .where((eb) =>
+            eb.exists(
+              eb
+                .selectFrom('merge_leases')
+                .select('storageLocationId')
+                .whereRef('storageLocationId', '=', 'storage_locations.id')
+                .where('token', '=', mergeToken),
+            ),
+          )
+          .execute()
+      })
+      .finally(async () => {
+        clearInterval(renewalTimer)
+        await releaseMergeLease(this.db, location.id, mergeToken)
+      })
+    this.mergeStreamPromises.add(mergePromise)
+    mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
+    return true
+  }
+
+  /**
+   * Eager Merge (ADR-0009): a Server-side Merge when the adapter can compose
+   * these Parts, otherwise the streaming merge right away. Only the lease
+   * acquisition is awaited; the Merge itself runs in the background.
+   */
+  private async mergeEagerly(location: StorageLocation, partSizes: number[]) {
+    const compose = this.adapter.composeParts
+    const composable =
+      compose &&
+      partSizes.length <= compose.maxParts &&
+      partSizes.every(
+        (bytes, index) =>
+          bytes <= compose.maxPartBytes &&
+          (index === partSizes.length - 1 || bytes >= compose.minPartBytes),
+      )
+    await this.startMerge(location, () =>
+      composable
+        ? compose.run(location.folderName, location.partCount)
+        : this.adapter.uploadStream(
+            `${location.folderName}/merged`,
+            Readable.from(this.streamParts(location)),
+          ),
+    )
+  }
+
   waitForOngoingMerges() {
     return Promise.all(this.mergeStreamPromises)
   }
@@ -301,7 +403,8 @@ export class Storage {
       )
     }
 
-    const partCount = await this.adapter.countFilesInFolder(`${upload.folderName}/parts`)
+    const parts = await this.adapter.listFolder(`${upload.folderName}/parts`)
+    const partCount = parts.length
     if (partCount !== upload.finishedPartUploadCount) {
       return this.abandonUpload(
         upload.id,
@@ -312,23 +415,22 @@ export class Storage {
       )
     }
 
-    const sizeBytes = await this.adapter.getFolderSize(upload.folderName)
+    const partSizes = parts
+      .toSorted((a, b) => Number(a.name) - Number(b.name))
+      .map(({ bytes }) => bytes)
+    const location: StorageLocation = {
+      id: randomUUID(),
+      folderName: upload.folderName,
+      partCount,
+      mergedAt: null,
+      mergeStartedAt: null,
+      partsDeletedAt: null,
+      lastDownloadedAt: null,
+      sizeBytes: parts.reduce((sum, { bytes }) => sum + bytes, 0),
+    }
 
     await this.db.transaction().execute(async (tx) => {
-      const locationId = randomUUID()
-      await tx
-        .insertInto('storage_locations')
-        .values({
-          id: locationId,
-          folderName: upload.folderName,
-          partCount,
-          mergedAt: null,
-          mergeStartedAt: null,
-          partsDeletedAt: null,
-          lastDownloadedAt: null,
-          sizeBytes,
-        })
-        .execute()
+      await tx.insertInto('storage_locations').values(location).execute()
 
       const existingCacheEntry = await tx
         .selectFrom('cache_entries')
@@ -345,7 +447,7 @@ export class Storage {
           .updateTable('cache_entries')
           .set({
             updatedAt: Date.now(),
-            locationId,
+            locationId: location.id,
           })
           .where('id', '=', existingCacheEntry.id)
           .execute()
@@ -357,7 +459,7 @@ export class Storage {
             version: upload.version,
             id: randomUUID(),
             updatedAt: Date.now(),
-            locationId,
+            locationId: location.id,
             scope,
             repoId,
           })
@@ -370,6 +472,14 @@ export class Storage {
       await this.enforceStorageBudget()
     } catch (err) {
       logger.warn('Capacity-based Eviction failed after upload completion', { error: err })
+    }
+
+    if (env.EAGER_MERGE) {
+      try {
+        await this.mergeEagerly(location, partSizes)
+      } catch (err) {
+        logger.warn('Eager Merge failed to start after upload completion', { error: err })
+      }
     }
 
     return upload
@@ -454,81 +564,20 @@ export class Storage {
 
       await this.ensurePartsExist(storageLocation)
 
-      const mergeToken = await acquireMergeLease(this.db, storageLocation.id)
-      if (!mergeToken) {
+      const responseStream = new PassThrough()
+      const mergerStream = new PassThrough()
+      const merge = await this.startMerge(storageLocation, () =>
+        this.adapter
+          .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
+          .catch((err) => {
+            mergerStream.destroy()
+            throw err
+          }),
+      )
+      if (!merge) {
         const stream = await this.downloadFromCacheEntryLocation(storageLocation)
         return this.protectDownloadStream(stream, readerLeaseId)
       }
-
-      await this.db
-        .updateTable('storage_locations')
-        .set({
-          mergeStartedAt: Date.now(),
-        })
-        .where('id', '=', storageLocation.id)
-        .execute()
-
-      const responseStream = new PassThrough()
-      const mergerStream = new PassThrough()
-      const renewalTimer = setInterval(() => {
-        void renewMergeLease(this.db, storageLocation.id, mergeToken)
-      }, LEASE_RENEWAL_MS)
-      renewalTimer.unref()
-
-      // Uploading straight to the final object is safe: uploads are atomically
-      // visible (see StorageAdapter.uploadStream) and Parts are immutable, so a
-      // merger that lost its lease can only overwrite `merged` with identical
-      // bytes — the fence only needs to guard who flips `mergedAt`.
-      const mergePromise = this.adapter
-        .uploadStream(`${storageLocation.folderName}/merged`, mergerStream)
-        .then(async () => {
-          // The merged object is already written, so losing a deadlock here must
-          // not throw the merge away — the fence is re-checked on every attempt.
-          await retryOnLockConflict(() =>
-            this.db.transaction().execute(async (tx) => {
-              let leaseQuery = tx
-                .selectFrom('merge_leases')
-                .select(['token', 'expiresAt'])
-                .where('storageLocationId', '=', storageLocation.id)
-              if (env.DB_DRIVER !== 'sqlite') leaseQuery = leaseQuery.forUpdate()
-              const lease = await leaseQuery.executeTakeFirst()
-              if (lease?.token !== mergeToken || lease.expiresAt <= Date.now())
-                throw new Error('Merge lease was lost before completion')
-              await tx
-                .updateTable('storage_locations')
-                .set({ mergedAt: Date.now() })
-                .where('id', '=', storageLocation.id)
-                .execute()
-            }),
-          )
-        })
-        .catch(async (err) => {
-          logger.error(`Merge failed for storage location ${storageLocation.id}`, { error: err })
-          await this.db
-            .updateTable('storage_locations')
-            .set({
-              mergedAt: null,
-              mergeStartedAt: null,
-            })
-            .where('id', '=', storageLocation.id)
-            .where((eb) =>
-              eb.exists(
-                eb
-                  .selectFrom('merge_leases')
-                  .select('storageLocationId')
-                  .whereRef('storageLocationId', '=', 'storage_locations.id')
-                  .where('token', '=', mergeToken),
-              ),
-            )
-            .execute()
-          mergerStream.destroy()
-        })
-        .finally(async () => {
-          clearInterval(renewalTimer)
-          await releaseMergeLease(this.db, storageLocation.id, mergeToken)
-        })
-      this.mergeStreamPromises.add(mergePromise)
-      mergePromise.finally(() => this.mergeStreamPromises.delete(mergePromise))
 
       this.pumpPartsToStreams(storageLocation, responseStream, mergerStream).catch((err) => {
         responseStream.destroy(err)
@@ -758,11 +807,29 @@ export interface StorageAdapter {
   objectExists(objectName: string): Promise<boolean>
   deleteFolder(folderName: string): Promise<StorageDeletion>
   countFilesInFolder(folderName: string): Promise<number>
-  getFolderSize(folderName: string): Promise<number>
+  /** Objects under a folder, names relative to it. */
+  listFolder(folderName: string): Promise<StorageObject[]>
   listStorageFolders(): Promise<StorageFolder[]>
   createDownloadUrl?(objectName: string, expiresAt: number): Promise<string>
   getFilesystemUsage?(): Promise<{ capacityBytes: number; usedBytes: number }>
+  /**
+   * Server-side Merge: copies `${folderName}/parts/0..partCount-1` into
+   * `${folderName}/merged` inside the backend. Only applicable when every Part
+   * satisfies the limits; the caller checks them before calling `run`.
+   */
+  composeParts?: {
+    /** Every Part but the last must be at least this large. */
+    minPartBytes: number
+    maxPartBytes: number
+    maxParts: number
+    run(folderName: string, partCount: number): Promise<void>
+  }
   clear(): Promise<void>
+}
+
+export interface StorageObject {
+  name: string
+  bytes: number
 }
 
 export interface StorageFolder {
@@ -826,6 +893,42 @@ class S3Adapter implements StorageAdapter {
   private s3
   private bucket
   private keyPrefix = 'gh-actions-cache'
+
+  // S3 multipart limits: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+  composeParts = {
+    minPartBytes: 5 * 1024 * 1024,
+    maxPartBytes: 5 * 1024 ** 3,
+    maxParts: 10_000,
+    run: async (folderName: string, partCount: number) => {
+      const Bucket = this.bucket
+      const Key = `${this.keyPrefix}/${folderName}/merged`
+      const { UploadId } = await this.s3.send(new CreateMultipartUploadCommand({ Bucket, Key }))
+      if (!UploadId) throw new Error('S3 did not return an UploadId')
+      try {
+        const Parts = []
+        for (let PartNumber = 1; PartNumber <= partCount; PartNumber++) {
+          const copy = await this.s3.send(
+            new UploadPartCopyCommand({
+              Bucket,
+              Key,
+              UploadId,
+              PartNumber,
+              CopySource: `${Bucket}/${this.keyPrefix}/${folderName}/parts/${PartNumber - 1}`,
+            }),
+          )
+          Parts.push({ PartNumber, ETag: copy.CopyPartResult?.ETag })
+        }
+        await this.s3.send(
+          new CompleteMultipartUploadCommand({ Bucket, Key, UploadId, MultipartUpload: { Parts } }),
+        )
+      } catch (err) {
+        await this.s3
+          .send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId }))
+          .catch(() => {})
+        throw err
+      }
+    },
+  }
 
   constructor({ bucket, s3 }: { s3: S3Client; bucket: string }) {
     this.s3 = s3
@@ -967,14 +1070,16 @@ class S3Adapter implements StorageAdapter {
     return count
   }
 
-  async getFolderSize(folderName: string) {
-    let bytes = 0
-
-    const pages = this.listObjectsByPrefix(`${this.keyPrefix}/${folderName}/`)
-    for await (const listResponse of pages)
-      bytes += (listResponse.Contents ?? []).reduce((sum, object) => sum + (object.Size ?? 0), 0)
-
-    return bytes
+  async listFolder(folderName: string) {
+    const prefix = `${this.keyPrefix}/${folderName}/`
+    const objects: StorageObject[] = []
+    for await (const page of this.listObjectsByPrefix(prefix)) {
+      const contents = page.Contents ?? []
+      for (const object of contents)
+        if (object.Key)
+          objects.push({ name: object.Key.slice(prefix.length), bytes: object.Size ?? 0 })
+    }
+    return objects
   }
 
   async listStorageFolders() {
@@ -1138,9 +1243,22 @@ class FileSystemAdapter implements StorageAdapter {
     }
   }
 
-  async getFolderSize(folderName: string) {
-    const folder = await this.inspectPath(this.safePath(folderName), folderName)
-    return folder.bytes
+  async listFolder(folderName: string) {
+    const folderPath = this.safePath(folderName)
+    let entries
+    try {
+      entries = await fs.readdir(folderPath, { withFileTypes: true })
+    } catch (err: any) {
+      if (err.code === 'ENOENT') return []
+      throw err
+    }
+    const files = entries.filter((entry) => entry.isFile())
+    return Promise.all(
+      files.map(async (entry) => {
+        const stat = await fs.stat(path.join(folderPath, entry.name))
+        return { name: entry.name, bytes: stat.size }
+      }),
+    )
   }
 
   async listStorageFolders() {
@@ -1172,6 +1290,35 @@ class GcsAdapter implements StorageAdapter {
 
   private bucket
   private keyPrefix = 'gh-actions-cache'
+
+  // GCS compose takes at most 32 sources per call and has no minimum size:
+  // https://cloud.google.com/storage/docs/composing-objects
+  composeParts = {
+    minPartBytes: 0,
+    maxPartBytes: 5 * 1024 ** 4,
+    maxParts: Infinity,
+    run: async (folderName: string, partCount: number) => {
+      const sources = Array.from({ length: partCount }, (_, index) =>
+        this.bucket.file(`${this.keyPrefix}/${folderName}/parts/${index}`),
+      )
+      // Folds batches into a top-level temp object (reclaimed as Orphaned
+      // Storage if we crash) so `merged` only ever appears in one final,
+      // atomic compose (ADR-0004).
+      const temp = this.bucket.file(`${this.keyPrefix}/tmp-${randomUUID()}`)
+      try {
+        while (sources.length > 32) {
+          await this.bucket.combine(sources.splice(0, 32), temp)
+          sources.unshift(temp)
+        }
+        await this.bucket.combine(
+          sources,
+          this.bucket.file(`${this.keyPrefix}/${folderName}/merged`),
+        )
+      } finally {
+        if (partCount > 32) await temp.delete({ ignoreNotFound: true })
+      }
+    },
+  }
 
   constructor({ bucket, gcs }: { bucket: string; gcs: GcsClient }) {
     this.bucket = gcs.bucket(bucket)
@@ -1226,12 +1373,13 @@ class GcsAdapter implements StorageAdapter {
       .then((res) => res[0].length)
   }
 
-  async getFolderSize(folderName: string) {
-    const [files] = await this.bucket.getFiles({
-      prefix: `${this.keyPrefix}/${folderName}/`,
-      autoPaginate: true,
-    })
-    return files.reduce((total, file) => total + Number(file.metadata.size ?? 0), 0)
+  async listFolder(folderName: string) {
+    const prefix = `${this.keyPrefix}/${folderName}/`
+    const [files] = await this.bucket.getFiles({ prefix, autoPaginate: true })
+    return files.map((file) => ({
+      name: file.name.slice(prefix.length),
+      bytes: Number(file.metadata.size ?? 0),
+    }))
   }
 
   async listStorageFolders() {

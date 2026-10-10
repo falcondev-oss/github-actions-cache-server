@@ -39,6 +39,12 @@ config:
   # The runner must be able to reach the storage provider directly.
   enableDirectDownloads: false
 
+  # -- Merge cache parts right after upload instead of on first download, so
+  # the first restore can be a direct download. On S3 (UploadPartCopy, parts
+  # but the last at least 5 MiB) and GCS (compose) the merge happens inside the
+  # bucket. Doubles storage per entry until the parts cleanup job runs.
+  eagerMerge: false
+
   # -- Number of days to keep stale cache data before deleting it. Set to 0 to disable.
   cacheCleanupOlderThanDays: 90
 
@@ -229,6 +235,37 @@ autoscaling:
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 70
+  # -- Scaling behavior for the HPA (`spec.behavior`), passed through verbatim.
+  # Empty by default, so Kubernetes applies its own defaults.
+  # Useful to damp scale-down flapping, e.g.
+  # `scaleDown: {stabilizationWindowSeconds: 900, policies: [{type: Pods, value: 1, periodSeconds: 300}]}`.
+  behavior: {}
+
+# -- Container lifecycle hooks (`lifecycle`), passed through verbatim.
+# Empty by default. A `preStop` hook is the usual way to let in-flight requests
+# finish: the container keeps serving while the Service endpoint removal
+# propagates to ingress controllers, which is asynchronous. For example
+# `preStop: {exec: {command: [/bin/sh, -c, sleep 30]}}` — pair it with a
+# terminationGracePeriodSeconds larger than the sleep, or the kubelet will
+# SIGKILL the container mid-hook.
+lifecycle: {}
+
+# -- Grace period for pod termination (`terminationGracePeriodSeconds`).
+# Empty by default, so Kubernetes applies its default of 30.
+# Must exceed any `lifecycle.preStop` sleep above.
+terminationGracePeriodSeconds: ''
+
+# -- Pod Disruption Budget configuration.
+# Disabled by default. When enabled, defaults to maxUnavailable: 1.
+podDisruptionBudget:
+  # -- Enable/disable the PodDisruptionBudget.
+  enabled: false
+  # -- Number of pods that can be unavailable during a disruption.
+  # Ignored if minAvailable is set.
+  maxUnavailable: 1
+  # -- Number of pods that must be available during a disruption.
+  # Takes precedence over maxUnavailable when set.
+  minAvailable: ''
 
 # -- Persistent volume claim for data storage.
 # Automatically enabled when using filesystem storage or sqlite database driver.
@@ -299,3 +336,12 @@ extraVolumeMounts: []
   # - name: custom-secret
   #   mountPath: /etc/secrets
   #   readOnly: true
+
+# Extra init containers to add to the pod.
+extraInitContainers: []
+  # - name: cloud-sql-proxy
+  #   image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2
+  #   restartPolicy: Always
+  #   args:
+  #     - --auto-iam-authn
+  #     - <project>:<region>:<instance>

@@ -1,4 +1,5 @@
 import type { Hookable } from 'hookable'
+import type { Kysely } from 'kysely'
 import type { Migration } from 'kysely/migration'
 import type { Env } from './schemas'
 import { Storage } from './storage'
@@ -9,6 +10,12 @@ export function migrations(
     afterMigrate: () => Promise<void>
   }>,
 ) {
+  // MySQL requires `DROP INDEX ... ON table`, other drivers reject it
+  async function dropIndex(db: Kysely<unknown>, index: string, table: string) {
+    const query = db.schema.dropIndex(index)
+    await (driver === 'mysql' ? query.on(table) : query).execute()
+  }
+
   return {
     $0_init: {
       async up(db) {
@@ -110,9 +117,9 @@ export function migrations(
         await db.schema.createIndex('idx_uploads_scope').on('uploads').columns(['scope']).execute()
       },
       async down(db) {
-        await db.schema.dropIndex('idx_cache_entries_scope').execute()
+        await dropIndex(db, 'idx_cache_entries_scope', 'cache_entries')
         await db.schema.alterTable('cache_entries').dropColumn('scope').execute()
-        await db.schema.dropIndex('idx_uploads_scope').execute()
+        await dropIndex(db, 'idx_uploads_scope', 'uploads')
         await db.schema.alterTable('uploads').dropColumn('scope').execute()
       },
     },
@@ -152,9 +159,9 @@ export function migrations(
           .execute()
       },
       async down(db) {
-        await db.schema.dropIndex('idx_cache_entries_repoId').execute()
+        await dropIndex(db, 'idx_cache_entries_repoId', 'cache_entries')
         await db.schema.alterTable('cache_entries').dropColumn('repoId').execute()
-        await db.schema.dropIndex('idx_uploads_repoId').execute()
+        await dropIndex(db, 'idx_uploads_repoId', 'uploads')
         await db.schema.alterTable('uploads').dropColumn('repoId').execute()
       },
     },
@@ -199,6 +206,18 @@ export function migrations(
       },
       async down(db) {
         await db.schema.alterTable('storage_locations').dropColumn('sizeBytes').execute()
+      },
+    },
+    $6_cache_entries_locationId_index: {
+      async up(db) {
+        await db.schema
+          .createIndex('idx_cache_entries_locationId')
+          .on('cache_entries')
+          .columns(['locationId'])
+          .execute()
+      },
+      async down(db) {
+        await dropIndex(db, 'idx_cache_entries_locationId', 'cache_entries')
       },
     },
   } satisfies Record<string, Migration>

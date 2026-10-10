@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=node:25-alpine
+ARG BASE_IMAGE=node:26-alpine
 
 FROM ${BASE_IMAGE} AS builder
 

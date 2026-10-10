@@ -83,6 +83,7 @@ export const envBaseSchema = type({
   'DISABLE_CLEANUP_JOBS?': 'boolean',
   'DEBUG?': 'unknown',
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',
+  'EAGER_MERGE': 'boolean = false',
   'BENCHMARK': 'boolean = false',
   'SKIP_TOKEN_VALIDATION': 'boolean = false',
   'MANAGEMENT_API_KEY?': 'string',

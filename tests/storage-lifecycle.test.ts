@@ -53,8 +53,8 @@ describe('storage lifecycle reconciliation', () => {
       async countFilesInFolder() {
         return 0
       },
-      async getFolderSize() {
-        return 0
+      async listFolder() {
+        return []
       },
       async clear() {},
     } satisfies StorageAdapter
@@ -84,8 +84,8 @@ describe('storage lifecycle reconciliation', () => {
       async countFilesInFolder() {
         return 0
       },
-      async getFolderSize() {
-        return 0
+      async listFolder() {
+        return []
       },
       async clear() {},
     } satisfies StorageAdapter

@@ -43,6 +43,14 @@ A segment of cache data stored before its merged representation has been created
 **Merge**:
 The creation of a cache's consolidated stored representation from its Parts.
 
+**Eager Merge**:
+A Merge started at upload completion instead of on first download. Opt-in via `EAGER_MERGE`.
+_Avoid_: pre-merge, upfront merge
+
+**Server-side Merge**:
+A Merge the storage backend performs by copying Parts into the merged object without their bytes passing through the server (S3 `UploadPartCopy`). Requires every Part to satisfy the backend's limits.
+_Avoid_: server-side copy
+
 **Merge Lease**:
 A time-bound, fenced claim granting one worker authority to complete a Merge.
 
