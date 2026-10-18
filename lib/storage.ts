@@ -65,6 +65,13 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
+export class AlreadyExistsError extends Error {
+  constructor(objectName: string) {
+    super(`Already exists: ${objectName}`)
+    this.name = 'AlreadyExistsError'
+  }
+}
+
 export class Storage {
   static async fromEnv() {
     const storage = new Storage({
@@ -609,7 +616,7 @@ export class Storage {
       .where('repoId', '=', repoId)
       .select('id')
       .executeTakeFirst()
-    if (existingUpload) return
+    if (existingUpload) throw new AlreadyExistsError('upload')
 
     const uploadId = generateNumberId()
     await this.db
