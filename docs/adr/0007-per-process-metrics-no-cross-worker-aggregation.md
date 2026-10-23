@@ -1,5 +1,7 @@
 # Prometheus metrics are per-process with no cross-worker aggregation
 
+> Superseded in part by ADR-0010: the server is a single process without cluster workers.
+
 The `/metrics` endpoint exposes each worker process's own in-memory counters from a `prom-client` registry. It does not aggregate across the workers of a `node-cluster` deployment. This is a deliberate limitation, because the correct fix is disproportionate to the payoff for how this server is actually run.
 
 The shipped Docker image sets `NITRO_CLUSTER_WORKERS=1` (one worker per container), and horizontal scaling is done with replicas. In that topology per-process metrics are exactly correct: Prometheus scrapes each replica as its own target and you aggregate in the query layer with `sum(rate(...))` — which is the idiomatic Prometheus pattern, not a workaround. The limitation only bites when an operator overrides `NITRO_CLUSTER_WORKERS` above 1: the workers then share the listening port round-robin, so successive scrapes hit different workers and counters appear to jump around. We document that "run one worker per container and scale with replicas" is the supported way to get accurate metrics.

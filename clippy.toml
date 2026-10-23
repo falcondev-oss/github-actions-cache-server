@@ -1,0 +1,11 @@
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+allow-unwrap-in-tests = true
+avoid-breaking-exported-api = false
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "blocks the async runtime; use tokio::time::sleep" },
+  { path = "tokio::task::spawn_blocking", reason = "no blocking work belongs in this server" },
+]
+max-fn-params-bools = 0
