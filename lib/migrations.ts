@@ -2,6 +2,7 @@ import type { Hookable } from 'hookable'
 import type { Kysely } from 'kysely'
 import type { Migration } from 'kysely/migration'
 import type { Env } from './schemas'
+import { reservationHash } from './helpers'
 import { Storage } from './storage'
 
 export function migrations(
@@ -218,6 +219,48 @@ export function migrations(
       },
       async down(db) {
         await dropIndex(db, 'idx_cache_entries_locationId', 'cache_entries')
+      },
+    },
+    $7_uploads_reservation_hash: {
+      async up(db) {
+        // A unique index over (key, version, scope, repoId) exceeds MySQL's
+        // 3072-byte key limit, so it covers a fixed-width hash of the tuple.
+        await db.schema
+          .alterTable('uploads')
+          .addColumn('reservationHash', 'char(64)', (col) => col.notNull().defaultTo(''))
+          .execute()
+
+        const uploads = await db
+          .selectFrom('uploads')
+          .select(['id', 'key', 'version', 'scope', 'repoId'])
+          .orderBy('createdAt', 'desc')
+          .execute()
+        const seen = new Set<string>()
+        for (const { id, ...reservation } of uploads) {
+          const hash = reservationHash(reservation)
+          // keep the newest upload per reservation, cleanup:orphaned-storage reclaims the rest's parts
+          if (seen.has(hash)) {
+            await db.deleteFrom('uploads').where('id', '=', id).execute()
+            continue
+          }
+          seen.add(hash)
+          await db
+            .updateTable('uploads')
+            .set({ reservationHash: hash })
+            .where('id', '=', id)
+            .execute()
+        }
+
+        await db.schema
+          .createIndex('idx_uploads_reservationHash')
+          .unique()
+          .on('uploads')
+          .column('reservationHash')
+          .execute()
+      },
+      async down(db) {
+        await dropIndex(db, 'idx_uploads_reservationHash', 'uploads')
+        await db.schema.alterTable('uploads').dropColumn('reservationHash').execute()
       },
     },
   } satisfies Record<string, Migration>

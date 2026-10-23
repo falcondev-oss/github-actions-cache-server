@@ -68,6 +68,7 @@ export const uploadSchema = z.object({
   startedPartUploadCount: z.number(),
   finishedPartUploadCount: z.number(),
   folderName: z.string(),
+  reservationHash: z.string(),
 })
 type Upload = z.infer<typeof uploadSchema>
 
@@ -101,6 +102,14 @@ function isRetryableLockError(err: unknown) {
  * tables in differing orders, so a deadlock is expected rather than exceptional
  * — the loser has to start over. Only wrap transactions that are safe to repeat.
  */
+// sqlite, postgres `unique_violation` and mysql
+const UNIQUE_VIOLATION_ERRORS = new Set(['SQLITE_CONSTRAINT_UNIQUE', '23505', 'ER_DUP_ENTRY'])
+
+export function isUniqueViolation(err: unknown) {
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === 'string' && UNIQUE_VIOLATION_ERRORS.has(code)
+}
+
 export async function retryOnLockConflict<T>(run: () => Promise<T>, attempts = 3) {
   for (let attempt = 1; ; attempt++) {
     try {

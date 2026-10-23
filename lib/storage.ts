@@ -38,9 +38,9 @@ import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
 import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
-import { getDatabase, retryOnLockConflict } from './db'
+import { getDatabase, isUniqueViolation, retryOnLockConflict } from './db'
 import { env } from './env'
-import { generateNumberId } from './helpers'
+import { generateNumberId, reservationHash } from './helpers'
 import { logger } from './logger'
 import {
   acquireMergeLease,
@@ -640,43 +640,26 @@ export class Storage {
     }
   }
 
-  async createUpload({
-    key,
-    version,
-    scope,
-    repoId,
-  }: {
-    key: string
-    version: string
-    scope: string
-    repoId: string
-  }) {
-    const existingUpload = await this.db
-      .selectFrom('uploads')
-      .where('key', '=', key)
-      .where('version', '=', version)
-      .where('scope', '=', scope)
-      .where('repoId', '=', repoId)
-      .select('id')
-      .executeTakeFirst()
-    if (existingUpload) throw new AlreadyExistsError(key)
-
+  async createUpload(reservation: { key: string; version: string; scope: string; repoId: string }) {
     const uploadId = generateNumberId()
-    await this.db
-      .insertInto('uploads')
-      .values({
-        id: uploadId,
-        folderName: uploadId.toString(),
-        createdAt: Date.now(),
-        key,
-        version,
-        scope,
-        repoId,
-        lastPartUploadedAt: null,
-        finishedPartUploadCount: 0,
-        startedPartUploadCount: 0,
-      })
-      .execute()
+    try {
+      await this.db
+        .insertInto('uploads')
+        .values({
+          ...reservation,
+          id: uploadId,
+          folderName: uploadId.toString(),
+          createdAt: Date.now(),
+          reservationHash: reservationHash(reservation),
+          lastPartUploadedAt: null,
+          finishedPartUploadCount: 0,
+          startedPartUploadCount: 0,
+        })
+        .execute()
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new AlreadyExistsError(reservation.key)
+      throw err
+    }
 
     return { id: uploadId }
   }
