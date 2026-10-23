@@ -1,6 +1,5 @@
 /* eslint-disable ts/method-signature-style */
 import type { Kysely } from 'kysely'
-import type { ReadableStream } from 'node:stream/web'
 import type { Database, StorageLocation } from './db'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
@@ -326,7 +325,7 @@ export class Storage {
     return Promise.all(this.mergeStreamPromises)
   }
 
-  async uploadPart(uploadId: number, partIndex: number, stream: ReadableStream) {
+  async uploadPart(uploadId: number, partIndex: number, stream: Readable) {
     const upload = await this.db
       .selectFrom('uploads')
       .where('id', '=', uploadId)
@@ -342,10 +341,7 @@ export class Storage {
       .where('id', '=', uploadId)
       .execute()
 
-    await this.adapter.uploadStream(
-      `${upload.folderName}/parts/${partIndex}`,
-      Readable.fromWeb(stream),
-    )
+    await this.adapter.uploadStream(`${upload.folderName}/parts/${partIndex}`, stream)
 
     await this.db
       .updateTable('uploads')
