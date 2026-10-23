@@ -38,7 +38,12 @@ export default defineEventHandler(async (event) => {
   // Not h3's `getRequestWebStream`: it enqueues every `data` event and never pauses the
   // request, so a body arriving faster than storage consumes it is buffered in full.
   const storage = await getStorage()
-  await storage.uploadPart(uploadId, chunkIndex, event.node.req)
+  const stored = await storage.uploadPart(uploadId, chunkIndex, event.node.req)
+  if (!stored)
+    throw createError({
+      statusCode: 404,
+      statusMessage: `Upload not found: ${uploadId}`,
+    })
 
   // prevent random EOF error with in tonistiigi/go-actions-cache caused by missing request id
   setHeader(event, 'x-ms-request-id', randomUUID())
