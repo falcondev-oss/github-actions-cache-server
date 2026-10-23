@@ -7,18 +7,15 @@ export function generateNumberId() {
   return Number.parseInt(generate())
 }
 
-/** Identifies the single Upload allowed per key, version, scope and repo. */
-export function reservationHash({
-  key,
-  version,
-  scope,
-  repoId,
-}: {
+/** The key, version, scope and repo that at most one Upload may hold at a time. */
+export interface Reservation {
   key: string
   version: string
   scope: string
   repoId: string
-}) {
+}
+
+export function reservationHash({ key, version, scope, repoId }: Reservation) {
   return createHash('sha256')
     .update(JSON.stringify([key, version, scope, repoId]))
     .digest('hex')

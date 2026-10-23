@@ -2,6 +2,7 @@
 import type { ContainerClient } from '@azure/storage-blob'
 import type { Kysely } from 'kysely'
 import type { Database, StorageLocation } from './db'
+import type { Reservation } from './helpers'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
@@ -404,23 +405,12 @@ export class Storage {
       .execute()
   }
 
-  async completeUpload({
-    key,
-    version,
-    scope,
-    repoId,
-  }: {
-    key: string
-    version: string
-    scope: string
-    repoId: string
-  }) {
+  async completeUpload(reservation: Reservation) {
+    const { key, version, scope, repoId } = reservation
+    // the hash matches exactly, a `key` comparison would be case-insensitive on MySQL
     const upload = await this.db
       .selectFrom('uploads')
-      .where('key', '=', key)
-      .where('version', '=', version)
-      .where('scope', '=', scope)
-      .where('repoId', '=', repoId)
+      .where('reservationHash', '=', reservationHash(reservation))
       .selectAll()
       .executeTakeFirst()
     if (!upload) return
@@ -640,7 +630,7 @@ export class Storage {
     }
   }
 
-  async createUpload(reservation: { key: string; version: string; scope: string; repoId: string }) {
+  async createUpload(reservation: Reservation) {
     const uploadId = generateNumberId()
     try {
       await this.db

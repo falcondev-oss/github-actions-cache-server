@@ -221,14 +221,12 @@ export function migrations(
         await dropIndex(db, 'idx_cache_entries_locationId', 'cache_entries')
       },
     },
-    $7_uploads_reservation_hash: {
+    $7_uploads_reservationHash: {
       async up(db) {
         // A unique index over (key, version, scope, repoId) exceeds MySQL's
         // 3072-byte key limit, so it covers a fixed-width hash of the tuple.
-        await db.schema
-          .alterTable('uploads')
-          .addColumn('reservationHash', 'char(64)', (col) => col.notNull().defaultTo(''))
-          .execute()
+        // Nullable so replicas still on the previous version can insert during a rollout.
+        await db.schema.alterTable('uploads').addColumn('reservationHash', 'char(64)').execute()
 
         const uploads = await db
           .selectFrom('uploads')
