@@ -125,6 +125,40 @@ describe('proxy download route on unmerged entries', () => {
   })
 })
 
+test.each(['bytes=0-', 'bytes=5-'])(
+  'an empty merged entry answers %s with an empty 200',
+  async (range) => {
+    const storage = await getStorage()
+    const key = `range-empty-${crypto.randomUUID()}`
+    const upload = await storage.createUpload({
+      key,
+      version: VERSION,
+      scope: SCOPE,
+      repoId: REPO_ID,
+    })
+    await storage.uploadPart(upload.id, 0, Readable.from(Buffer.alloc(0)))
+    await storage.completeUpload({ key, version: VERSION, scope: SCOPE, repoId: REPO_ID })
+    const matched = await storage.matchCacheEntry({
+      keys: [key],
+      version: VERSION,
+      scopes: [SCOPE],
+      repoId: REPO_ID,
+    })
+    const id = matched!.match.locationId
+    const first = await storage.download(id)
+    for await (const _ of first!.stream) {
+      /* drain */
+    }
+    await storage.waitForOngoingMerges()
+
+    const { res, body } = await get(id, range)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-range')).toBeNull()
+    expect(res.headers.get('content-length')).toBe('0')
+    expect(body).toHaveLength(0)
+  },
+)
+
 test('a re-save does not change the bytes behind a handed-out URL', async () => {
   const { id, key } = await createEntry()
   const resaved = await createEntry(key)

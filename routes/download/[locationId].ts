@@ -44,6 +44,14 @@ export default defineEventHandler(async (event) => {
     download = await storage.download(locationId, range)
   } catch (err) {
     if (!(err instanceof RangeNotSatisfiableError)) throw err
+    // An empty entry has no satisfiable range. The filesystem and GCS adapters raise
+    // for any Range on one and Azure for any start past 0, while RustFS (S3) answers
+    // `bytes=0-` with an empty 200. Ignore Range on empty entries (RFC 9110 §14.2) so
+    // the response does not depend on the storage driver.
+    if (err.size === 0) {
+      setHeader(event, 'content-length', 0)
+      return send(event)
+    }
     setResponseStatus(event, 416, 'Range Not Satisfiable')
     if (err.size !== undefined) setHeader(event, 'content-range', `bytes */${err.size}`)
     return send(event)
