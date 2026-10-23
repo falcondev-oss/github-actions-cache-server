@@ -377,13 +377,14 @@ export class Storage {
     return Promise.all(this.mergeStreamPromises)
   }
 
+  /** `false` when the upload does not exist or was deleted while the part was streaming. */
   async uploadPart(uploadId: number, partIndex: number, stream: Readable) {
     const upload = await this.db
       .selectFrom('uploads')
       .where('id', '=', uploadId)
       .select(['folderName'])
       .executeTakeFirst()
-    if (!upload) return
+    if (!upload) return false
 
     await this.db
       .updateTable('uploads')
@@ -395,14 +396,15 @@ export class Storage {
 
     await this.adapter.uploadStream(`${upload.folderName}/parts/${partIndex}`, stream)
 
-    await this.db
+    const { numUpdatedRows } = await this.db
       .updateTable('uploads')
       .set({
         lastPartUploadedAt: Date.now(),
         finishedPartUploadCount: sql`${sql.ref('finishedPartUploadCount')} + 1`,
       })
       .where('id', '=', uploadId)
-      .execute()
+      .executeTakeFirst()
+    return numUpdatedRows > 0n
   }
 
   async completeUpload(reservation: Reservation) {
