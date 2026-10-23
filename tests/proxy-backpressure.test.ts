@@ -4,6 +4,7 @@ import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import http from 'node:http'
+import { Readable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import * as h3 from 'h3'
@@ -18,17 +19,19 @@ const CHUNK_BYTES = 64 * 1024
 // of letting TCP flow control pace the faster side.
 const MAX_BUFFERED_BYTES = 64 * MiB
 
-// The real route handler on an in-process h3 app, so the test process is the
+// The real route handlers on an in-process h3 app, so the test process is the
 // server process and its socket and storage calls are observable.
 const router = h3.createRouter({ preemptive: true }) // as Nitro: an `undefined` return ends the response
 const server = http.createServer(h3.toNodeListener(h3.createApp().use(router)))
 
 beforeAll(async () => {
   for (const [name, value] of Object.entries(h3)) vi.stubGlobal(name, value)
-  // Not a static import: route modules call Nitro auto-imports (`defineEventHandler`,
+  // Not static imports: route modules call Nitro auto-imports (`defineEventHandler`,
   // …) at evaluation time, so they can only load after the stubs above.
   const { default: upload } = await import('~/routes/devstoreaccount1/upload/[uploadId].put')
   router.put('/upload/:uploadId', upload)
+  const { default: download } = await import('~/routes/download/[cacheEntryId]')
+  router.get('/download/:cacheEntryId', download)
   server.listen(0)
   await once(server, 'listening')
 })
@@ -108,5 +111,40 @@ describe('proxy routes apply backpressure', () => {
     expect
       .soft(sentWhileStalled, 'bytes the client got out while storage was stalled')
       .toBeLessThan(MAX_BUFFERED_BYTES)
+  }, 60_000)
+
+  test('download does not buffer the entry for a client that stopped reading', async () => {
+    let pulled = 0
+    function* entry() {
+      while (pulled < ENTRY_BYTES) {
+        pulled += CHUNK_BYTES
+        yield Buffer.alloc(CHUNK_BYTES) // fresh memory per chunk, like a storage read
+      }
+    }
+    const source = Readable.from(entry(), { objectMode: false, highWaterMark: CHUNK_BYTES })
+    const storage = await getStorage()
+    vi.spyOn(storage, 'download').mockResolvedValue(source)
+
+    const { port } = server.address() as AddressInfo
+    const serverSide = once(server, 'request') as Promise<[IncomingMessage, ServerResponse]>
+    const req = http.get(`http://localhost:${port}/download/${randomUUID()}`)
+    const [res] = (await once(req, 'response')) as [IncomingMessage]
+    expect(res.statusCode).toBe(200)
+    let received = 0
+    res.once('data', (chunk: Buffer) => {
+      received += chunk.length
+      res.pause() // the client stops reading but keeps the connection open
+    })
+
+    await settled(() => pulled)
+    const readAhead = pulled - received
+    const [, serverRes] = await serverSide
+    const queued = serverRes.writableLength
+    req.destroy()
+
+    expect
+      .soft(readAhead, 'bytes read from storage but not delivered')
+      .toBeLessThan(MAX_BUFFERED_BYTES)
+    expect.soft(queued, 'bytes queued in the response').toBeLessThan(MAX_BUFFERED_BYTES)
   }, 60_000)
 })
