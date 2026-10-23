@@ -39,6 +39,7 @@ utoipa-scalar = { version = "0.4", features = ["axum"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["process"] }
 reqwest = { version = "0.13", default-features = false, features = ["query"] }
 tempfile = "3"
 
