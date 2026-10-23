@@ -183,7 +183,7 @@ jobs:
           tags: ${{ steps.meta-caged.outputs.tags }}
           labels: ${{ steps.meta-caged.outputs.labels }}
           build-args: |
-            BASE_IMAGE=platformatic/node-caged:26-alpine
+            BASE_IMAGE=platformatic/node-caged:26.12.1-alpine
 
   deploy-chart:
     name: 🚀 Build and push Helm chart
