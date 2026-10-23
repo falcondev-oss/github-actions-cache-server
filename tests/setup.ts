@@ -11,6 +11,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { BlobServiceClient } from '@azure/storage-blob'
 import { MySqlContainer } from '@testcontainers/mysql'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
 import { createEnv } from 'arkenv'
@@ -226,7 +227,8 @@ export async function setup() {
       })
       .with('filesystem', () => undefined)
       .with('azblob', async () => {
-        return new GenericContainer('mcr.microsoft.com/azure-storage/azurite')
+        const env = TESTING_ENV_BY_STORAGE_DRIVER.azblob
+        const container = await new GenericContainer('mcr.microsoft.com/azure-storage/azurite')
           .withCommand(['azurite-blob', '--blobHost', '0.0.0.0', '--skipApiVersionCheck'])
           .withExposedPorts({
             container: 10_000,
@@ -239,6 +241,11 @@ export async function setup() {
             startPeriod: 1000,
           })
           .start()
+
+        await BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
+          .getContainerClient(env.STORAGE_AZBLOB_CONTAINER)
+          .create()
+        return container
       })
       .exhaustive(),
   )
