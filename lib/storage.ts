@@ -1,4 +1,5 @@
 /* eslint-disable ts/method-signature-style */
+import type { ContainerClient } from '@azure/storage-blob'
 import type { Kysely } from 'kysely'
 import type { Database, StorageLocation } from './db'
 import type { Env } from './schemas'
@@ -25,6 +26,13 @@ import {
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { DefaultAzureCredential } from '@azure/identity'
+import {
+  BlobSASPermissions,
+  BlobServiceClient,
+  generateBlobSASQueryParameters,
+  StorageSharedKeyCredential,
+} from '@azure/storage-blob'
 import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
@@ -93,6 +101,13 @@ export interface DownloadStream {
   range?: ByteRange
 }
 
+export class AlreadyExistsError extends Error {
+  constructor(objectName: string) {
+    super(`Already exists: ${objectName}`)
+    this.name = 'AlreadyExistsError'
+  }
+}
+
 export class Storage {
   static async fromEnv() {
     const storage = new Storage({
@@ -108,6 +123,7 @@ export class Storage {
       .with({ STORAGE_DRIVER: 's3' }, S3Adapter.fromEnv)
       .with({ STORAGE_DRIVER: 'filesystem' }, FileSystemAdapter.fromEnv)
       .with({ STORAGE_DRIVER: 'gcs' }, GcsAdapter.fromEnv)
+      .with({ STORAGE_DRIVER: 'azblob' }, AzBlobAdapter.fromEnv)
       .exhaustive()
   }
 
@@ -640,7 +656,7 @@ export class Storage {
       .where('repoId', '=', repoId)
       .select('id')
       .executeTakeFirst()
-    if (existingUpload) return
+    if (existingUpload) throw new AlreadyExistsError(key)
 
     const uploadId = generateNumberId()
     await this.db
@@ -1462,6 +1478,186 @@ class GcsAdapter implements StorageAdapter {
         expires: expiresAt,
       })
       .then((res) => res[0])
+  }
+}
+
+class AzBlobAdapter implements StorageAdapter {
+  static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'azblob' }>) {
+    const service = env.STORAGE_AZBLOB_CONNECTION_STRING
+      ? BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
+      : new BlobServiceClient(
+          env.STORAGE_AZBLOB_ENDPOINT ??
+            `https://${env.STORAGE_AZBLOB_ACCOUNT}.blob.core.windows.net`,
+          new DefaultAzureCredential(),
+        )
+    const container = service.getContainerClient(env.STORAGE_AZBLOB_CONTAINER)
+    if (!(await container.exists()))
+      throw new Error(`Container ${env.STORAGE_AZBLOB_CONTAINER} does not exist`)
+
+    return new AzBlobAdapter({ service, container })
+  }
+
+  private service
+  private container
+  private keyPrefix = 'gh-actions-cache'
+
+  // Put Block From URL, service version 2020-04-08+: 4000 MiB per block, 50000 blocks per blob.
+  // https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-from-url
+  composeParts = {
+    minPartBytes: 0,
+    maxPartBytes: 4000 * 1024 ** 2,
+    maxParts: 50_000,
+    run: async (folderName: string, partCount: number) => {
+      const merged = this.blob(`${folderName}/merged`).getBlockBlobClient()
+      // Put Block From URL reads each Part through a SAS URL. The SAS is
+      // checked when each request starts, so it must outlive the whole run.
+      const sign = await this.sasSigner(Date.now() + 60 * 60 * 1000)
+      const blockIds = []
+      for (let index = 0; index < partCount; index++) {
+        const blockId = Buffer.from(String(index).padStart(10, '0')).toString('base64')
+        await merged.stageBlockFromURL(blockId, await sign(`${folderName}/parts/${index}`))
+        blockIds.push(blockId)
+      }
+      // Committing the block list makes `merged` appear atomically (ADR-0004).
+      await merged.commitBlockList(blockIds)
+    },
+  }
+
+  constructor({ service, container }: { service: BlobServiceClient; container: ContainerClient }) {
+    this.service = service
+    this.container = container
+  }
+
+  private blob(objectName: string) {
+    return this.container.getBlobClient(`${this.keyPrefix}/${objectName}`)
+  }
+
+  /** Returns a signer for read-only SAS URLs, fetching the user delegation key once. */
+  private async sasSigner(expiresAt: number) {
+    // Backdated so clock skew doesn't make the SAS "not yet valid".
+    const startsOn = new Date(Date.now() - 5 * 60 * 1000)
+    const expiresOn = new Date(expiresAt)
+    const permissions = BlobSASPermissions.parse('r')
+    // A shared key signs directly; Entra ID credentials need a user delegation key.
+    const delegationKey =
+      this.service.credential instanceof StorageSharedKeyCredential
+        ? undefined
+        : await this.service.getUserDelegationKey(startsOn, expiresOn)
+
+    return (objectName: string) => {
+      const blob = this.blob(objectName)
+      if (!delegationKey) return blob.generateSasUrl({ permissions, startsOn, expiresOn })
+      const sas = generateBlobSASQueryParameters(
+        {
+          containerName: blob.containerName,
+          blobName: blob.name,
+          permissions,
+          startsOn,
+          expiresOn,
+        },
+        delegationKey,
+        blob.accountName,
+      )
+      return Promise.resolve(`${blob.url}?${sas.toString()}`)
+    }
+  }
+
+  private async deleteByPrefix(prefix: string) {
+    const deleted = { objects: 0, bytes: 0 }
+    const batch = this.container.getBlobBatchClient()
+    // A batch takes at most 256 subrequests, so each listed page is one batch.
+    const pages = this.container.listBlobsFlat({ prefix }).byPage({ maxPageSize: 256 })
+
+    for await (const page of pages) {
+      const blobs = page.segment.blobItems
+      if (blobs.length === 0) continue
+
+      // Sub-requests fail individually without rejecting the batch.
+      const { subResponses } = await batch.deleteBlobs(
+        blobs.map((blob) => this.container.getBlobClient(blob.name)),
+      )
+      const failed = blobs.flatMap((blob, index) => {
+        const response = subResponses[index]
+        return response?.status === 202
+          ? []
+          : [`${blob.name} (${response?.errorCode ?? 'no response'})`]
+      })
+      if (failed.length > 0)
+        throw new Error(
+          `Azure Blob failed to delete ${failed.length} blob(s): ${failed.join(', ')}`,
+        )
+
+      deleted.objects += blobs.length
+      deleted.bytes += blobs.reduce(
+        (total, blob) => total + (blob.properties.contentLength ?? 0),
+        0,
+      )
+    }
+
+    return deleted
+  }
+
+  async createDownloadStream(objectName: string) {
+    const response = await this.blob(objectName).download()
+    if (!response.readableStreamBody) throw new Error(`No stream for blob "${objectName}"`)
+    return Readable.from(response.readableStreamBody)
+  }
+
+  async uploadStream(objectName: string, stream: Readable) {
+    await this.blob(objectName).getBlockBlobClient().uploadStream(stream)
+  }
+
+  async objectExists(objectName: string) {
+    return this.blob(objectName).exists()
+  }
+
+  async deleteFolder(folderName: string) {
+    return this.deleteByPrefix(`${this.keyPrefix}/${folderName}/`)
+  }
+
+  async clear() {
+    await this.deleteByPrefix(`${this.keyPrefix}/`)
+  }
+
+  async countFilesInFolder(folderName: string) {
+    const objects = await this.listFolder(folderName)
+    return objects.length
+  }
+
+  async listFolder(folderName: string) {
+    const prefix = `${this.keyPrefix}/${folderName}/`
+    const objects: StorageObject[] = []
+    const blobs = this.container.listBlobsFlat({ prefix })
+    for await (const blob of blobs)
+      objects.push({
+        name: blob.name.slice(prefix.length),
+        bytes: blob.properties.contentLength ?? 0,
+      })
+    return objects
+  }
+
+  async listStorageFolders() {
+    const folders = new Map<string, StorageFolder>()
+    const prefix = `${this.keyPrefix}/`
+
+    const blobs = this.container.listBlobsFlat({ prefix })
+    for await (const blob of blobs) {
+      const folderName = blob.name.slice(prefix.length).split('/', 1)[0]
+      if (!folderName) continue
+      accumulateFolder(
+        folders,
+        folderName,
+        blob.properties.contentLength ?? 0,
+        blob.properties.lastModified?.getTime() ?? 0,
+      )
+    }
+
+    return [...folders.values()]
+  }
+
+  async createDownloadUrl(objectName: string, expiresAt: number) {
+    const sign = await this.sasSigner(expiresAt)
+    return sign(objectName)
   }
 }
 

@@ -70,7 +70,6 @@ describe('proxy routes apply backpressure', () => {
       scope: 'refs/heads/main',
       repoId: '123',
     })
-    if (!created) throw new Error('createUpload returned nothing')
 
     // Storage that stalls (an S3 UploadPart in flight) and drains only when released.
     const { promise: storageStalled, resolve: releaseStorage } = Promise.withResolvers<void>()
