@@ -377,7 +377,10 @@ export class Storage {
     return Promise.all(this.mergeStreamPromises)
   }
 
-  /** `false` when the upload does not exist or was deleted while the part was streaming. */
+  /**
+   * `false` when the upload does not exist, or was deleted while the part was streaming
+   * (the written part is then Orphaned Storage, ADR-0001).
+   */
   async uploadPart(uploadId: number, partIndex: number, stream: Readable) {
     const upload = await this.db
       .selectFrom('uploads')
