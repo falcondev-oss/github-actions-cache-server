@@ -1,10 +1,10 @@
-ARG BASE_IMAGE=node:25-alpine
+ARG BASE_IMAGE=node:26.12.1-alpine
 
 FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
 
-RUN --mount=type=cache,target=/root/.npm npm install -g pnpm@latest-11
+RUN --mount=type=cache,target=/root/.npm npm install -g pnpm@latest-12
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 

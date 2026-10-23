@@ -10,6 +10,8 @@ import type { Env, envBaseSchema, envDbDriverSchema, envStorageDriverSchema } fr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { BlobServiceClient } from '@azure/storage-blob'
 import { MySqlContainer } from '@testcontainers/mysql'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
 import { createEnv } from 'arkenv'
@@ -83,8 +85,8 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     AWS_REGION: 'us-east-1',
     STORAGE_S3_BUCKET: 'vitest',
     STORAGE_S3_SOCKET_TIMEOUT_MS: 10_000,
-    AWS_ACCESS_KEY_ID: 'minioadmin',
-    AWS_SECRET_ACCESS_KEY: 'minioadmin',
+    AWS_ACCESS_KEY_ID: 'rustfsadmin',
+    AWS_SECRET_ACCESS_KEY: 'rustfsadmin',
     AWS_ENDPOINT_URL: 'http://localhost:9000',
   },
   gcs: {
@@ -92,6 +94,12 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     STORAGE_GCS_BUCKET: 'vitest',
     STORAGE_GCS_ENDPOINT: 'http://localhost:9000',
     STORAGE_GCS_SERVICE_ACCOUNT_KEY: 'tests/gcs-service-account-key.json',
+  },
+  azblob: {
+    STORAGE_DRIVER: 'azblob',
+    STORAGE_AZBLOB_CONTAINER: 'vitest',
+    STORAGE_AZBLOB_CONNECTION_STRING:
+      'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;',
   },
 } satisfies {
   [K in Env['STORAGE_DRIVER']]: Extract<
@@ -163,23 +171,38 @@ export async function setup() {
       .with('s3', async () => {
         const env = TESTING_ENV_BY_STORAGE_DRIVER.s3
 
-        return new GenericContainer('quay.io/minio/minio:latest')
-          .withEntrypoint(['sh'])
-          .withCommand([
-            `-c`,
-            `mkdir -p /data/${env.STORAGE_S3_BUCKET} && /usr/bin/minio server /data`,
-          ])
+        const container = await new GenericContainer('rustfs/rustfs:1.0.0-glibc')
+          .withEnvironment({
+            RUSTFS_ACCESS_KEY: env.AWS_ACCESS_KEY_ID,
+            RUSTFS_SECRET_KEY: env.AWS_SECRET_ACCESS_KEY,
+          })
           .withExposedPorts({
             container: 9000,
             host: 9000,
           })
           .withHealthCheck({
-            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/minio/health/ready'],
+            test: ['CMD-SHELL', 'curl --fail http://localhost:9000/health'],
             interval: 1000,
             retries: 30,
             startPeriod: 1000,
           })
           .start()
+
+        const s3 = new S3Client({
+          endpoint: env.AWS_ENDPOINT_URL,
+          region: env.AWS_REGION,
+          credentials: {
+            accessKeyId: env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+          },
+          forcePathStyle: true,
+        })
+        try {
+          await s3.send(new CreateBucketCommand({ Bucket: env.STORAGE_S3_BUCKET }))
+        } finally {
+          s3.destroy()
+        }
+        return container
       })
       .with('gcs', async () => {
         const env = TESTING_ENV_BY_STORAGE_DRIVER.gcs
@@ -203,6 +226,27 @@ export async function setup() {
           .start()
       })
       .with('filesystem', () => undefined)
+      .with('azblob', async () => {
+        const env = TESTING_ENV_BY_STORAGE_DRIVER.azblob
+        const container = await new GenericContainer('mcr.microsoft.com/azure-storage/azurite')
+          .withCommand(['azurite-blob', '--blobHost', '0.0.0.0', '--skipApiVersionCheck'])
+          .withExposedPorts({
+            container: 10_000,
+            host: 10_000,
+          })
+          .withHealthCheck({
+            test: ['CMD-SHELL', 'nc 127.0.0.1 10000 -z'],
+            interval: 1000,
+            retries: 30,
+            startPeriod: 1000,
+          })
+          .start()
+
+        await BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
+          .getContainerClient(env.STORAGE_AZBLOB_CONTAINER)
+          .create()
+        return container
+      })
       .exhaustive(),
   )
 

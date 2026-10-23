@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        storage-driver: [filesystem, s3, gcs]
+        storage-driver: [filesystem, s3, gcs, azblob]
         db-driver: [postgres, mysql, sqlite]
     steps:
       - name: pnpm install
@@ -123,4 +123,4 @@ jobs:
           labels: ${{ steps.meta-caged.outputs.labels }}
           build-args: |
             BUILD_HASH=${{ steps.build_hash.outputs.COMMIT_SHA }}
-            BASE_IMAGE=platformatic/node-caged:25-alpine
+            BASE_IMAGE=platformatic/node-caged:26.12.1-alpine

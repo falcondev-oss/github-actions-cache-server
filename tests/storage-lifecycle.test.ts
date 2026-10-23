@@ -37,7 +37,7 @@ describe('storage lifecycle reconciliation', () => {
     let deleteCalls = 0
     const adapter = {
       async createDownloadStream() {
-        return Readable.from('')
+        return { stream: Readable.from('') }
       },
       async uploadStream() {},
       async objectExists() {
@@ -69,7 +69,7 @@ describe('storage lifecycle reconciliation', () => {
     const db = await getDatabase()
     const adapter = {
       async createDownloadStream() {
-        return Readable.from('')
+        return { stream: Readable.from('') }
       },
       async uploadStream() {},
       async objectExists() {
@@ -113,6 +113,7 @@ describe('storage lifecycle reconciliation', () => {
         createdAt: Date.now(),
         lastPartUploadedAt: null,
         folderName: authorizedFolder,
+        reservationHash: randomUUID(),
         startedPartUploadCount: 0,
         finishedPartUploadCount: 0,
       })
