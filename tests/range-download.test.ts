@@ -14,9 +14,8 @@ const DOWNLOAD_URL = 'http://localhost:3000/download'
 const PART_SIZE = 512 * 1024
 const TOTAL = 2 * PART_SIZE + 12_345
 
-async function createEntry() {
+async function createEntry(key = `range-${crypto.randomUUID()}`) {
   const storage = await getStorage()
-  const key = `range-${crypto.randomUUID()}`
   const part0 = crypto.randomBytes(PART_SIZE)
   const part1 = crypto.randomBytes(PART_SIZE)
   const part2 = crypto.randomBytes(TOTAL - 2 * PART_SIZE)
@@ -40,9 +39,9 @@ async function createEntry() {
     scopes: [SCOPE],
     repoId: REPO_ID,
   })
-  const id = matched?.match.id
+  const id = matched?.match.locationId
   if (!id) throw new Error('cache entry not found after completeUpload')
-  return { id, expected, storage }
+  return { id, key, expected, storage }
 }
 
 async function createMergedEntry() {
@@ -124,4 +123,16 @@ describe('proxy download route on unmerged entries', () => {
     expect(res.headers.get('content-range')).toBeNull()
     expect(body.compare(expected)).toBe(0)
   })
+})
+
+test('a re-save does not change the bytes behind a handed-out URL', async () => {
+  const { id, key } = await createEntry()
+  const resaved = await createEntry(key)
+  expect(resaved.id).not.toBe(id)
+
+  const stale = await get(id, 'bytes=0-10')
+  expect(stale.res.status).toBe(404)
+  const { res, body } = await get(resaved.id, 'bytes=0-10')
+  expect(res.status).toBe(200)
+  expect(body.compare(resaved.expected)).toBe(0)
 })

@@ -72,7 +72,7 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
-/** `size` is omitted when the backend didn't report one, so the route can skip `content-range`. */
+/** Adapters throw it without `size`; `Storage.download` fills it in from the location. */
 export class RangeNotSatisfiableError extends Error {
   constructor(
     objectName: string,
@@ -571,12 +571,13 @@ export class Storage {
     }
   }
 
-  async download(cacheEntryId: string, range?: RangeRequest): Promise<DownloadStream | undefined> {
+  /** Keyed by location, not entry: a re-save repoints the entry, but a location's bytes never change. */
+  async download(locationId: string, range?: RangeRequest): Promise<DownloadStream | undefined> {
     const protectedLocation = await this.db.transaction().execute(async (tx) => {
       let query = tx
         .selectFrom('storage_locations')
         .innerJoin('cache_entries', 'cache_entries.locationId', 'storage_locations.id')
-        .where('cache_entries.id', '=', cacheEntryId)
+        .where('storage_locations.id', '=', locationId)
         .selectAll('storage_locations')
       if (env.DB_DRIVER !== 'sqlite') query = query.forUpdate()
       const storageLocation = await query.executeTakeFirst()
@@ -623,16 +624,18 @@ export class Storage {
         responseStream.destroy(err)
         mergerStream.destroy(err)
         if (err instanceof ObjectNotFoundError)
-          logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
+          logger.warn(`Stale storage location ${locationId}: ${err.message}`)
       })
 
       return { stream: this.protectDownloadStream(responseStream, readerLeaseId) }
     } catch (err) {
       await releaseReaderLease(this.db, readerLeaseId)
       if (err instanceof ObjectNotFoundError) {
-        logger.warn(`Stale cache entry ${cacheEntryId}: ${err.message}`)
+        logger.warn(`Stale storage location ${locationId}: ${err.message}`)
         return
       }
+      if (err instanceof RangeNotSatisfiableError)
+        throw new RangeNotSatisfiableError(locationId, storageLocation.sizeBytes ?? undefined)
       throw err
     }
   }
@@ -786,7 +789,7 @@ export class Storage {
         continue
       }
 
-      const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.id}`
+      const defaultUrl = `${env.API_BASE_URL}/download/${cacheEntry.match.locationId}`
 
       if (!env.ENABLE_DIRECT_DOWNLOADS || !this.adapter.createDownloadUrl || !location.mergedAt)
         return {
@@ -1064,8 +1067,7 @@ class S3Adapter implements StorageAdapter {
       return { stream, size: served.size, range: { start: served.start, end: served.end } }
     } catch (err: any) {
       if (err.name === 'NoSuchKey') throw new ObjectNotFoundError(objectName)
-      if (err.name === 'InvalidRange')
-        throw new RangeNotSatisfiableError(objectName, parseActualObjectSize(err))
+      if (err.name === 'InvalidRange') throw new RangeNotSatisfiableError(objectName)
       throw err
     }
   }
@@ -1230,7 +1232,7 @@ class FileSystemAdapter implements StorageAdapter {
     if (!range) return { stream: createReadStream(filePath), size }
 
     const served = clampRange(range, size)
-    if (!served) throw new RangeNotSatisfiableError(objectName, size)
+    if (!served) throw new RangeNotSatisfiableError(objectName)
     return { stream: createReadStream(filePath, served), size, range: served }
   }
 
@@ -1395,7 +1397,7 @@ class GcsAdapter implements StorageAdapter {
     if (!range) return { stream: file.createReadStream(), size }
 
     const served = clampRange(range, size)
-    if (!served) throw new RangeNotSatisfiableError(objectName, size)
+    if (!served) throw new RangeNotSatisfiableError(objectName)
     return { stream: file.createReadStream(served), size, range: served }
   }
 
@@ -1597,10 +1599,35 @@ class AzBlobAdapter implements StorageAdapter {
     return deleted
   }
 
-  async createDownloadStream(objectName: string) {
-    const response = await this.blob(objectName).download()
+  async createDownloadStream(objectName: string, range?: RangeRequest): Promise<DownloadStream> {
+    let response
+    try {
+      response = await this.blob(objectName).download(
+        range?.start,
+        range?.end === undefined ? undefined : range.end - range.start + 1,
+      )
+    } catch (err: any) {
+      if (err.statusCode === 404) throw new ObjectNotFoundError(objectName)
+      if (err.statusCode === 416) throw new RangeNotSatisfiableError(objectName)
+      throw err
+    }
     if (!response.readableStreamBody) throw new Error(`No stream for blob "${objectName}"`)
-    return Readable.from(response.readableStreamBody)
+    const stream = Readable.from(response.readableStreamBody)
+
+    const served = parseContentRange(response.contentRange)
+    if (served) {
+      // Azurite answers a range past the end with an empty 206 where Azure answers 416.
+      if (served.start >= served.size) {
+        stream.destroy()
+        throw new RangeNotSatisfiableError(objectName)
+      }
+      return { stream, size: served.size, range: { start: served.start, end: served.end } }
+    }
+    // No Content-Range means the whole blob. The SDK drops the range header for `bytes=0-`,
+    // so that one request still got exactly what it asked for.
+    const size = response.contentLength
+    if (range?.start !== 0 || range.end !== undefined || !size) return { stream, size }
+    return { stream, size, range: { start: 0, end: size - 1 } }
   }
 
   async uploadStream(objectName: string, stream: Readable) {
@@ -1673,11 +1700,4 @@ function parseContentRange(header: string | undefined) {
   const m = CONTENT_RANGE_RE.exec(header)
   if (!m) return
   return { start: Number(m[1]), end: Number(m[2]), size: Number(m[3]) }
-}
-
-// AWS and MinIO put the object size here; other S3-compatible servers may not.
-function parseActualObjectSize(err: unknown): number | undefined {
-  const raw = (err as { ActualObjectSize?: unknown }).ActualObjectSize
-  const size = Number(raw)
-  return Number.isSafeInteger(size) && size >= 0 ? size : undefined
 }

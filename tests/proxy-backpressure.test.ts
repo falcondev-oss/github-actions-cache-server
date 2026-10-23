@@ -30,8 +30,8 @@ beforeAll(async () => {
   // …) at evaluation time, so they can only load after the stubs above.
   const { default: upload } = await import('~/routes/devstoreaccount1/upload/[uploadId].put')
   router.put('/upload/:uploadId', upload)
-  const { default: download } = await import('~/routes/download/[cacheEntryId]')
-  router.get('/download/:cacheEntryId', download)
+  const { default: download } = await import('~/routes/download/[locationId]')
+  router.get('/download/:locationId', download)
   server.listen(0)
   await once(server, 'listening')
 })

@@ -240,8 +240,8 @@ describe('cleanup lifecycle', () => {
       .execute()
 
     try {
-      const mergingDownload = await storage.download(entryId)
-      const activePartsDownload = await storage.download(entryId)
+      const mergingDownload = await storage.download(locationId)
+      const activePartsDownload = await storage.download(locationId)
       expect(mergingDownload).toBeDefined()
       expect(activePartsDownload).toBeDefined()
       for await (const _chunk of mergingDownload!.stream) void _chunk
@@ -262,7 +262,7 @@ describe('cleanup lifecycle', () => {
         { timeout: 5000, interval: 100 },
       )
 
-      const mergedDownload = await storage.download(entryId)
+      const mergedDownload = await storage.download(locationId)
       expect(mergedDownload).toBeDefined()
       let restored = ''
       for await (const chunk of mergedDownload!.stream) restored += chunk.toString()
@@ -307,7 +307,7 @@ describe('cleanup lifecycle', () => {
       })
       .execute()
 
-    const download = await storage.download(entryId)
+    const download = await storage.download(locationId)
     expect(download).toBeDefined()
     await db.deleteFrom('cache_entries').where('id', '=', entryId).execute()
     const taskModule = await import('~/tasks/cleanup/storage-locations')
@@ -439,7 +439,7 @@ describe('cleanup lifecycle', () => {
 
     vi.useFakeTimers()
     try {
-      const download = await storage.download(entryId)
+      const download = await storage.download(locationId)
       expect(download).toBeDefined()
       download!.stream.on('error', () => undefined)
       await db

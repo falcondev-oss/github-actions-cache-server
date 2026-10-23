@@ -5,7 +5,7 @@ import { logger } from '~/lib/logger'
 import { getStorage, RangeNotSatisfiableError } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
-  cacheEntryId: z.string(),
+  locationId: z.string(),
 })
 
 // Single ranges only; multi-range and suffix (`bytes=-500`) fall through to a 200.
@@ -31,7 +31,7 @@ export default defineEventHandler(async (event) => {
       statusMessage: `Invalid path parameters: ${parsedPathParams.error.message}`,
     })
 
-  const { cacheEntryId } = parsedPathParams.data
+  const { locationId } = parsedPathParams.data
   const storage = await getStorage()
 
   const range = parseRange(getHeader(event, 'range'))
@@ -41,21 +41,12 @@ export default defineEventHandler(async (event) => {
 
   let download
   try {
-    download = await storage.download(cacheEntryId, range)
+    download = await storage.download(locationId, range)
   } catch (err) {
-    if (err instanceof RangeNotSatisfiableError) {
-      // An empty object has no satisfiable range, but S3 answers `bytes=0-` with an
-      // empty 200 while the other adapters raise. Normalise to the 200 so the
-      // response does not depend on which backend is configured.
-      if (err.size === 0) {
-        setHeader(event, 'content-length', 0)
-        return send(event)
-      }
-      setResponseStatus(event, 416, 'Range Not Satisfiable')
-      if (err.size !== undefined) setHeader(event, 'content-range', `bytes */${err.size}`)
-      return send(event)
-    }
-    throw err
+    if (!(err instanceof RangeNotSatisfiableError)) throw err
+    setResponseStatus(event, 416, 'Range Not Satisfiable')
+    if (err.size !== undefined) setHeader(event, 'content-range', `bytes */${err.size}`)
+    return send(event)
   }
   if (!download)
     throw createError({
@@ -63,7 +54,7 @@ export default defineEventHandler(async (event) => {
       message: 'Cache file not found',
     })
 
-  if (range && download.range && download.size !== undefined) {
+  if (download.range && download.size !== undefined) {
     setResponseStatus(event, 206)
     setHeader(
       event,
@@ -75,21 +66,20 @@ export default defineEventHandler(async (event) => {
     setHeader(event, 'content-length', download.size)
   }
 
-  // Take over the response from h3: `sendStream` applies no backpressure and does not
-  // notice client aborts, whereas `pipeline` destroys the source and releases its lease.
-  // `_handled` is an h3 v1 internal and will need replacing when h3 v2 lands.
+  // `sendStream` neither waits for `drain` nor notices client aborts; `pipeline` does both
+  // and destroys the source, which releases its reader lease. `_handled` is an h3 v1 internal.
   event._handled = true
   try {
     await pipeline(download.stream, event.node.res)
   } catch (err) {
     // Client went away mid-body. Expected on cancelled jobs and parallel runners.
     if ((err as NodeJS.ErrnoException).code === 'ERR_STREAM_PREMATURE_CLOSE') {
-      logger.debug(`Client aborted /download/${cacheEntryId}: ${(err as Error).message}`)
+      logger.debug(`Client aborted /download/${locationId}: ${(err as Error).message}`)
       return
     }
     // Headers are out, so Nitro's error handler would crash with ERR_HTTP_HEADERS_SENT.
     if (event.node.res.headersSent) {
-      logger.error(`Download stream failed for ${cacheEntryId}`, { error: err })
+      logger.error(`Download stream failed for ${locationId}`, { error: err })
       return
     }
     throw err
