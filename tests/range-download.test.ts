@@ -29,9 +29,9 @@ async function createEntry() {
     repoId: REPO_ID,
   })
   if (!upload) throw new Error('createUpload returned nothing')
-  await storage.uploadPart(upload.id, 0, Readable.toWeb(Readable.from(part0)))
-  await storage.uploadPart(upload.id, 1, Readable.toWeb(Readable.from(part1)))
-  await storage.uploadPart(upload.id, 2, Readable.toWeb(Readable.from(part2)))
+  await storage.uploadPart(upload.id, 0, Readable.from(part0))
+  await storage.uploadPart(upload.id, 1, Readable.from(part1))
+  await storage.uploadPart(upload.id, 2, Readable.from(part2))
   await storage.completeUpload({ key, version: VERSION, scope: SCOPE, repoId: REPO_ID })
 
   const matched = await storage.matchCacheEntry({

@@ -28,11 +28,7 @@ async function createEntry() {
   })
   if (!upload) throw new Error('createUpload returned nothing')
   for (let i = 0; i < PART_COUNT; i++) {
-    await storage.uploadPart(
-      upload.id,
-      i,
-      Readable.toWeb(Readable.from(crypto.randomBytes(PART_SIZE))),
-    )
+    await storage.uploadPart(upload.id, i, Readable.from(crypto.randomBytes(PART_SIZE)))
   }
   await storage.completeUpload({ key, version: VERSION, scope: SCOPE, repoId: REPO_ID })
 
