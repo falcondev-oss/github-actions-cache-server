@@ -1,5 +1,5 @@
 /* eslint-disable unicorn/no-top-level-assignment-in-function */
-import crypto from 'node:crypto'
+import crypto, { randomUUID } from 'node:crypto'
 
 import { SignJWT } from 'jose'
 import protobuf from 'protobufjs'
@@ -67,6 +67,22 @@ test('protobuf CreateCacheEntry request is accepted and answered in protobuf', a
   const body = await decode<{ ok: boolean; signed_upload_url: string }>(response, CreateRes)
   expect(body.ok).toBe(true)
   expect(body.signed_upload_url).toContain('/devstoreaccount1/upload/')
+})
+
+test('duplicate CreateCacheEntry is rejected with a JSON already_exists error', async () => {
+  const payload = { metadata: { repository_id: '123' }, key: randomUUID(), version: 'v1' }
+
+  const first = await post('CreateCacheEntry', CreateReq, payload)
+  expect(first.status).toBe(200)
+  await expect(decode(first, CreateRes)).resolves.toMatchObject({ ok: true })
+
+  // Twirp errors are JSON even when the request was protobuf.
+  const duplicate = await post('CreateCacheEntry', CreateReq, payload)
+  expect(duplicate.status).toBe(409)
+  await expect(duplicate.json()).resolves.toEqual({
+    code: 'already_exists',
+    msg: 'cache entry with the same key, version, and scope already exists',
+  })
 })
 
 test('protobuf GetCacheEntryDownloadURL decodes restore_keys and reports a miss', async () => {

@@ -612,7 +612,7 @@ export class Storage {
       .where('repoId', '=', repoId)
       .select('id')
       .executeTakeFirst()
-    if (existingUpload) throw new AlreadyExistsError('upload')
+    if (existingUpload) throw new AlreadyExistsError(key)
 
     const uploadId = generateNumberId()
     await this.db
