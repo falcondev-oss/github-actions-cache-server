@@ -104,6 +104,9 @@ impl Db {
         let options = AnyConnectOptions::from_str(&url)?;
         let pool = AnyPoolOptions::new()
             .max_connections(max_connections)
+            // A local SQLite file can't go stale, and pinging it on every checkout doubles the
+            // queue on its single connection.
+            .test_before_acquire(dialect != Dialect::Sqlite)
             .after_connect(move |connection, _meta| {
                 Box::pin(async move {
                     // Keys match exactly, like GitHub's; SQLite's `like` ignores ASCII case unless
