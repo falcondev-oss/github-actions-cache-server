@@ -1,9 +1,7 @@
-import type { ReadableStream } from 'node:stream/web'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 
 import { z } from 'zod'
-import { logger } from '~/lib/logger'
 
 import { getStorage } from '~/lib/storage'
 
@@ -37,14 +35,10 @@ export default defineEventHandler(async (event) => {
 
   const { uploadId } = parsedPathParams.data
 
-  const stream = getRequestWebStream(event)
-  if (!stream) {
-    logger.debug('Upload: Request body is not a stream')
-    throw createError({ statusCode: 400, statusMessage: 'Request body must be a stream' })
-  }
-
+  // Not h3's `getRequestWebStream`: it enqueues every `data` event and never pauses the
+  // request, so a body arriving faster than storage consumes it is buffered in full.
   const storage = await getStorage()
-  await storage.uploadPart(uploadId, chunkIndex, stream as ReadableStream)
+  await storage.uploadPart(uploadId, chunkIndex, event.node.req)
 
   // prevent random EOF error with in tonistiigi/go-actions-cache caused by missing request id
   setHeader(event, 'x-ms-request-id', randomUUID())
