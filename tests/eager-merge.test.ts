@@ -12,7 +12,7 @@ async function uploadParts(storage: Storage, parts: Buffer[]) {
   const key = randomUUID()
   const upload = await storage.createUpload({ key, ...scope })
   for (const [index, part] of parts.entries())
-    await storage.uploadPart(upload!.id, index, Readable.from(part))
+    await storage.uploadPart(upload.id, index, Readable.from(part))
   await storage.completeUpload({ key, ...scope })
   const db = await getDatabase()
   return db
