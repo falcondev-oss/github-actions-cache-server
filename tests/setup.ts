@@ -11,6 +11,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import { BlobServiceClient } from '@azure/storage-blob'
 import { MySqlContainer } from '@testcontainers/mysql'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
 import { createEnv } from 'arkenv'
@@ -93,6 +94,12 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     STORAGE_GCS_BUCKET: 'vitest',
     STORAGE_GCS_ENDPOINT: 'http://localhost:9000',
     STORAGE_GCS_SERVICE_ACCOUNT_KEY: 'tests/gcs-service-account-key.json',
+  },
+  azblob: {
+    STORAGE_DRIVER: 'azblob',
+    STORAGE_AZBLOB_CONTAINER: 'vitest',
+    STORAGE_AZBLOB_CONNECTION_STRING:
+      'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;',
   },
 } satisfies {
   [K in Env['STORAGE_DRIVER']]: Extract<
@@ -219,6 +226,27 @@ export async function setup() {
           .start()
       })
       .with('filesystem', () => undefined)
+      .with('azblob', async () => {
+        const env = TESTING_ENV_BY_STORAGE_DRIVER.azblob
+        const container = await new GenericContainer('mcr.microsoft.com/azure-storage/azurite')
+          .withCommand(['azurite-blob', '--blobHost', '0.0.0.0', '--skipApiVersionCheck'])
+          .withExposedPorts({
+            container: 10_000,
+            host: 10_000,
+          })
+          .withHealthCheck({
+            test: ['CMD-SHELL', 'nc 127.0.0.1 10000 -z'],
+            interval: 1000,
+            retries: 30,
+            startPeriod: 1000,
+          })
+          .start()
+
+        await BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
+          .getContainerClient(env.STORAGE_AZBLOB_CONTAINER)
+          .create()
+        return container
+      })
       .exhaustive(),
   )
 
