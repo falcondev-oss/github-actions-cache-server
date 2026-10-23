@@ -1,4 +1,3 @@
-import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 
@@ -95,11 +94,7 @@ describe('cleanup lifecycle', () => {
       scope: 'refs/heads/main',
       repoId: '123',
     })
-    await storage.uploadPart(
-      upload!.id,
-      0,
-      Readable.toWeb(Readable.from('payload')) as NodeReadableStream,
-    )
+    await storage.uploadPart(upload!.id, 0, Readable.from('payload'))
     const deleteFolder = vi
       .spyOn(storage.adapter, 'deleteFolder')
       .mockRejectedValue(new Error('no'))
