@@ -1,4 +1,3 @@
-import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 
@@ -13,11 +12,7 @@ async function uploadParts(storage: Storage, parts: Buffer[]) {
   const key = randomUUID()
   const upload = await storage.createUpload({ key, ...scope })
   for (const [index, part] of parts.entries())
-    await storage.uploadPart(
-      upload!.id,
-      index,
-      Readable.toWeb(Readable.from(part)) as NodeReadableStream,
-    )
+    await storage.uploadPart(upload!.id, index, Readable.from(part))
   await storage.completeUpload({ key, ...scope })
   const db = await getDatabase()
   return db
