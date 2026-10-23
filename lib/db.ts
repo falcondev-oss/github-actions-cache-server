@@ -172,9 +172,10 @@ export const getDatabase = createSingletonPromise(async () => {
       },
       async (env) => {
         await mkdir(path.dirname(env.DB_SQLITE_PATH), { recursive: true })
-        return new SqliteDialect({
-          database: new SQLite(env.DB_SQLITE_PATH),
-        })
+        const database = new SQLite(env.DB_SQLITE_PATH)
+        // keys match exactly on every driver, SQLite's `like` ignores ASCII case by default
+        database.pragma('case_sensitive_like = on')
+        return new SqliteDialect({ database })
       },
     )
     .exhaustive()

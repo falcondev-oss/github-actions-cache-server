@@ -2,6 +2,7 @@ import type { Hookable } from 'hookable'
 import type { Kysely } from 'kysely'
 import type { Migration } from 'kysely/migration'
 import type { Env } from './schemas'
+import { sql } from 'kysely'
 import { reservationHash } from './helpers'
 import { Storage } from './storage'
 
@@ -259,6 +260,29 @@ export function migrations(
       async down(db) {
         await dropIndex(db, 'idx_uploads_reservationHash', 'uploads')
         await db.schema.alterTable('uploads').dropColumn('reservationHash').execute()
+      },
+    },
+    $8_exact_key_scope_collation: {
+      // MySQL's default collation ignores case, accents and trailing spaces, GitHub compares exactly
+      async up(db) {
+        if (driver !== 'mysql') return
+        for (const table of ['cache_entries', 'uploads'])
+          await db.schema
+            .alterTable(table)
+            .modifyColumn('key', sql`varchar(512) collate utf8mb4_0900_bin`, (col) => col.notNull())
+            .modifyColumn('scope', sql`varchar(255) collate utf8mb4_0900_bin`, (col) =>
+              col.notNull(),
+            )
+            .execute()
+      },
+      async down(db) {
+        if (driver !== 'mysql') return
+        for (const table of ['cache_entries', 'uploads'])
+          await db.schema
+            .alterTable(table)
+            .modifyColumn('key', 'varchar(512)', (col) => col.notNull())
+            .modifyColumn('scope', 'varchar(255)', (col) => col.notNull())
+            .execute()
       },
     },
   } satisfies Record<string, Migration>
