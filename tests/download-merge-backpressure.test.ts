@@ -30,7 +30,7 @@ describe('download merge backpressure', () => {
         function* chunked() {
           for (let o = 0; o < buf.length; o += 64 * 1024) yield buf.subarray(o, o + 64 * 1024)
         }
-        return Promise.resolve(Readable.from(chunked()))
+        return Promise.resolve({ stream: Readable.from(chunked()) })
       },
     } as unknown as StorageAdapter
 

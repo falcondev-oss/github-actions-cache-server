@@ -30,8 +30,8 @@ beforeAll(async () => {
   // …) at evaluation time, so they can only load after the stubs above.
   const { default: upload } = await import('~/routes/devstoreaccount1/upload/[uploadId].put')
   router.put('/upload/:uploadId', upload)
-  const { default: download } = await import('~/routes/download/[cacheEntryId]')
-  router.get('/download/:cacheEntryId', download)
+  const { default: download } = await import('~/routes/download/[locationId]')
+  router.get('/download/:locationId', download)
   server.listen(0)
   await once(server, 'listening')
 })
@@ -123,7 +123,7 @@ describe('proxy routes apply backpressure', () => {
     }
     const source = Readable.from(entry(), { objectMode: false, highWaterMark: CHUNK_BYTES })
     const storage = await getStorage()
-    vi.spyOn(storage, 'download').mockResolvedValue(source)
+    vi.spyOn(storage, 'download').mockResolvedValue({ stream: source })
 
     const { port } = server.address() as AddressInfo
     const serverSide = once(server, 'request') as Promise<[IncomingMessage, ServerResponse]>
