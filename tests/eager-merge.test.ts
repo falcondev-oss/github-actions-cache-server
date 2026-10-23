@@ -14,7 +14,7 @@ async function uploadParts(storage: Storage, parts: Buffer[]) {
   const upload = await storage.createUpload({ key, ...scope })
   for (const [index, part] of parts.entries())
     await storage.uploadPart(
-      upload!.id,
+      upload.id,
       index,
       Readable.toWeb(Readable.from(part)) as NodeReadableStream,
     )

@@ -96,7 +96,7 @@ describe('cleanup lifecycle', () => {
       repoId: '123',
     })
     await storage.uploadPart(
-      upload!.id,
+      upload.id,
       0,
       Readable.toWeb(Readable.from('payload')) as NodeReadableStream,
     )
@@ -122,7 +122,7 @@ describe('cleanup lifecycle', () => {
         await db.deleteFrom('storage_locations').where('id', '=', location.id).execute()
         await storage.adapter.deleteFolder(location.folderName)
       }
-      await storage.adapter.deleteFolder(upload!.id.toString())
+      await storage.adapter.deleteFolder(upload.id.toString())
     }
   })
 
@@ -476,11 +476,11 @@ describe('cleanup lifecycle', () => {
       repoId: '123',
     })
     expect(upload).toBeDefined()
-    await storage.adapter.uploadStream(`${upload!.id}/untracked`, Readable.from('partial'))
+    await storage.adapter.uploadStream(`${upload.id}/untracked`, Readable.from('partial'))
 
     await expect(
       storage.completeUpload({ key, version: 'v1', scope: 'refs/heads/main', repoId: '123' }),
     ).rejects.toThrow('No parts have been uploaded')
-    expect(await storage.adapter.countFilesInFolder(upload!.id.toString())).toBe(0)
+    expect(await storage.adapter.countFilesInFolder(upload.id.toString())).toBe(0)
   })
 })
