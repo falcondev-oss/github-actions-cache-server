@@ -407,7 +407,6 @@ export class Storage {
 
   async completeUpload(reservation: Reservation) {
     const { key, version, scope, repoId } = reservation
-    // the hash matches exactly, a `key` comparison would be case-insensitive on MySQL
     const upload = await this.db
       .selectFrom('uploads')
       .where('reservationHash', '=', reservationHash(reservation))
