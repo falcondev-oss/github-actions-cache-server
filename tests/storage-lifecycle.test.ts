@@ -113,6 +113,7 @@ describe('storage lifecycle reconciliation', () => {
         createdAt: Date.now(),
         lastPartUploadedAt: null,
         folderName: authorizedFolder,
+        reservationHash: randomUUID(),
         startedPartUploadCount: 0,
         finishedPartUploadCount: 0,
       })

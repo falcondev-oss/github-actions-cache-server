@@ -2,6 +2,7 @@
 import type { ContainerClient } from '@azure/storage-blob'
 import type { Kysely } from 'kysely'
 import type { Database, StorageLocation } from './db'
+import type { Reservation } from './helpers'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
@@ -38,9 +39,9 @@ import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
 import { chunk } from 'remeda'
 import { match } from 'ts-pattern'
-import { getDatabase, retryOnLockConflict } from './db'
+import { getDatabase, isUniqueViolation, retryOnLockConflict } from './db'
 import { env } from './env'
-import { generateNumberId } from './helpers'
+import { generateNumberId, reservationHash } from './helpers'
 import { logger } from './logger'
 import {
   acquireMergeLease,
@@ -404,23 +405,12 @@ export class Storage {
       .execute()
   }
 
-  async completeUpload({
-    key,
-    version,
-    scope,
-    repoId,
-  }: {
-    key: string
-    version: string
-    scope: string
-    repoId: string
-  }) {
+  async completeUpload(reservation: Reservation) {
+    const { key, version, scope, repoId } = reservation
+    // the hash matches exactly, a `key` comparison would be case-insensitive on MySQL
     const upload = await this.db
       .selectFrom('uploads')
-      .where('key', '=', key)
-      .where('version', '=', version)
-      .where('scope', '=', scope)
-      .where('repoId', '=', repoId)
+      .where('reservationHash', '=', reservationHash(reservation))
       .selectAll()
       .executeTakeFirst()
     if (!upload) return
@@ -640,43 +630,26 @@ export class Storage {
     }
   }
 
-  async createUpload({
-    key,
-    version,
-    scope,
-    repoId,
-  }: {
-    key: string
-    version: string
-    scope: string
-    repoId: string
-  }) {
-    const existingUpload = await this.db
-      .selectFrom('uploads')
-      .where('key', '=', key)
-      .where('version', '=', version)
-      .where('scope', '=', scope)
-      .where('repoId', '=', repoId)
-      .select('id')
-      .executeTakeFirst()
-    if (existingUpload) throw new AlreadyExistsError(key)
-
+  async createUpload(reservation: Reservation) {
     const uploadId = generateNumberId()
-    await this.db
-      .insertInto('uploads')
-      .values({
-        id: uploadId,
-        folderName: uploadId.toString(),
-        createdAt: Date.now(),
-        key,
-        version,
-        scope,
-        repoId,
-        lastPartUploadedAt: null,
-        finishedPartUploadCount: 0,
-        startedPartUploadCount: 0,
-      })
-      .execute()
+    try {
+      await this.db
+        .insertInto('uploads')
+        .values({
+          ...reservation,
+          id: uploadId,
+          folderName: uploadId.toString(),
+          createdAt: Date.now(),
+          reservationHash: reservationHash(reservation),
+          lastPartUploadedAt: null,
+          finishedPartUploadCount: 0,
+          startedPartUploadCount: 0,
+        })
+        .execute()
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new AlreadyExistsError(reservation.key)
+      throw err
+    }
 
     return { id: uploadId }
   }

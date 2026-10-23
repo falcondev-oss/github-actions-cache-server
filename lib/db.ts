@@ -68,6 +68,7 @@ export const uploadSchema = z.object({
   startedPartUploadCount: z.number(),
   finishedPartUploadCount: z.number(),
   folderName: z.string(),
+  reservationHash: z.string().nullable(),
 })
 type Upload = z.infer<typeof uploadSchema>
 
@@ -90,9 +91,16 @@ const RETRYABLE_LOCK_ERRORS = new Set([
   '40P01',
 ])
 
-function isRetryableLockError(err: unknown) {
+// sqlite, postgres `unique_violation` and mysql
+const UNIQUE_VIOLATION_ERRORS = new Set(['SQLITE_CONSTRAINT_UNIQUE', '23505', 'ER_DUP_ENTRY'])
+
+function hasErrorCode(err: unknown, codes: Set<string>) {
   const code = (err as { code?: unknown } | null)?.code
-  return typeof code === 'string' && RETRYABLE_LOCK_ERRORS.has(code)
+  return typeof code === 'string' && codes.has(code)
+}
+
+export function isUniqueViolation(err: unknown) {
+  return hasErrorCode(err, UNIQUE_VIOLATION_ERRORS)
 }
 
 /**
@@ -106,7 +114,7 @@ export async function retryOnLockConflict<T>(run: () => Promise<T>, attempts = 3
     try {
       return await run()
     } catch (err) {
-      if (attempt >= attempts || !isRetryableLockError(err)) throw err
+      if (attempt >= attempts || !hasErrorCode(err, RETRYABLE_LOCK_ERRORS)) throw err
       dbLogger.warn(`Retrying transaction after lock conflict (attempt ${attempt})`, { error: err })
     }
   }
