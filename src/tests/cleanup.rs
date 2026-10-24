@@ -124,7 +124,7 @@ async fn finalization_succeeds_when_eviction_fails() {
     };
     server
         .storage()
-        .upload_part(id, 0, super::harness::byte_stream(&b"payload"[..]))
+        .upload_part(id, 0, super::harness::byte_stream(&b"payload"[..]), None)
         .await
         .unwrap();
 

@@ -511,6 +511,7 @@ impl Storage {
         upload_id: i64,
         part_index: u32,
         stream: ByteStream,
+        length: Option<u64>,
     ) -> Result<bool> {
         let upload: Option<UploadFolder> = self
             .db
@@ -541,7 +542,7 @@ impl Storage {
             .upload_stream(
                 &part_object(&upload.folder_name, part_index),
                 stream,
-                UploadKind::Part,
+                UploadKind::Part { length },
             )
             .await?;
         let recorded = self

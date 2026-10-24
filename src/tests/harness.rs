@@ -245,7 +245,7 @@ pub(crate) async fn read_all(stream: ByteStream) -> io::Result<Vec<u8>> {
 
 pub(crate) async fn put(adapter: &Adapter, name: &str, data: &'static [u8]) {
     adapter
-        .upload_stream(name, byte_stream(data), UploadKind::Part)
+        .upload_stream(name, byte_stream(data), UploadKind::Part { length: None })
         .await
         .unwrap();
 }
@@ -348,7 +348,12 @@ pub(crate) async fn save_parts(storage: &Storage, key: &str, parts: &[Vec<u8>]) 
     for (index, part) in parts.iter().enumerate() {
         let index = u32::try_from(index).unwrap();
         storage
-            .upload_part(id, index, byte_stream(part.clone()))
+            .upload_part(
+                id,
+                index,
+                byte_stream(part.clone()),
+                u64::try_from(part.len()).ok(),
+            )
             .await
             .unwrap();
     }

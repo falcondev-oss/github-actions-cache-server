@@ -71,6 +71,7 @@ pub(super) async fn upload(
     State(state): State<AppState>,
     upload_id: Result<Path<i64>, PathRejection>,
     Query(query): Query<BlockQuery>,
+    headers: HeaderMap,
     body: Body,
 ) -> Result<Response, HttpError> {
     let Path(upload_id) = upload_id.map_err(|_rejection| {
@@ -86,8 +87,15 @@ pub(super) async fn upload(
         None => 0,
     };
     // Streamed straight into storage, so the client is paced by how fast storage accepts it.
+    let length = headers
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok()?.parse().ok());
     let stream = body.into_data_stream().map_err(io::Error::other).boxed();
-    if !state.storage.upload_part(upload_id, index, stream).await? {
+    if !state
+        .storage
+        .upload_part(upload_id, index, stream, length)
+        .await?
+    {
         return Err(HttpError::new(
             StatusCode::NOT_FOUND,
             format!("Upload not found: {upload_id}"),

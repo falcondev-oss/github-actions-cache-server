@@ -16,8 +16,9 @@ pub(crate) type ByteStream = BoxStream<'static, io::Result<Bytes>>;
 /// What an upload writes, which decides how hard it may push object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UploadKind {
-    /// A Part streamed by a client; clients already upload many Parts at once.
-    Part,
+    /// A Part streamed by a client, with the length it announced; clients already upload many
+    /// Parts at once.
+    Part { length: Option<u64> },
     /// A Merge: one stream for the whole entry, which a first download waits on.
     Merged,
 }

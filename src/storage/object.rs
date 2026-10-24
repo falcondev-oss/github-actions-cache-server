@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::Method;
+use axum::http::header::CONTENT_LENGTH;
 use futures_util::{StreamExt as _, TryStreamExt as _};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder};
@@ -30,12 +31,18 @@ const UPLOAD_PART_BYTES: usize = 5 * 1024 * 1024;
 /// Multipart parts a Merge uploads at once.
 const MERGE_UPLOAD_CONCURRENCY: usize = 4;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Lifetime of a presigned URL a Part is streamed to; covers a slow client.
+const PRESIGNED_UPLOAD_LIFETIME: Duration = Duration::from_hours(1);
 
 #[derive(Debug)]
 pub(crate) struct ObjectAdapter {
     store: Arc<dyn ObjectStore>,
     signer: Arc<dyn Signer>,
     prefix: Path,
+    /// Streams Parts of a known length to presigned URLs.
+    http: reqwest::Client,
+    /// Headers a presigned single-request upload needs on this backend.
+    put_headers: &'static [(&'static str, &'static str)],
 }
 
 fn client_options(read_timeout: Duration) -> ClientOptions {
@@ -96,6 +103,7 @@ impl ObjectAdapter {
 
     /// Builds the adapter below a custom prefix, which isolates tests sharing a bucket.
     pub(crate) async fn with_prefix(config: &StorageConfig, prefix: Path) -> Result<Self> {
+        let mut put_headers: &'static [(&'static str, &'static str)] = &[];
         let (store, signer): (Arc<dyn ObjectStore>, Arc<dyn Signer>) = match config {
             StorageConfig::S3 {
                 bucket,
@@ -168,6 +176,7 @@ impl ObjectAdapter {
                     }
                 };
                 let store = Arc::new(builder.with_container_name(container).build()?);
+                put_headers = &[("x-ms-blob-type", "BlockBlob")];
                 (Arc::<MicrosoftAzure>::clone(&store), store)
             }
             StorageConfig::Filesystem { .. } => {
@@ -185,6 +194,8 @@ impl ObjectAdapter {
             store,
             signer,
             prefix,
+            http: reqwest::Client::new(),
+            put_headers,
         })
     }
 
@@ -243,10 +254,25 @@ impl ObjectAdapter {
         mut stream: ByteStream,
         kind: UploadKind,
     ) -> Result<()> {
+        // A Part of known length streams through in one request, unbuffered; a single PUT is
+        // atomic like a multipart upload.
+        if let UploadKind::Part {
+            length: Some(length),
+        } = kind
+        {
+            match self
+                .signer
+                .signed_url(Method::PUT, &self.path(name), PRESIGNED_UPLOAD_LIFETIME)
+                .await
+            {
+                Ok(url) => return self.put_presigned(url, stream, length).await,
+                Err(error) => tracing::debug!(%error, "can't presign an upload; buffering it"),
+            }
+        }
         // Every in-flight multipart part is buffered, so only a Merge, the one stream per entry,
         // uploads several at once; Parts arrive in parallel already.
         let concurrency = match kind {
-            UploadKind::Part => 1,
+            UploadKind::Part { .. } => 1,
             UploadKind::Merged => MERGE_UPLOAD_CONCURRENCY,
         };
         let mut writer =
@@ -268,6 +294,26 @@ impl ObjectAdapter {
             return Err(failure);
         }
         writer.shutdown().await?;
+        Ok(())
+    }
+
+    async fn put_presigned(&self, url: url::Url, stream: ByteStream, length: u64) -> Result<()> {
+        let mut request = self
+            .http
+            .put(url)
+            .header(CONTENT_LENGTH, length)
+            .body(reqwest::Body::wrap_stream(stream));
+        for (name, value) in self.put_headers {
+            request = request.header(*name, *value);
+        }
+        let response = request.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(Failure::msg(format!(
+                "storage rejected an upload: {status} {body}"
+            )));
+        }
         Ok(())
     }
 

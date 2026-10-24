@@ -61,7 +61,7 @@ async fn completing_an_upload_leaves_a_reservation_differing_in_case_alone() {
 
     assert!(
         storage
-            .upload_part(upper, 0, byte_stream("x"))
+            .upload_part(upper, 0, byte_stream("x"), None)
             .await
             .unwrap(),
         "the upper-case reservation is untouched"
@@ -180,7 +180,7 @@ async fn a_part_whose_upload_is_deleted_mid_stream_is_not_recorded() {
         Ok(axum::body::Bytes::from_static(b"payload"))
     });
     let recorded = storage
-        .upload_part(id, 0, futures_util::StreamExt::boxed(body))
+        .upload_part(id, 0, futures_util::StreamExt::boxed(body), None)
         .await
         .unwrap();
     assert!(!recorded, "the part belongs to no upload any more");
