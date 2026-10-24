@@ -1,5 +1,6 @@
 /* eslint-disable ts/method-signature-style */
-import type { ContainerClient } from '@azure/storage-blob'
+import type { BlobServiceClient, ContainerClient } from '@azure/storage-blob'
+import type { Storage as GcsClient } from '@google-cloud/storage'
 import type { Kysely } from 'kysely'
 import type { Writable } from 'node:stream'
 import type { Database, StorageLocation } from './db'
@@ -27,14 +28,6 @@ import {
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { DefaultAzureCredential } from '@azure/identity'
-import {
-  BlobSASPermissions,
-  BlobServiceClient,
-  generateBlobSASQueryParameters,
-  StorageSharedKeyCredential,
-} from '@azure/storage-blob'
-import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
 import { chunk } from 'remeda'
@@ -1332,6 +1325,8 @@ class GcsAdapter implements StorageAdapter {
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'gcs' }>) {
     const bucketName = env.STORAGE_GCS_BUCKET
 
+    // Loaded only when selected: the SDKs of unused drivers stay out of the heap.
+    const { Storage: GcsClient } = await import('@google-cloud/storage')
     const gcs = new GcsClient({
       keyFilename: env.STORAGE_GCS_SERVICE_ACCOUNT_KEY,
       apiEndpoint: env.STORAGE_GCS_ENDPOINT,
@@ -1484,20 +1479,27 @@ class GcsAdapter implements StorageAdapter {
 
 class AzBlobAdapter implements StorageAdapter {
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'azblob' }>) {
-    const service = env.STORAGE_AZBLOB_CONNECTION_STRING
-      ? BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
-      : new BlobServiceClient(
-          env.STORAGE_AZBLOB_ENDPOINT ??
-            `https://${env.STORAGE_AZBLOB_ACCOUNT}.blob.core.windows.net`,
-          new DefaultAzureCredential(),
-        )
+    // Loaded only when selected: the SDKs of unused drivers stay out of the heap.
+    const sdk = await import('@azure/storage-blob')
+    let service
+    if (env.STORAGE_AZBLOB_CONNECTION_STRING) {
+      service = sdk.BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
+    } else {
+      const { DefaultAzureCredential } = await import('@azure/identity')
+      service = new sdk.BlobServiceClient(
+        env.STORAGE_AZBLOB_ENDPOINT ??
+          `https://${env.STORAGE_AZBLOB_ACCOUNT}.blob.core.windows.net`,
+        new DefaultAzureCredential(),
+      )
+    }
     const container = service.getContainerClient(env.STORAGE_AZBLOB_CONTAINER)
     if (!(await container.exists()))
       throw new Error(`Container ${env.STORAGE_AZBLOB_CONTAINER} does not exist`)
 
-    return new AzBlobAdapter({ service, container })
+    return new AzBlobAdapter({ sdk, service, container })
   }
 
+  private sdk
   private service
   private container
   private keyPrefix = 'gh-actions-cache'
@@ -1524,7 +1526,16 @@ class AzBlobAdapter implements StorageAdapter {
     },
   }
 
-  constructor({ service, container }: { service: BlobServiceClient; container: ContainerClient }) {
+  constructor({
+    sdk,
+    service,
+    container,
+  }: {
+    sdk: typeof import('@azure/storage-blob')
+    service: BlobServiceClient
+    container: ContainerClient
+  }) {
+    this.sdk = sdk
     this.service = service
     this.container = container
   }
@@ -1538,17 +1549,17 @@ class AzBlobAdapter implements StorageAdapter {
     // Backdated so clock skew doesn't make the SAS "not yet valid".
     const startsOn = new Date(Date.now() - 5 * 60 * 1000)
     const expiresOn = new Date(expiresAt)
-    const permissions = BlobSASPermissions.parse('r')
+    const permissions = this.sdk.BlobSASPermissions.parse('r')
     // A shared key signs directly; Entra ID credentials need a user delegation key.
     const delegationKey =
-      this.service.credential instanceof StorageSharedKeyCredential
+      this.service.credential instanceof this.sdk.StorageSharedKeyCredential
         ? undefined
         : await this.service.getUserDelegationKey(startsOn, expiresOn)
 
     return (objectName: string) => {
       const blob = this.blob(objectName)
       if (!delegationKey) return blob.generateSasUrl({ permissions, startsOn, expiresOn })
-      const sas = generateBlobSASQueryParameters(
+      const sas = this.sdk.generateBlobSASQueryParameters(
         {
           containerName: blob.containerName,
           blobName: blob.name,
