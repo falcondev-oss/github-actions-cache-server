@@ -15,7 +15,10 @@ use std::time::Duration;
 use axum::body::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
-use sea_query::{Alias, Cond, Expr, Func, JoinType, LikeExpr, LockType, Order, Query};
+use sea_query::{
+    Alias, CaseStatement, Cond, Expr, Func, JoinType, LikeExpr, LockType, Order, Query,
+    SelectStatement,
+};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -971,59 +974,104 @@ impl Storage {
         })
     }
 
+    /// Matches like GitHub: scopes in order; within a scope the primary key, then each restore
+    /// key; for each key an exact match before the newest entry it prefixes.
     pub(crate) async fn match_cache_entry(
         &self,
         query: &CacheQuery,
     ) -> Result<Option<CacheEntryMatch>> {
-        for scope in &query.scopes {
-            let candidates = std::iter::once((query.primary_key.as_str(), true))
-                .chain(query.restore_keys.iter().map(|key| (key.as_str(), false)));
-            for (key, primary) in candidates {
-                let (exact_type, prefixed_type) = if primary {
-                    (MatchType::ExactPrimary, MatchType::PrefixedPrimary)
-                } else {
-                    (MatchType::ExactRestore, MatchType::PrefixedRestore)
-                };
-                let exact = self
-                    .find_entry(scope, query, Expr::col(CacheEntries::Key).eq(key))
-                    .await?;
-                if let Some(entry) = exact {
-                    return Ok(Some(CacheEntryMatch {
-                        entry,
-                        match_type: exact_type,
-                    }));
-                }
-                let pattern = LikeExpr::new(format!("{}%", escape_like(key))).escape('\\');
-                let prefixed = self
-                    .find_entry(scope, query, Expr::col(CacheEntries::Key).like(pattern))
-                    .await?;
-                if let Some(entry) = prefixed {
-                    return Ok(Some(CacheEntryMatch {
-                        entry,
-                        match_type: prefixed_type,
-                    }));
-                }
+        let keys: Vec<&str> = std::iter::once(query.primary_key.as_str())
+            .chain(query.restore_keys.iter().map(String::as_str))
+            .collect();
+        // Every (scope, key, exact) candidate, in the order matching tries them.
+        let candidates = || {
+            query.scopes.iter().flat_map(|scope| {
+                keys.iter().enumerate().flat_map(move |(index, &key)| {
+                    [(scope, index, key, true), (scope, index, key, false)]
+                })
+            })
+        };
+        let prefix = |key: &str| {
+            Expr::col(CacheEntries::Key)
+                .like(LikeExpr::new(format!("{}%", escape_like(key))).escape('\\'))
+        };
+        let of_query = |select: &mut SelectStatement| {
+            select
+                .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
+                .and_where(Expr::col(CacheEntries::RepoId).eq(query.repo_id.as_str()))
+                .and_where(
+                    Expr::col(CacheEntries::Scope).is_in(query.scopes.iter().map(String::as_str)),
+                )
+                .to_owned()
+        };
+
+        // The common hit, the primary key in the first scope, straight from the key index.
+        if let Some(scope) = query.scopes.first() {
+            let exact = select_entries()
+                .and_where(Expr::col(CacheEntries::Key).eq(query.primary_key.as_str()))
+                .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
+                .and_where(Expr::col(CacheEntries::Scope).eq(scope.as_str()))
+                .and_where(Expr::col(CacheEntries::RepoId).eq(query.repo_id.as_str()))
+                .order_by(CacheEntries::UpdatedAt, Order::Desc)
+                .limit(1)
+                .to_owned();
+            if let Some(entry) = self.db.optional(&self.db.reads, &exact).await? {
+                return Ok(Some(CacheEntryMatch {
+                    entry,
+                    match_type: MatchType::ExactPrimary,
+                }));
             }
         }
-        Ok(None)
-    }
 
-    /// The newest entry in `scope` matching `key` and the query's version and repository.
-    async fn find_entry(
-        &self,
-        scope: &str,
-        query: &CacheQuery,
-        key: sea_query::SimpleExpr,
-    ) -> Result<Option<CacheEntry>> {
-        let select = select_entries()
-            .and_where(key)
-            .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
-            .and_where(Expr::col(CacheEntries::Scope).eq(scope))
-            .and_where(Expr::col(CacheEntries::RepoId).eq(query.repo_id.as_str()))
-            .order_by(CacheEntries::UpdatedAt, Order::Desc)
-            .limit(1)
-            .to_owned();
-        self.db.optional(&self.db.reads, &select).await
+        // Everything else in one query: each row ranks by the first candidate it satisfies.
+        let mut rank: Option<CaseStatement> = None;
+        for (position, (scope, _, key, exact)) in candidates().enumerate() {
+            let condition = Cond::all()
+                .add(Expr::col(CacheEntries::Scope).eq(scope.as_str()))
+                .add(if exact {
+                    Expr::col(CacheEntries::Key).eq(key)
+                } else {
+                    prefix(key)
+                });
+            let position = i64::try_from(position).unwrap_or(i64::MAX);
+            rank = Some(match rank {
+                None => Expr::case(condition, position),
+                Some(rank) => rank.case(condition, position),
+            });
+        }
+        let Some(rank) = rank else {
+            return Ok(None);
+        };
+        let ranked = of_query(
+            select_entries()
+                .expr_as(rank.finally(i64::MAX), Alias::new("matchRank"))
+                .cond_where(
+                    keys.iter()
+                        .fold(Cond::any(), |any, key| any.add(prefix(key))),
+                )
+                .order_by(Alias::new("matchRank"), Order::Asc)
+                .order_by(CacheEntries::UpdatedAt, Order::Desc)
+                .limit(1),
+        );
+        let best: Option<RankedEntry> = self.db.optional(&self.db.reads, &ranked).await?;
+        let Some((best, (_, index, _, exact))) = best.and_then(|best| {
+            let candidate = usize::try_from(best.match_rank)
+                .ok()
+                .and_then(|position| candidates().nth(position))?;
+            Some((best, candidate))
+        }) else {
+            return Ok(None);
+        };
+        let match_type = match (index == 0, exact) {
+            (true, true) => MatchType::ExactPrimary,
+            (true, false) => MatchType::PrefixedPrimary,
+            (false, true) => MatchType::ExactRestore,
+            (false, false) => MatchType::PrefixedRestore,
+        };
+        Ok(Some(CacheEntryMatch {
+            entry: best.entry,
+            match_type,
+        }))
     }
 
     /// Matches a cache entry and hands out a URL to download it from.
@@ -1174,6 +1222,15 @@ impl Storage {
 fn random_upload_id() -> i64 {
     let (random, _) = uuid::Uuid::new_v4().as_u64_pair();
     random.cast_signed().rem_euclid(10_000_000_000)
+}
+
+/// A cache entry with the position of the first match candidate it satisfies.
+#[derive(Debug, sqlx::FromRow)]
+#[sqlx(rename_all = "camelCase")]
+struct RankedEntry {
+    #[sqlx(flatten)]
+    entry: CacheEntry,
+    match_rank: i64,
 }
 
 /// A location Capacity-based Eviction may delete.

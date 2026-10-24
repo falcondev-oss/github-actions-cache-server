@@ -3,9 +3,12 @@
 use futures_util::future::join_all;
 use sea_query::{Expr, Query};
 
-use super::harness::{TestServer, byte_stream, identity, query, save_parts};
+use super::harness::{
+    SCOPE, TestServer, byte_stream, entry, identity, insert_entry, insert_location, query,
+    save_parts, unmerged_location,
+};
 use crate::db::{CacheEntry, Uploads};
-use crate::storage::{CreatedUpload, Storage};
+use crate::storage::{CreatedUpload, MatchType, Storage};
 
 async fn save(storage: &Storage, key: &str) {
     save_parts(storage, key, &[key.as_bytes().to_vec()]).await;
@@ -181,4 +184,66 @@ async fn a_part_whose_upload_is_deleted_mid_stream_is_not_recorded() {
         .await
         .unwrap();
     assert!(!recorded, "the part belongs to no upload any more");
+}
+
+#[tokio::test]
+async fn matches_scopes_then_keys_then_exact_before_prefix() {
+    let server = TestServer::start().await;
+    let (db, storage) = (server.db(), server.storage());
+    let location = unmerged_location("folder");
+    insert_location(db, &location).await;
+    let feature = "refs/heads/feature";
+    for (key, scope, updated_at) in [
+        ("primary-old", SCOPE, 1),
+        ("primary-new", SCOPE, 2),
+        ("restore", SCOPE, 3),
+        ("restore-newer", SCOPE, 4),
+        ("primary", feature, 5),
+    ] {
+        insert_entry(
+            db,
+            &CacheEntry {
+                scope: scope.to_owned(),
+                ..entry(key, &location.id, updated_at)
+            },
+        )
+        .await;
+    }
+    let lookup = |keys: &[&str], scopes: &[&str]| {
+        let mut query = query(keys);
+        query.scopes = scopes.iter().map(|&scope| scope.to_owned()).collect();
+        async move {
+            storage
+                .match_cache_entry(&query)
+                .await
+                .unwrap()
+                .map(|found| (found.entry.key, found.match_type))
+        }
+    };
+
+    assert_eq!(
+        lookup(&["primary", "restore"], &[feature, SCOPE]).await,
+        Some(("primary".to_owned(), MatchType::ExactPrimary)),
+        "the first scope wins"
+    );
+    assert_eq!(
+        lookup(&["primary", "restore"], &[SCOPE, feature]).await,
+        Some(("primary-new".to_owned(), MatchType::PrefixedPrimary)),
+        "the newest prefix of the primary key beats an exact restore key"
+    );
+    assert_eq!(
+        lookup(&["missing", "restore"], &[SCOPE]).await,
+        Some(("restore".to_owned(), MatchType::ExactRestore)),
+        "an exact restore key beats a newer entry it prefixes"
+    );
+    assert_eq!(
+        lookup(&["missing", "absent", "restore-"], &[SCOPE]).await,
+        Some(("restore-newer".to_owned(), MatchType::PrefixedRestore)),
+        "a later restore key matches by prefix"
+    );
+    assert_eq!(
+        lookup(&["missing", "absent"], &[SCOPE, feature]).await,
+        None,
+        "no candidate matches"
+    );
 }
