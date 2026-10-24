@@ -93,3 +93,23 @@ async fn forwards_unhandled_requests_to_the_results_origin() {
         assert_eq!(request.headers[name], value, "{name} is forwarded");
     }
 }
+
+#[tokio::test]
+async fn follows_redirects_of_the_results_origin() {
+    let origin = axum::Router::new()
+        .route(
+            "/moved",
+            axum::routing::get(|| async { axum::response::Redirect::temporary("/target") }),
+        )
+        .route("/target", axum::routing::get(|| async { "arrived" }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_url = format!("http://{}", listener.local_addr().unwrap());
+    drop(tokio::spawn(
+        async move { axum::serve(listener, origin).await },
+    ));
+
+    let server = TestServer::with(&[("DEFAULT_ACTIONS_RESULTS_URL", &origin_url)]).await;
+    let response = reqwest::get(format!("{}/moved", server.url)).await.unwrap();
+    assert_eq!(response.status(), 200, "followed");
+    assert_eq!(response.text().await.unwrap(), "arrived", "target body");
+}

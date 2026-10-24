@@ -4,8 +4,10 @@ mod migrations;
 
 use std::future::Future;
 use std::net::Ipv6Addr;
+use std::path::Path;
 use std::str::FromStr as _;
 
+use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC, utf8_percent_encode};
 use sea_query::{
     Alias, Asterisk, Expr, Func, Iden, LikeExpr, MysqlQueryBuilder, PostgresQueryBuilder, Query,
     QueryBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
@@ -15,8 +17,7 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use sqlx::any::{AnyConnectOptions, AnyPoolOptions, AnyRow, AnyTypeInfo, AnyValueRef};
 use sqlx::mysql::MySqlDatabaseError;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{Any, AnyPool, ConnectOptions as _, Executor, FromRow};
+use sqlx::{Any, AnyPool, Executor, FromRow};
 use url::Url;
 use utoipa::ToSchema;
 
@@ -51,13 +52,14 @@ impl Dialect {
                 Expr::val(i64::try_from(prefix.chars().count()).unwrap_or(i64::MAX)).into(),
             ]))
             .eq(prefix),
-            // MySQL can serve a LIKE prefix from the key index.
+            // MySQL can serve a LIKE prefix from the key index. `!` escapes, since a backslash
+            // literal reads differently under MySQL's `NO_BACKSLASH_ESCAPES`.
             Self::Postgres | Self::Mysql => {
                 let escaped = prefix
-                    .replace('\\', r"\\")
-                    .replace('%', r"\%")
-                    .replace('_', r"\_");
-                Expr::col(column).like(LikeExpr::new(format!("{escaped}%")).escape('\\'))
+                    .replace('!', "!!")
+                    .replace('%', "!%")
+                    .replace('_', "!_");
+                Expr::col(column).like(LikeExpr::new(format!("{escaped}%")).escape('!'))
             }
         }
     }
@@ -132,23 +134,23 @@ impl Db {
                 {
                     tokio::fs::create_dir_all(parent).await?;
                 }
-                let url = SqliteConnectOptions::new()
-                    .filename(path)
-                    .create_if_missing(true)
-                    .to_url_lossy();
-                let read_url = SqliteConnectOptions::new()
-                    .filename(path)
-                    .read_only(true)
-                    .to_url_lossy();
+                // An in-memory database lives in its one connection, so it has no readers.
+                let read_url = (path.as_os_str() != IN_MEMORY).then(|| sqlite_url(path, "ro"));
                 // SQLite allows one writer; a single connection serializes access the way the
                 // database expects instead of surfacing `SQLITE_BUSY` under load.
-                (url.into(), Dialect::Sqlite, 1, Some(read_url.to_string()))
+                (sqlite_url(path, "rwc"), Dialect::Sqlite, 1, read_url)
             }
         };
         let options = AnyConnectOptions::from_str(&url)?;
-        let pool = Self::pool_options(dialect, max_connections, Access::ReadWrite)
-            .connect_with(options)
-            .await?;
+        let mut pool_options = Self::pool_options(dialect, max_connections, Access::ReadWrite);
+        if read_url.is_none() && dialect == Dialect::Sqlite {
+            // An in-memory database is gone once its connection closes.
+            pool_options = pool_options
+                .min_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None);
+        }
+        let pool = pool_options.connect_with(options).await?;
         let reads = match read_url {
             // Lazy: the writer has to create the file and switch it to WAL first.
             Some(read_url) => Self::pool_options(dialect, READ_CONNECTIONS, Access::ReadOnly)
@@ -242,6 +244,22 @@ impl Db {
     }
 }
 
+const IN_MEMORY: &str = ":memory:";
+
+/// A SQLite URL; sqlx decodes `%` in the filename. (`to_url_lossy` keeps a literal `%` and panics
+/// on `:memory:`.)
+fn sqlite_url(path: &Path, mode: &str) -> String {
+    const FILENAME: &AsciiSet = &CONTROLS.add(b' ').add(b'#').add(b'%').add(b'?');
+    let filename = path.to_string_lossy();
+    if filename == IN_MEMORY {
+        return format!("sqlite:{IN_MEMORY}");
+    }
+    format!(
+        "sqlite:{}?mode={mode}",
+        utf8_percent_encode(&filename, FILENAME)
+    )
+}
+
 /// A connection URL for a database server. IPv6 literals are bracketed, and a host that is a
 /// path is a Unix socket directory (Postgres) or file (MySQL), passed as a query parameter.
 /// (`to_url_lossy` on the drivers' option builders panics on both.)
@@ -265,8 +283,11 @@ fn server_url(dialect: Dialect, params: &ServerConnection) -> Result<String> {
     }
     url.set_port(Some(params.port.get()))
         .map_err(|()| invalid())?;
-    url.set_username(&params.user).map_err(|()| invalid())?;
-    url.set_password(Some(&params.password))
+    // sqlx decodes `%` in credentials, and `Url` leaves it as is.
+    let encoded = |credential: &str| utf8_percent_encode(credential, NON_ALPHANUMERIC).to_string();
+    url.set_username(&encoded(&params.user))
+        .map_err(|()| invalid())?;
+    url.set_password(Some(&encoded(&params.password)))
         .map_err(|()| invalid())?;
     url.path_segments_mut()
         .map_err(|()| invalid())?
@@ -655,22 +676,47 @@ mod tests {
             host: host.to_owned(),
             port: std::num::NonZeroU16::new(5432).unwrap(),
             user: "u".to_owned(),
-            password: "p@ss".to_owned(),
+            password: "p@ss%FF".to_owned(),
         };
         assert_eq!(
             server_url(Dialect::Postgres, &params("::1")).unwrap(),
-            "postgres://u:p%40ss@[::1]:5432/db",
+            "postgres://u:p%40ss%25FF@[::1]:5432/db",
             "IPv6 literal"
         );
         assert_eq!(
             server_url(Dialect::Postgres, &params("/run/postgresql")).unwrap(),
-            "postgres://u:p%40ss@localhost:5432/db?host=%2Frun%2Fpostgresql",
+            "postgres://u:p%40ss%25FF@localhost:5432/db?host=%2Frun%2Fpostgresql",
             "socket directory"
         );
         assert_eq!(
             server_url(Dialect::Mysql, &params("/run/mysqld/mysqld.sock")).unwrap(),
-            "mysql://u:p%40ss@localhost:5432/db?socket=%2Frun%2Fmysqld%2Fmysqld.sock",
+            "mysql://u:p%40ss%25FF@localhost:5432/db?socket=%2Frun%2Fmysqld%2Fmysqld.sock",
             "socket file"
+        );
+    }
+
+    #[test]
+    fn sqlite_urls_keep_filenames() {
+        use sqlx::sqlite::SqliteConnectOptions;
+        let filename = |path: &str| {
+            SqliteConnectOptions::from_str(&sqlite_url(Path::new(path), "rwc"))
+                .unwrap()
+                .get_filename()
+                .to_owned()
+        };
+        assert_eq!(
+            filename("/tmp/cache%2Fdb 1#?.sqlite"),
+            Path::new("/tmp/cache%2Fdb 1#?.sqlite"),
+            "absolute"
+        );
+        assert_eq!(
+            filename("data/cache.db"),
+            Path::new("data/cache.db"),
+            "relative"
+        );
+        assert!(
+            SqliteConnectOptions::from_str(&sqlite_url(Path::new(IN_MEMORY), "rwc")).is_ok(),
+            "in memory"
         );
     }
 

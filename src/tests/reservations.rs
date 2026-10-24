@@ -115,6 +115,30 @@ async fn keys_differing_in_case_accents_or_trailing_spaces_stay_separate() {
 }
 
 #[tokio::test]
+async fn restore_key_prefixes_match_wildcards_literally() {
+    let server = TestServer::start().await;
+    let storage = server.storage();
+    save(storage, "wild-xy-1").await;
+    for prefix in ["wild-%", "wild-_y", "wild-x!", r"wild-x\"] {
+        assert_eq!(
+            matched_key(storage, &["missing", prefix]).await,
+            None,
+            "{prefix} is not a pattern"
+        );
+    }
+    for key in ["wild-%!_\\-1", "wild-%!_\\-2"] {
+        save(storage, key).await;
+    }
+    assert_eq!(
+        matched_key(storage, &["missing", "wild-%!_\\-"])
+            .await
+            .as_deref(),
+        Some("wild-%!_\\-2"),
+        "literal prefix"
+    );
+}
+
+#[tokio::test]
 async fn a_non_numeric_upload_id_is_a_bad_request() {
     let server = TestServer::start().await;
     let response = reqwest::Client::new()

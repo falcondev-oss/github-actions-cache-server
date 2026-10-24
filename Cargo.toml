@@ -16,6 +16,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 mimalloc = { version = "0.1", default-features = false }
 jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 object_store = { version = "0.14", default-features = false, features = ["aws", "gcp", "azure"] }
+percent-encoding = "2"
 prometheus = { version = "0.14", default-features = false, features = ["process"] }
 prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "http2"] }

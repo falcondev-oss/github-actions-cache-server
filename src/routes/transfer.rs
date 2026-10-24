@@ -104,6 +104,10 @@ pub(super) async fn upload(
     Ok(created())
 }
 
+/// Largest bound the original server accepted (`Number.MAX_SAFE_INTEGER`); larger ones are served
+/// whole.
+const MAX_RANGE_BOUND: u64 = (1 << 53) - 1;
+
 /// Single ranges only; multi-range and suffix ranges (`bytes=-500`) are served whole.
 fn parse_range(headers: &HeaderMap) -> Option<RangeRequest> {
     let value = headers.get(RANGE)?.to_str().ok()?.trim();
@@ -116,11 +120,12 @@ fn parse_range(headers: &HeaderMap) -> Option<RangeRequest> {
     if !digits(start) || !(end.is_empty() || digits(end)) {
         return None;
     }
-    let start: u64 = start.parse().ok()?;
-    let end: Option<u64> = if end.is_empty() {
+    let bound = |part: &str| part.parse().ok().filter(|bound| *bound <= MAX_RANGE_BOUND);
+    let start = bound(start)?;
+    let end = if end.is_empty() {
         None
     } else {
-        Some(end.parse().ok()?)
+        Some(bound(end)?)
     };
     if end.is_some_and(|end| end < start) {
         return None;
@@ -227,5 +232,10 @@ mod tests {
         assert_eq!(range("bytes=-5"), None, "suffix ranges are served whole");
         assert_eq!(range("bytes=0-1,4-5"), None, "multi-range is served whole");
         assert_eq!(range("bytes=9-5"), None, "inverted");
+        assert_eq!(
+            range("bytes=9007199254740992-"),
+            None,
+            "beyond a safe integer"
+        );
     }
 }

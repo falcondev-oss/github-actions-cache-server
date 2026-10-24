@@ -58,10 +58,8 @@ async fn build_state(config: Config, adapter: Adapter) -> Result<AppState> {
         metrics: Arc::new(Metrics::new()?),
         cleanup: Arc::new(Cleanup::new(Arc::clone(&storage), &config)),
         storage,
-        // Results Passthrough relays redirects instead of following them.
-        http: reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?,
+        // Results Passthrough follows redirects, like the original server's `fetch`.
+        http: reqwest::Client::new(),
         config,
     })
 }

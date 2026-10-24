@@ -28,10 +28,11 @@ async fn bulk_deletion_respects_every_filter() {
         .unwrap();
     assert_eq!(unauthorized.status(), 401, "the api key is required");
 
+    // The original server read the filters from a JSON body only.
     let deleted = http
         .delete(&entries)
         .header("x-api-key", "secret")
-        .query(&[("key", "same-key"), ("repoId", "123")])
+        .json(&serde_json::json!({ "key": "same-key", "repoId": "123" }))
         .send()
         .await
         .unwrap();

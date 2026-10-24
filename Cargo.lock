@@ -683,6 +683,7 @@ dependencies = [
  "jsonwebtoken",
  "mimalloc",
  "object_store",
+ "percent-encoding",
  "prometheus",
  "prost",
  "reqwest",

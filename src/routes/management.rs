@@ -14,7 +14,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use sea_query::{Alias, Asterisk, Cond, Expr, Query};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::openapi::{InfoBuilder, SecurityRequirement, ServerBuilder};
@@ -153,7 +153,8 @@ impl Params {
 }
 
 /// Exact-match filters shared by listing and bulk deletion.
-#[derive(Debug, IntoParams)]
+#[derive(Debug, Default, Deserialize, IntoParams, ToSchema)]
+#[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 struct EntryFilter {
     /// Filter by exact cache key
@@ -164,6 +165,7 @@ struct EntryFilter {
     scope: Option<String>,
     /// Filter by exact repository id
     #[param(rename = "repoId")]
+    #[schema(rename = "repoId")]
     repo_id: Option<String>,
 }
 
@@ -379,13 +381,18 @@ async fn delete_cache_entry(
     path = "/cache-entries",
     tag = "Cache Entries",
     params(EntryFilter),
+    request_body(content = EntryFilter, description = "The filters, also accepted as query"),
     responses((status = 200)),
 )]
 async fn delete_cache_entries(
     State(state): State<AppState>,
     RawQuery(raw): RawQuery,
+    body: Option<Json<EntryFilter>>,
 ) -> Result<(), ApiError> {
-    let filter = EntryFilter::parse(&Params::parse(raw.as_deref()))?;
+    let filter = match body {
+        Some(Json(filter)) => filter,
+        None => EntryFilter::parse(&Params::parse(raw.as_deref()))?,
+    };
     let db = &state.storage.db;
     db.execute(
         &db.pool,

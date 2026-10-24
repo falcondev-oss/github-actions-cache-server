@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Local, NaiveTime, TimeDelta, TimeZone, Timelike as _};
 use futures_util::{StreamExt as _, stream};
 use sea_query::{Cond, Expr, JoinType, Query, SelectStatement};
 
@@ -51,13 +52,37 @@ impl Task {
     }
 }
 
-/// Wall-clock aligned schedules, in minutes, and the tasks each runs in order.
-const SCHEDULES: [(i64, &[Task]); 4] = [
+/// Schedules aligned to local wall-clock time like the original cron expressions, in minutes that
+/// divide a day, and the tasks each runs in order.
+const SCHEDULES: [(u32, &[Task]); 4] = [
     (5, &[Task::Uploads]),
     (10, &[Task::Parts, Task::StorageLocations]),
     (60, &[Task::Merges]),
     (24 * 60, &[Task::CacheEntries, Task::OrphanedStorage]),
 ];
+
+/// The next local time after `now` whose minute of the day is a multiple of `period_minutes`.
+fn next_run<Tz: TimeZone>(now: &DateTime<Tz>, period_minutes: u32) -> DateTime<Tz> {
+    let local = now.naive_local();
+    let minute = local
+        .hour()
+        .saturating_mul(60)
+        .saturating_add(local.minute());
+    let next_minute = minute
+        .checked_div(period_minutes)
+        .unwrap_or(0)
+        .saturating_add(1)
+        .saturating_mul(period_minutes);
+    let period = TimeDelta::minutes(period_minutes.into());
+    local
+        .date()
+        .and_time(NaiveTime::MIN)
+        .checked_add_signed(TimeDelta::minutes(next_minute.into()))
+        .and_then(|next| now.timezone().from_local_datetime(&next).earliest())
+        // Skipped by a DST transition: one period on.
+        .or_else(|| now.clone().checked_add_signed(period))
+        .unwrap_or_else(|| now.clone())
+}
 
 /// What a cleanup run did; counters a task does not touch stay zero.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -195,11 +220,13 @@ impl Cleanup {
         for (period_minutes, tasks) in SCHEDULES {
             let cleanup = Arc::clone(self);
             drop(tokio::spawn(async move {
-                let period = period_minutes.saturating_mul(MINUTE_MS);
                 loop {
-                    let wait = period.saturating_sub(now_ms().checked_rem(period).unwrap_or(0));
-                    tokio::time::sleep(Duration::from_millis(u64::try_from(wait).unwrap_or(0)))
-                        .await;
+                    let now = Local::now();
+                    let wait = next_run(&now, period_minutes)
+                        .signed_duration_since(now)
+                        .to_std()
+                        .unwrap_or_default();
+                    tokio::time::sleep(wait).await;
                     for &task in tasks {
                         // Its own task, so a panic fails one run instead of ending the schedule.
                         let cleanup = Arc::clone(&cleanup);
@@ -542,4 +569,38 @@ pub(crate) async fn reconcile_orphaned_storage(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::FixedOffset;
+
+    use super::*;
+
+    #[test]
+    fn schedules_follow_local_wall_clock_time() {
+        let berlin = FixedOffset::east_opt(2 * 3600).unwrap();
+        let india = FixedOffset::east_opt(5 * 3600 + 30 * 60).unwrap();
+        let at = |zone: FixedOffset, time: &str| {
+            DateTime::parse_from_rfc3339(time)
+                .unwrap()
+                .with_timezone(&zone)
+        };
+        let noon = "2026-10-24T12:00:00Z";
+        assert_eq!(
+            next_run(&at(berlin, noon), 24 * 60),
+            at(berlin, "2026-10-24T22:00:00Z"),
+            "daily at local midnight"
+        );
+        assert_eq!(
+            next_run(&at(india, noon), 60),
+            at(india, "2026-10-24T12:30:00Z"),
+            "hourly on the local hour"
+        );
+        assert_eq!(
+            next_run(&at(berlin, "2026-10-24T12:05:00Z"), 5),
+            at(berlin, "2026-10-24T12:10:00Z"),
+            "a boundary moves on to the next one"
+        );
+    }
 }
