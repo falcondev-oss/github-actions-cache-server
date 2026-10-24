@@ -109,7 +109,14 @@ async fn follows_redirects_of_the_results_origin() {
     ));
 
     let server = TestServer::with(&[("DEFAULT_ACTIONS_RESULTS_URL", &origin_url)]).await;
-    let response = reqwest::get(format!("{}/moved", server.url)).await.unwrap();
+    let response = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{}/moved", server.url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), 200, "followed");
     assert_eq!(response.text().await.unwrap(), "arrived", "target body");
 }

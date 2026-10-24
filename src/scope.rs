@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
-use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet, KeyOperations, PublicKeyUse};
+use jsonwebtoken::jwk::{
+    AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyOperations, PublicKeyUse,
+};
 use jsonwebtoken::{Algorithm, AlgorithmFamily, DecodingKey, Header, Validation};
 use serde::Deserialize;
 use tokio::sync::{Mutex, OnceCell};
@@ -115,15 +117,24 @@ impl RemoteJwks {
 /// `kid`, key type and `alg`, and only among keys meant for verifying signatures.
 fn selects(jwk: &Jwk, header: &Header) -> bool {
     let common = &jwk.common;
-    matches!(
-        (&jwk.algorithm, header.alg.family()),
-        (AlgorithmParameters::RSA(_), AlgorithmFamily::Rsa)
-            | (AlgorithmParameters::EllipticCurve(_), AlgorithmFamily::Ec)
-            | (AlgorithmParameters::OctetKeyPair(_), AlgorithmFamily::Ed)
-    ) && header
-        .kid
-        .as_ref()
-        .is_none_or(|kid| common.key_id.as_ref() == Some(kid))
+    let fits_algorithm = match (&jwk.algorithm, header.alg) {
+        (AlgorithmParameters::RSA(_), alg) => alg.family() == AlgorithmFamily::Rsa,
+        (AlgorithmParameters::EllipticCurve(key), Algorithm::ES256) => {
+            key.curve == EllipticCurve::P256
+        }
+        (AlgorithmParameters::EllipticCurve(key), Algorithm::ES384) => {
+            key.curve == EllipticCurve::P384
+        }
+        (AlgorithmParameters::OctetKeyPair(key), Algorithm::EdDSA) => {
+            key.curve == EllipticCurve::Ed25519
+        }
+        _ => false,
+    };
+    fits_algorithm
+        && header
+            .kid
+            .as_ref()
+            .is_none_or(|kid| common.key_id.as_ref() == Some(kid))
         && common
             .public_key_use
             .as_ref()
@@ -323,6 +334,14 @@ mod tests {
             "plain RSA key"
         );
         assert!(!selects(&ec, &rs256), "key type must fit the algorithm");
+        assert!(
+            selects(&ec, &Header::new(Algorithm::ES256)),
+            "P-256 for ES256"
+        );
+        assert!(
+            !selects(&ec, &Header::new(Algorithm::ES384)),
+            "curve must fit the algorithm"
+        );
         assert!(
             !selects(&jwk(serde_json::json!({ "use": "enc" })), &rs256),
             "encryption key"

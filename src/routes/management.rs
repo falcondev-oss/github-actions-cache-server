@@ -152,20 +152,29 @@ impl Params {
     }
 }
 
+/// A filter that may be left out but not set to `null`, which must not widen a deletion.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
 /// Exact-match filters shared by listing and bulk deletion.
 #[derive(Debug, Default, Deserialize, IntoParams, ToSchema)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 struct EntryFilter {
     /// Filter by exact cache key
+    #[serde(default, deserialize_with = "present")]
     key: Option<String>,
     /// Filter by exact cache version
+    #[serde(default, deserialize_with = "present")]
     version: Option<String>,
     /// Filter by exact cache scope
+    #[serde(default, deserialize_with = "present")]
     scope: Option<String>,
     /// Filter by exact repository id
     #[param(rename = "repoId")]
     #[schema(rename = "repoId")]
+    #[serde(default, deserialize_with = "present")]
     repo_id: Option<String>,
 }
 

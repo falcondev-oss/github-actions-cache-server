@@ -28,6 +28,18 @@ async fn bulk_deletion_respects_every_filter() {
         .unwrap();
     assert_eq!(unauthorized.status(), 401, "the api key is required");
 
+    let null_filter = http
+        .delete(&entries)
+        .header("x-api-key", "secret")
+        .json(&serde_json::json!({ "key": null }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        null_filter.status().is_client_error(),
+        "a null filter is rejected, not dropped"
+    );
+
     // The original server read the filters from a JSON body only.
     let deleted = http
         .delete(&entries)

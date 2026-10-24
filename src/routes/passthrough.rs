@@ -1,6 +1,6 @@
 //! Results Passthrough: requests the server does not handle go to the Default Results Origin.
 
-use axum::body::Body;
+use axum::body::{Body, HttpBody as _};
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, CONNECTION, EXPECT, HOST, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE,
@@ -50,17 +50,16 @@ pub(super) async fn forward(
     let mut headers = forwardable(&parts.headers);
     // Leaving the encoding to the origin's default keeps the body byte-for-byte passthrough.
     headers.remove(ACCEPT_ENCODING);
-    let upstream = state
-        .http
-        .request(parts.method, url)
-        .headers(headers)
-        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
-        .send()
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, "Results Passthrough failed");
-            HttpError::new(StatusCode::BAD_GATEWAY, "Bad Gateway")
-        })?;
+    let mut upstream = state.http.request(parts.method, url).headers(headers);
+    // A streamed body can't be replayed, so a request without one sends none and can follow
+    // any redirect, like the original server's `fetch`.
+    if body.size_hint().exact() != Some(0) {
+        upstream = upstream.body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    }
+    let upstream = upstream.send().await.map_err(|error| {
+        tracing::warn!(%error, "Results Passthrough failed");
+        HttpError::new(StatusCode::BAD_GATEWAY, "Bad Gateway")
+    })?;
 
     let mut response = Response::builder().status(upstream.status());
     if let Some(response_headers) = response.headers_mut() {

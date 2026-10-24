@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, DurationRound as _, Local, TimeDelta, TimeZone};
+use chrono::{DateTime, DurationRound as _, Local, LocalResult, TimeDelta, TimeZone};
 use futures_util::{StreamExt as _, stream};
 use sea_query::{Cond, Expr, JoinType, Query, SelectStatement};
 
@@ -65,13 +65,18 @@ const SCHEDULES: [(u32, &[Task]); 4] = [
 fn next_run<Tz: TimeZone>(now: &DateTime<Tz>, period_minutes: u32) -> DateTime<Tz> {
     let period = TimeDelta::minutes(period_minutes.into());
     // Periods divide a day, so truncating the naive local time aligns them to local midnight.
-    now.naive_local()
-        .duration_trunc(period)
-        .ok()
-        .and_then(|boundary| boundary.checked_add_signed(period))
-        .and_then(|next| now.timezone().from_local_datetime(&next).earliest())
-        // Skipped by a DST transition: one period on.
-        .or_else(|| now.clone().checked_add_signed(period))
+    // Like cron, boundaries a DST change skips are passed over, and a repeated one runs once.
+    let boundaries = now.naive_local().duration_trunc(period).ok();
+    std::iter::successors(boundaries, |boundary| boundary.checked_add_signed(period))
+        .find_map(
+            |boundary| match now.timezone().from_local_datetime(&boundary) {
+                LocalResult::Single(time) => Some(time).filter(|time| time > now),
+                LocalResult::Ambiguous(first, second) => {
+                    [first, second].into_iter().find(|time| time > now)
+                }
+                LocalResult::None => None,
+            },
+        )
         .unwrap_or_else(|| now.clone())
 }
 
@@ -592,6 +597,34 @@ mod tests {
             next_run(&at(berlin, "2026-10-24T12:05:00Z"), 5),
             at(berlin, "2026-10-24T12:10:00Z"),
             "a boundary moves on to the next one"
+        );
+    }
+
+    #[test]
+    fn schedules_pass_over_dst_changes_like_cron() {
+        let berlin = |time: &str| {
+            DateTime::parse_from_rfc3339(time)
+                .unwrap()
+                .with_timezone(&chrono_tz::Europe::Berlin)
+        };
+        // 02:00 local is skipped on 2026-03-29: the next run is 03:00 local.
+        let before_gap = berlin("2026-03-29T00:59:58Z");
+        assert_eq!(
+            next_run(&before_gap, 5),
+            berlin("2026-03-29T01:00:00Z"),
+            "5 minutes"
+        );
+        assert_eq!(
+            next_run(&before_gap, 60),
+            berlin("2026-03-29T01:00:00Z"),
+            "hourly"
+        );
+        // 02:00-03:00 local repeats on 2026-10-25: each run lies ahead.
+        let repeated = berlin("2026-10-25T01:00:30Z");
+        assert_eq!(
+            next_run(&repeated, 5),
+            berlin("2026-10-25T01:05:00Z"),
+            "second pass"
         );
     }
 }
