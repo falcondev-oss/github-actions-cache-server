@@ -19,8 +19,17 @@ pub(crate) enum UploadKind {
     /// A Part streamed by a client, with the length it announced; clients already upload many
     /// Parts at once.
     Part { length: Option<u64> },
-    /// A Merge: one stream for the whole entry, which a first download waits on.
-    Merged,
+    /// A Merge: one stream for the whole entry, which a first download waits on, with the
+    /// length of its Parts.
+    Merged { length: Option<u64> },
+}
+
+impl UploadKind {
+    pub(crate) const fn length(self) -> Option<u64> {
+        match self {
+            Self::Part { length } | Self::Merged { length } => length,
+        }
+    }
 }
 
 /// A requested byte range; an open end means "to the end of the object".

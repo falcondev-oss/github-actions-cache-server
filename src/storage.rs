@@ -488,17 +488,18 @@ impl Storage {
         let adapter = Arc::clone(&self.adapter);
         let merged = merged_object(&location.folder_name);
         let part_stream = stream_parts(Arc::clone(&adapter), location);
+        let kind = UploadKind::Merged {
+            length: location
+                .size_bytes
+                .and_then(|size| u64::try_from(size).ok()),
+        };
         let parts: Vec<String> = (0..location.part_count)
             .map(|index| part_object(&location.folder_name, index))
             .collect();
         async move {
             match adapter.as_ref() {
                 Adapter::Filesystem(filesystem) => filesystem.concat(&parts, &merged).await,
-                Adapter::Object(_) => {
-                    adapter
-                        .upload_stream(&merged, part_stream, UploadKind::Merged)
-                        .await
-                }
+                Adapter::Object(_) => adapter.upload_stream(&merged, part_stream, kind).await,
             }
         }
         .boxed()
@@ -942,13 +943,14 @@ impl Storage {
         let write = {
             let adapter = Arc::clone(&self.adapter);
             let merged = merged_object(&location.folder_name);
+            let kind = UploadKind::Merged {
+                length: location
+                    .size_bytes
+                    .and_then(|size| u64::try_from(size).ok()),
+            };
             async move {
                 adapter
-                    .upload_stream(
-                        &merged,
-                        ReceiverStream::new(merger_receiver).boxed(),
-                        UploadKind::Merged,
-                    )
+                    .upload_stream(&merged, ReceiverStream::new(merger_receiver).boxed(), kind)
                     .await
             }
             .boxed()

@@ -31,6 +31,8 @@ const UPLOAD_PART_BYTES: usize = 5 * 1024 * 1024;
 /// Multipart parts a Merge uploads at once.
 const MERGE_UPLOAD_CONCURRENCY: usize = 4;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest single PUT S3 accepts; larger objects go up in parts.
+const MAX_SINGLE_PUT_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 /// Lifetime of a presigned URL a Part is streamed to; covers a slow client.
 const PRESIGNED_UPLOAD_LIFETIME: Duration = Duration::from_hours(1);
 
@@ -254,11 +256,11 @@ impl ObjectAdapter {
         mut stream: ByteStream,
         kind: UploadKind,
     ) -> Result<()> {
-        // A Part of known length streams through in one request, unbuffered; a single PUT is
-        // atomic like a multipart upload.
-        if let UploadKind::Part {
-            length: Some(length),
-        } = kind
+        // An object of known length streams through in one request, unbuffered; a single PUT
+        // is atomic like a multipart upload.
+        if let Some(length) = kind
+            .length()
+            .filter(|&length| length <= MAX_SINGLE_PUT_BYTES)
         {
             match self
                 .signer
@@ -273,7 +275,7 @@ impl ObjectAdapter {
         // uploads several at once; Parts arrive in parallel already.
         let concurrency = match kind {
             UploadKind::Part { .. } => 1,
-            UploadKind::Merged => MERGE_UPLOAD_CONCURRENCY,
+            UploadKind::Merged { .. } => MERGE_UPLOAD_CONCURRENCY,
         };
         let mut writer =
             BufWriter::with_capacity(Arc::clone(&self.store), self.path(name), UPLOAD_PART_BYTES)
