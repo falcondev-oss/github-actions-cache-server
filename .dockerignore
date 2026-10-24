@@ -3,3 +3,4 @@
 !Cargo.lock
 !rust-toolchain.toml
 !src
+!.cargo
