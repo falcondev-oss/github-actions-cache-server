@@ -1,11 +1,11 @@
 /* eslint-disable ts/method-signature-style */
 import type { ContainerClient } from '@azure/storage-blob'
 import type { Kysely } from 'kysely'
+import type { Writable } from 'node:stream'
 import type { Database, StorageLocation } from './db'
 import type { Reservation } from './helpers'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
-import { once } from 'node:events'
 import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import { Agent } from 'node:https'
@@ -64,6 +64,23 @@ function escapeLikePattern(value: string) {
     .replaceAll('\\', '\\\\')
     .replaceAll('%', String.raw`\%`)
     .replaceAll('_', String.raw`\_`)
+}
+
+/**
+ * Resolves once `stream` wants more data or is closed. A destroyed stream emits
+ * no 'drain', and no 'error' when destroyed without one, so waiting on 'drain'
+ * alone hangs forever once its reader is gone.
+ */
+function drainOrClose(stream: Writable) {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  const done = () => {
+    stream.off('drain', done)
+    stream.off('close', done)
+    resolve()
+  }
+  stream.on('drain', done)
+  stream.on('close', done)
+  return promise
 }
 
 export class ObjectNotFoundError extends Error {
@@ -198,16 +215,25 @@ export class Storage {
   ) {
     if (location.partsDeletedAt) throw new Error('No parts to feed')
 
+    // Either sink can be destroyed mid-download: the route destroys the response
+    // when the client hangs up, and a failed merge upload destroys the merger.
+    // Waiting on a destroyed sink's 'drain' would park the pump forever, pinning
+    // the current part's backend read and renewing the merge lease. Keep feeding
+    // whichever sink is still open, and stop reading once both are gone.
+    const sinks = [responseStream, mergerStream]
     for await (const chunk of this.streamParts(location)) {
-      // attach both drain listeners simultaneously to prevent a race condition where the second stream being faster hangs forever
+      // attach every drain wait before awaiting any, so a faster sink's 'drain' is never missed
       const drains = []
-      if (!responseStream.write(chunk)) drains.push(once(responseStream, 'drain'))
-      if (!mergerStream.write(chunk)) drains.push(once(mergerStream, 'drain'))
+      for (const sink of sinks) {
+        if (sink.destroyed) continue
+        if (!sink.write(chunk) && !sink.destroyed) drains.push(drainOrClose(sink))
+      }
       await Promise.all(drains)
+      // Leaving the loop makes `streamParts` destroy the current part stream.
+      if (sinks.every((sink) => sink.destroyed)) return
     }
 
-    responseStream.end()
-    mergerStream.end()
+    for (const sink of sinks) if (!sink.destroyed) sink.end()
 
     await globalThis.gc?.()
   }
