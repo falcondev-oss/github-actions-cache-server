@@ -25,7 +25,9 @@ use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use utoipa::ToSchema;
 
 use self::adapter::ReadError;
-pub(crate) use self::adapter::{Adapter, ByteStream, DownloadStream, RangeRequest, UploadKind};
+pub(crate) use self::adapter::{
+    Adapter, ByteStream, DownloadStream, Extent, RangeRequest, UploadKind,
+};
 use self::leases::{
     DIRECT_DOWNLOAD_LEASE_DURATION, LEASE_DURATION, LEASE_RENEWAL, acquire_merge_lease,
     create_reader_lease, deadline, release_merge_lease, release_reader_lease, renew_merge_lease,
@@ -359,8 +361,7 @@ impl Storage {
         // nothing to seek into. Served whole under a 200, which Range allows.
         Ok(DownloadStream {
             stream: stream_parts(Arc::clone(&self.adapter), location),
-            size: None,
-            range: None,
+            extent: Extent::Unsized,
         })
     }
 
@@ -401,8 +402,8 @@ impl Storage {
         Ok(())
     }
 
-    /// Backfills sizes of rows predating size tracking: one full listing at startup, then a
-    /// no-op once every row has a size.
+    /// Storage Reconciliation: one full listing at startup records the sizes of rows predating
+    /// size tracking, then a no-op once every row has a size.
     async fn reconcile_storage_location_sizes(&self) -> Result<()> {
         let missing: Vec<FolderRow> = self
             .db
@@ -966,8 +967,7 @@ impl Storage {
         )));
         Ok(DownloadStream {
             stream: ReceiverStream::new(response_receiver).boxed(),
-            size: None,
-            range: None,
+            extent: Extent::Unsized,
         })
     }
 

@@ -161,7 +161,7 @@ async fn reconciles_missing_location_sizes_at_startup() {
     assert_eq!(
         reconciled.size_bytes,
         Some(7),
-        "size backfilled from storage"
+        "size reconciled from storage"
     );
 }
 

@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::io::ReaderStream;
 
 use super::adapter::{
-    ByteStream, DownloadStream, FilesystemUsage, RangeRequest, ReadError, StorageDeletion,
+    ByteStream, DownloadStream, Extent, FilesystemUsage, RangeRequest, ReadError, StorageDeletion,
     StorageFolder, StorageObject, clamp_range,
 };
 use crate::error::{Failure, Result};
@@ -25,6 +25,16 @@ pub(crate) struct FilesystemAdapter {
 
 fn is_not_found(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::NotFound
+}
+
+/// Removes the temp file of a failed write.
+async fn remove_temp(temp: &Path) {
+    match fs::remove_file(temp).await {
+        Err(error) if !is_not_found(&error) => {
+            tracing::warn!(path = %temp.display(), %error, "failed to remove temp file");
+        }
+        Ok(()) | Err(_) => {}
+    }
 }
 
 fn modified_ms(metadata: &std::fs::Metadata) -> io::Result<i64> {
@@ -111,8 +121,7 @@ impl FilesystemAdapter {
         let Some(range) = range.filter(|_| size > 0) else {
             return Ok(DownloadStream {
                 stream: ReaderStream::with_capacity(file, READ_CHUNK_BYTES).boxed(),
-                size: Some(size),
-                range: None,
+                extent: Extent::Whole { size },
             });
         };
         let served = clamp_range(range, size)
@@ -122,8 +131,10 @@ impl FilesystemAdapter {
             .map_err(Failure::from)?;
         Ok(DownloadStream {
             stream: ReaderStream::with_capacity(file.take(served.len()), READ_CHUNK_BYTES).boxed(),
-            size: Some(size),
-            range: Some(served),
+            extent: Extent::Partial {
+                range: served,
+                size,
+            },
         })
     }
 
@@ -148,12 +159,7 @@ impl FilesystemAdapter {
         }
         .await;
         if written.is_err() {
-            match fs::remove_file(&temp).await {
-                Err(error) if !is_not_found(&error) => {
-                    tracing::warn!(path = %temp.display(), %error, "failed to remove temp file");
-                }
-                Ok(()) | Err(_) => {}
-            }
+            remove_temp(&temp).await;
         }
         written
     }
@@ -188,12 +194,7 @@ impl FilesystemAdapter {
             .and_then(|written| written)
         };
         if written.is_err() {
-            match fs::remove_file(&temp).await {
-                Err(error) if !is_not_found(&error) => {
-                    tracing::warn!(path = %temp.display(), %error, "failed to remove temp file");
-                }
-                Ok(()) | Err(_) => {}
-            }
+            remove_temp(&temp).await;
         }
         Ok(written?)
     }
@@ -315,7 +316,7 @@ mod tests {
             .unwrap();
 
         let whole = adapter.download_stream("f/parts/0", None).await.unwrap();
-        assert_eq!(whole.size, Some(11), "size is reported");
+        assert_eq!(whole.extent, Extent::Whole { size: 11 }, "size is reported");
         assert_eq!(read_all(whole.stream).await, b"hello world", "whole object");
 
         let range = RangeRequest {

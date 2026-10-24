@@ -45,7 +45,7 @@ async fn saves_and_restores_unmerged_then_merged() {
 }
 
 #[tokio::test]
-async fn stale_entries_are_misses_after_storage_is_wiped() {
+async fn dangling_entries_are_misses_after_storage_is_wiped() {
     let server = TestServer::start().await;
     let client = server.client();
 

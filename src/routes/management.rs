@@ -40,8 +40,20 @@ const API_KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
 struct ApiError {
     defined: bool,
     code: &'static str,
-    status: u16,
+    #[serde(serialize_with = "serialize_status")]
+    status: StatusCode,
     message: String,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "`serialize_with` passes the field by reference"
+)]
+fn serialize_status<S: serde::Serializer>(
+    status: &StatusCode,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u16(status.as_u16())
 }
 
 impl ApiError {
@@ -49,7 +61,7 @@ impl ApiError {
         Self {
             defined: false,
             code,
-            status: status.as_u16(),
+            status,
             message: message.into(),
         }
     }
@@ -79,8 +91,7 @@ impl From<Failure> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        (status, Json(self)).into_response()
+        (self.status, Json(self)).into_response()
     }
 }
 
@@ -336,7 +347,7 @@ async fn list_cache_entries(
 
 /// Delete cache entry
 ///
-/// Delete a single cache entry by its id. Triggers cleanup of orphaned storage locations.
+/// Delete a single cache entry by its id. Triggers cleanup of unreferenced storage locations.
 #[utoipa::path(
     delete,
     path = "/cache-entries/{id}",
@@ -361,8 +372,8 @@ async fn delete_cache_entry(
 
 /// Delete cache entries
 ///
-/// Delete multiple cache entries matching the given filters. Triggers cleanup of orphaned storage
-/// locations.
+/// Delete multiple cache entries matching the given filters. Triggers cleanup of unreferenced
+/// storage locations.
 #[utoipa::path(
     delete,
     path = "/cache-entries",

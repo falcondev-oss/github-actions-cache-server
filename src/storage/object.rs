@@ -18,7 +18,7 @@ use object_store::{ClientOptions, GetOptions, GetRange, ObjectStore, ObjectStore
 use tokio::io::AsyncWriteExt as _;
 
 use super::adapter::{
-    ByteStream, DownloadStream, RangeRequest, ReadError, StorageDeletion, StorageFolder,
+    ByteStream, DownloadStream, Extent, RangeRequest, ReadError, StorageDeletion, StorageFolder,
     StorageObject, UploadKind, clamp_range,
 };
 use crate::config::{AzBlobAuth, StorageConfig};
@@ -231,8 +231,7 @@ impl ObjectAdapter {
             let size = result.meta.size;
             return Ok(DownloadStream {
                 stream: result.into_stream().map_err(io::Error::other).boxed(),
-                size: Some(size),
-                range: None,
+                extent: Extent::Whole { size },
             });
         };
         // Resolving the range against the object length first keeps "past the end" a 416 on
@@ -242,8 +241,7 @@ impl ObjectAdapter {
         if size == 0 {
             return Ok(DownloadStream {
                 stream: futures_util::stream::empty().boxed(),
-                size: Some(0),
-                range: None,
+                extent: Extent::Whole { size: 0 },
             });
         }
         let served = clamp_range(range, size)
@@ -261,8 +259,10 @@ impl ObjectAdapter {
             .map_err(read_error)?;
         Ok(DownloadStream {
             stream: result.into_stream().map_err(io::Error::other).boxed(),
-            size: Some(size),
-            range: Some(served),
+            extent: Extent::Partial {
+                range: served,
+                size,
+            },
         })
     }
 

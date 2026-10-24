@@ -1,6 +1,6 @@
 # Eager Merge is opt-in and composes server-side on object storage
 
-> Superseded in part by ADR-0010: Server-side Merge was removed; Eager Merge always streams.
+> Superseded in part by ADR-0010: Server-side Merge was removed; Eager Merge streams the Parts through the server on object storage.
 
 Direct downloads need a merged object, and the Merge runs lazily on first download, so the first Cache Hit of every entry is proxied through the server even with `ENABLE_DIRECT_DOWNLOADS`. `EAGER_MERGE=true` runs the Merge right after upload completion instead. It stays off by default because lazy merging never pays merge traffic for entries that are never downloaded.
 

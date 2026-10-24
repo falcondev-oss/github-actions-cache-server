@@ -61,18 +61,27 @@ pub(crate) fn clamp_range(range: RangeRequest, size: u64) -> Option<ByteRange> {
     })
 }
 
-/// An object being read. `range` is set only when a range was requested and honoured.
+/// How much of an object a [`DownloadStream`] serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Extent {
+    /// The whole object, of a length not known up front.
+    Unsized,
+    /// The whole object.
+    Whole { size: u64 },
+    /// A requested range that was honoured.
+    Partial { range: ByteRange, size: u64 },
+}
+
+/// An object being read.
 pub(crate) struct DownloadStream {
     pub(crate) stream: ByteStream,
-    pub(crate) size: Option<u64>,
-    pub(crate) range: Option<ByteRange>,
+    pub(crate) extent: Extent,
 }
 
 impl std::fmt::Debug for DownloadStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DownloadStream")
-            .field("size", &self.size)
-            .field("range", &self.range)
+            .field("extent", &self.extent)
             .finish_non_exhaustive()
     }
 }

@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use super::AppState;
 use crate::http::HttpError;
-use crate::storage::{DownloadError, RangeRequest};
+use crate::storage::{DownloadError, Extent, RangeRequest};
 
 /// Clients without a request id intermittently fail with EOF (tonistiigi/go-actions-cache).
 const REQUEST_ID: HeaderName = HeaderName::from_static("x-ms-request-id");
@@ -159,8 +159,11 @@ pub(super) async fn download(
     let mut response = Response::new(Body::from_stream(download.stream));
     let response_headers = response.headers_mut();
     response_headers.insert(accept_ranges.0, accept_ranges.1);
-    match (download.range, download.size) {
-        (Some(served), Some(size)) => {
+    match download.extent {
+        Extent::Partial {
+            range: served,
+            size,
+        } => {
             if let Ok(content_range) =
                 HeaderValue::from_str(&format!("bytes {}-{}/{size}", served.start, served.end))
             {
@@ -169,10 +172,10 @@ pub(super) async fn download(
             response_headers.insert(CONTENT_LENGTH, HeaderValue::from(served.len()));
             *response.status_mut() = StatusCode::PARTIAL_CONTENT;
         }
-        (None, Some(size)) => {
+        Extent::Whole { size } => {
             response_headers.insert(CONTENT_LENGTH, HeaderValue::from(size));
         }
-        (_, None) => {}
+        Extent::Unsized => {}
     }
     Ok(response)
 }
