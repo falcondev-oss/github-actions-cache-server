@@ -147,4 +147,24 @@ describe('proxy routes apply backpressure', () => {
       .toBeLessThan(MAX_BUFFERED_BYTES)
     expect.soft(queued, 'bytes queued in the response').toBeLessThan(MAX_BUFFERED_BYTES)
   }, 60_000)
+
+  test('download destroys the storage stream when the client hangs up', async () => {
+    // Never ends on its own, so only the route tearing it down can stop the read
+    // (and release the reader lease that `Storage.download` ties to `close`).
+    function* endless() {
+      while (true) yield Buffer.alloc(CHUNK_BYTES)
+    }
+    const source = Readable.from(endless(), { objectMode: false, highWaterMark: CHUNK_BYTES })
+    const storage = await getStorage()
+    vi.spyOn(storage, 'download').mockResolvedValue({ stream: source })
+
+    const { port } = server.address() as AddressInfo
+    const req = http.get(`http://localhost:${port}/download/${randomUUID()}`)
+    req.on('error', () => undefined)
+    const [res] = (await once(req, 'response')) as [IncomingMessage]
+    expect(res.statusCode).toBe(200)
+    res.once('data', () => req.destroy())
+
+    await vi.waitFor(() => expect(source.destroyed).toBe(true), { timeout: 5000, interval: 50 })
+  }, 20_000)
 })
