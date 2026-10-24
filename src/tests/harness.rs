@@ -18,7 +18,7 @@ use crate::db::{
     CacheEntries, CacheEntry, Db, StorageLocation, StorageLocations, select_locations,
 };
 use crate::routes::{AppState, router};
-use crate::storage::{Adapter, ByteStream, CacheQuery, EntryIdentity, Storage};
+use crate::storage::{Adapter, ByteStream, CacheQuery, EntryIdentity, Storage, UploadKind};
 
 pub(crate) const SCOPE: &str = "refs/heads/main";
 pub(crate) const REPO_ID: &str = "123";
@@ -245,7 +245,7 @@ pub(crate) async fn read_all(stream: ByteStream) -> io::Result<Vec<u8>> {
 
 pub(crate) async fn put(adapter: &Adapter, name: &str, data: &'static [u8]) {
     adapter
-        .upload_stream(name, byte_stream(data))
+        .upload_stream(name, byte_stream(data), UploadKind::Part)
         .await
         .unwrap();
 }

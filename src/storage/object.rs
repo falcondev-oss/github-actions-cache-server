@@ -18,7 +18,7 @@ use tokio::io::AsyncWriteExt as _;
 
 use super::adapter::{
     ByteStream, DownloadStream, RangeRequest, ReadError, StorageDeletion, StorageFolder,
-    StorageObject, clamp_range,
+    StorageObject, UploadKind, clamp_range,
 };
 use crate::config::{AzBlobAuth, StorageConfig};
 use crate::error::{Failure, Result};
@@ -27,6 +27,8 @@ use crate::error::{Failure, Result};
 const KEY_PREFIX: &str = "gh-actions-cache";
 /// Matches S3's minimum multipart part size, so larger uploads stream in 5 MiB parts.
 const UPLOAD_PART_BYTES: usize = 5 * 1024 * 1024;
+/// Multipart parts a Merge uploads at once.
+const MERGE_UPLOAD_CONCURRENCY: usize = 4;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
@@ -235,10 +237,21 @@ impl ObjectAdapter {
         })
     }
 
-    pub(crate) async fn upload_stream(&self, name: &str, mut stream: ByteStream) -> Result<()> {
+    pub(crate) async fn upload_stream(
+        &self,
+        name: &str,
+        mut stream: ByteStream,
+        kind: UploadKind,
+    ) -> Result<()> {
+        // Every in-flight multipart part is buffered, so only a Merge, the one stream per entry,
+        // uploads several at once; Parts arrive in parallel already.
+        let concurrency = match kind {
+            UploadKind::Part => 1,
+            UploadKind::Merged => MERGE_UPLOAD_CONCURRENCY,
+        };
         let mut writer =
             BufWriter::with_capacity(Arc::clone(&self.store), self.path(name), UPLOAD_PART_BYTES)
-                .with_max_concurrency(1);
+                .with_max_concurrency(concurrency);
         let streamed: Result<()> = async {
             while let Some(chunk) = stream.try_next().await? {
                 writer.put(chunk).await?;

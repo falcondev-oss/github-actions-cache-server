@@ -23,7 +23,7 @@ use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use utoipa::ToSchema;
 
 use self::adapter::ReadError;
-pub(crate) use self::adapter::{Adapter, ByteStream, DownloadStream, RangeRequest};
+pub(crate) use self::adapter::{Adapter, ByteStream, DownloadStream, RangeRequest, UploadKind};
 use self::leases::{
     DIRECT_DOWNLOAD_LEASE_DURATION, LEASE_DURATION, LEASE_RENEWAL, acquire_merge_lease,
     create_reader_lease, deadline, release_merge_lease, release_reader_lease, renew_merge_lease,
@@ -536,7 +536,11 @@ impl Storage {
             )
             .await?;
         self.adapter
-            .upload_stream(&part_object(&upload.folder_name, part_index), stream)
+            .upload_stream(
+                &part_object(&upload.folder_name, part_index),
+                stream,
+                UploadKind::Part,
+            )
             .await?;
         let recorded = self
             .db
@@ -668,7 +672,12 @@ impl Storage {
                 let adapter = Arc::clone(&self.adapter);
                 let part_stream = stream_parts(Arc::clone(&adapter), &location);
                 let merged = merged_object(&location.folder_name);
-                async move { adapter.upload_stream(&merged, part_stream).await }.boxed()
+                async move {
+                    adapter
+                        .upload_stream(&merged, part_stream, UploadKind::Merged)
+                        .await
+                }
+                .boxed()
             };
             if let Err(error) = self.start_merge(&location, write).await {
                 tracing::warn!(%error, "Eager Merge failed to start after upload completion");
@@ -937,7 +946,11 @@ impl Storage {
             let merged = merged_object(&location.folder_name);
             async move {
                 adapter
-                    .upload_stream(&merged, ReceiverStream::new(merger_receiver).boxed())
+                    .upload_stream(
+                        &merged,
+                        ReceiverStream::new(merger_receiver).boxed(),
+                        UploadKind::Merged,
+                    )
                     .await
             }
             .boxed()

@@ -13,6 +13,15 @@ use crate::error::{Failure, Result};
 /// A stream of object bytes.
 pub(crate) type ByteStream = BoxStream<'static, io::Result<Bytes>>;
 
+/// What an upload writes, which decides how hard it may push object storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UploadKind {
+    /// A Part streamed by a client; clients already upload many Parts at once.
+    Part,
+    /// A Merge: one stream for the whole entry, which a first download waits on.
+    Merged,
+}
+
 /// A requested byte range; an open end means "to the end of the object".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RangeRequest {
@@ -164,10 +173,15 @@ impl Adapter {
         }
     }
 
-    pub(crate) async fn upload_stream(&self, name: &str, stream: ByteStream) -> Result<()> {
+    pub(crate) async fn upload_stream(
+        &self,
+        name: &str,
+        stream: ByteStream,
+        kind: UploadKind,
+    ) -> Result<()> {
         match self {
             Self::Filesystem(adapter) => adapter.upload_stream(name, stream).await,
-            Self::Object(adapter) => adapter.upload_stream(name, stream).await,
+            Self::Object(adapter) => adapter.upload_stream(name, stream, kind).await,
         }
     }
 
