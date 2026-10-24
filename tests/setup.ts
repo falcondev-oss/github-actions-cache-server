@@ -86,6 +86,7 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     AWS_REGION: 'us-east-1',
     STORAGE_S3_BUCKET: 'vitest',
     STORAGE_S3_SOCKET_TIMEOUT_MS: 10_000,
+    STORAGE_S3_MAX_SOCKETS: 50,
     AWS_ACCESS_KEY_ID: 'rustfsadmin',
     AWS_SECRET_ACCESS_KEY: 'rustfsadmin',
     AWS_ENDPOINT_URL: 'http://localhost:9000',

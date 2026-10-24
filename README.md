@@ -28,6 +28,14 @@ volumes:
   cache-data:
 ```
 
+## Resource limits
+
+All optional.
+
+| Variable                 | Default | Effect                                                                        |
+| ------------------------ | ------- | ----------------------------------------------------------------------------- |
+| `STORAGE_S3_MAX_SOCKETS` | `50`    | Sockets per S3 connection pool, for `http://` and `https://` endpoints alike. |
+
 ## Documentation
 
 👉 <https://gha-cache-server.falcondev.io/getting-started> 👈

@@ -9,7 +9,8 @@ import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
-import { Agent } from 'node:https'
+import { Agent as HttpAgent } from 'node:http'
+import { Agent as HttpsAgent } from 'node:https'
 import path from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -895,16 +896,21 @@ function accumulateFolder(
 class S3Adapter implements StorageAdapter {
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 's3' }>) {
     const bucket = env.STORAGE_S3_BUCKET
-    const agent = new Agent({
+    // Both protocols get the configured pool: NodeHttpHandler picks the agent by
+    // endpoint scheme, and an http:// endpoint (MinIO, RustFS, an in-cluster
+    // gateway) would otherwise fall back to the SDK's default agent and ignore
+    // STORAGE_S3_MAX_SOCKETS.
+    const agentOptions = {
       keepAlive: true,
-      maxSockets: 50,
+      maxSockets: env.STORAGE_S3_MAX_SOCKETS,
       keepAliveMsecs: 1000,
-    })
+    }
     const s3 = new S3Client({
       forcePathStyle: true,
       region: env.AWS_REGION,
       requestHandler: new NodeHttpHandler({
-        httpsAgent: agent,
+        httpAgent: new HttpAgent(agentOptions),
+        httpsAgent: new HttpsAgent(agentOptions),
         socketTimeout: env.STORAGE_S3_SOCKET_TIMEOUT_MS,
       }),
     })
