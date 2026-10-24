@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use axum::http::Method;
 use axum::http::header::CONTENT_LENGTH;
@@ -31,6 +31,10 @@ const UPLOAD_PART_BYTES: usize = 5 * 1024 * 1024;
 /// Multipart parts a Merge uploads at once.
 const MERGE_UPLOAD_CONCURRENCY: usize = 4;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long an object seen to exist is trusted without asking storage again.
+const KNOWN_OBJECT_LIFETIME: Duration = Duration::from_mins(1);
+/// Bounds the memory of remembered objects.
+const MAX_KNOWN_OBJECTS: usize = 100_000;
 /// The largest single PUT S3 accepts; larger objects go up in parts.
 const MAX_SINGLE_PUT_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 /// Lifetime of a presigned URL a Part is streamed to; covers a slow client.
@@ -45,6 +49,9 @@ pub(crate) struct ObjectAdapter {
     http: reqwest::Client,
     /// Headers a presigned single-request upload needs on this backend.
     put_headers: &'static [(&'static str, &'static str)],
+    /// Objects recently seen to exist, so lookups skip a request each. Objects never change, and
+    /// deletions through this adapter evict them; the lifetime bounds deletions made elsewhere.
+    known: Mutex<HashMap<Path, Instant>>,
 }
 
 fn client_options(read_timeout: Duration) -> ClientOptions {
@@ -198,6 +205,7 @@ impl ObjectAdapter {
             prefix,
             http: reqwest::Client::new(),
             put_headers,
+            known: Mutex::default(),
         })
     }
 
@@ -320,14 +328,54 @@ impl ObjectAdapter {
     }
 
     pub(crate) async fn object_exists(&self, name: &str) -> Result<bool> {
-        match self.store.head(&self.path(name)).await {
-            Ok(_) => Ok(true),
+        let path = self.path(name);
+        if self
+            .known()
+            .get(&path)
+            .is_some_and(|seen| seen.elapsed() < KNOWN_OBJECT_LIFETIME)
+        {
+            return Ok(true);
+        }
+        match self.store.head(&path).await {
+            Ok(_) => {
+                self.remember(path);
+                Ok(true)
+            }
             Err(error) if not_found(&error) => Ok(false),
             Err(error) => Err(error.into()),
         }
     }
 
+    fn known(&self) -> MutexGuard<'_, HashMap<Path, Instant>> {
+        // The map holds no invariant a panicking holder could break.
+        self.known.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn remember(&self, path: Path) {
+        let mut known = self.known();
+        if known.len() >= MAX_KNOWN_OBJECTS {
+            known.retain(|_, seen| seen.elapsed() < KNOWN_OBJECT_LIFETIME);
+            if known.len() >= MAX_KNOWN_OBJECTS {
+                known.clear();
+            }
+        }
+        known.insert(path, Instant::now());
+    }
+
+    fn forget(&self, prefix: &Path) {
+        self.known()
+            .retain(|path, _| path.prefix_match(prefix).is_none());
+    }
+
     async fn delete_prefix(&self, prefix: &Path) -> Result<StorageDeletion> {
+        // Forgotten before and after, so a lookup racing the deletion can't keep it known.
+        self.forget(prefix);
+        let deleted = self.delete_listed(prefix).await;
+        self.forget(prefix);
+        deleted
+    }
+
+    async fn delete_listed(&self, prefix: &Path) -> Result<StorageDeletion> {
         let objects: Vec<_> = self.store.list(Some(prefix)).try_collect().await?;
         let deletion = StorageDeletion {
             objects: u64::try_from(objects.len()).unwrap_or(u64::MAX),
