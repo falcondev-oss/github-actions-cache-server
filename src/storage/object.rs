@@ -238,6 +238,14 @@ impl ObjectAdapter {
         // Resolving the range against the object length first keeps "past the end" a 416 on
         // every backend, whose own answers to it differ.
         let size = self.store.head(&path).await.map_err(read_error)?.size;
+        // An empty object has no satisfiable range; serve it whole, like the filesystem does.
+        if size == 0 {
+            return Ok(DownloadStream {
+                stream: futures_util::stream::empty().boxed(),
+                size: Some(0),
+                range: None,
+            });
+        }
         let served = clamp_range(range, size)
             .ok_or_else(|| ReadError::RangeNotSatisfiable(name.to_owned()))?;
         let options = GetOptions {

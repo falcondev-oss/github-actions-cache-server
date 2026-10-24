@@ -161,6 +161,23 @@ async fn ignores_ranges_of_unmerged_entries_and_pins_bytes_to_a_location() {
 }
 
 #[tokio::test]
+async fn an_empty_entry_ignores_ranges_on_every_backend() {
+    let server = TestServer::start().await;
+    let location = save_parts(server.storage(), "empty", &[Vec::new()]).await;
+    for range in ["bytes=0-", "bytes=5-"] {
+        let response = get(&server, &location.id, Some(range)).await;
+        assert_eq!(response.status(), 200, "{range}");
+        assert_eq!(header(&response, "content-range"), None, "{range}");
+        assert_eq!(
+            header(&response, "content-length").as_deref(),
+            Some("0"),
+            "{range}"
+        );
+        assert!(response.bytes().await.unwrap().is_empty(), "{range}");
+    }
+}
+
+#[tokio::test]
 async fn eager_merge_writes_the_merged_object_at_completion() {
     let eager = TestServer::with(&[("EAGER_MERGE", "true")]).await;
     let location = save_parts(eager.storage(), "eager", &parts()).await;

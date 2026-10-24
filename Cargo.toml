@@ -1,6 +1,6 @@
 [package]
 name = "github-actions-cache-server"
-version = "9.8.0"
+version = "9.9.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"

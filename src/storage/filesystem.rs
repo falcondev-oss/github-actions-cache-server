@@ -106,7 +106,9 @@ impl FilesystemAdapter {
             Err(error) if is_not_found(&error) => return Err(ReadError::NotFound(name.to_owned())),
             Err(error) => return Err(Failure::from(error).into()),
         };
-        let Some(range) = range else {
+        // An empty object has no satisfiable range; serving it whole (RFC 9110 §14.2) keeps the
+        // answer the same on every backend.
+        let Some(range) = range.filter(|_| size > 0) else {
             return Ok(DownloadStream {
                 stream: ReaderStream::with_capacity(file, READ_CHUNK_BYTES).boxed(),
                 size: Some(size),
