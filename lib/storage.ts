@@ -234,8 +234,6 @@ export class Storage {
     }
 
     for (const sink of sinks) if (!sink.destroyed) sink.end()
-
-    await globalThis.gc?.()
   }
 
   private async *streamParts(location: StorageLocation) {
@@ -247,8 +245,6 @@ export class Storage {
       )
 
       for await (const chunk of partStream) yield chunk
-
-      await globalThis.gc?.()
     }
   }
 
