@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Local, NaiveTime, TimeDelta, TimeZone, Timelike as _};
+use chrono::{DateTime, DurationRound as _, Local, TimeDelta, TimeZone};
 use futures_util::{StreamExt as _, stream};
 use sea_query::{Cond, Expr, JoinType, Query, SelectStatement};
 
@@ -63,21 +63,12 @@ const SCHEDULES: [(u32, &[Task]); 4] = [
 
 /// The next local time after `now` whose minute of the day is a multiple of `period_minutes`.
 fn next_run<Tz: TimeZone>(now: &DateTime<Tz>, period_minutes: u32) -> DateTime<Tz> {
-    let local = now.naive_local();
-    let minute = local
-        .hour()
-        .saturating_mul(60)
-        .saturating_add(local.minute());
-    let next_minute = minute
-        .checked_div(period_minutes)
-        .unwrap_or(0)
-        .saturating_add(1)
-        .saturating_mul(period_minutes);
     let period = TimeDelta::minutes(period_minutes.into());
-    local
-        .date()
-        .and_time(NaiveTime::MIN)
-        .checked_add_signed(TimeDelta::minutes(next_minute.into()))
+    // Periods divide a day, so truncating the naive local time aligns them to local midnight.
+    now.naive_local()
+        .duration_trunc(period)
+        .ok()
+        .and_then(|boundary| boundary.checked_add_signed(period))
         .and_then(|next| now.timezone().from_local_datetime(&next).earliest())
         // Skipped by a DST transition: one period on.
         .or_else(|| now.clone().checked_add_signed(period))
