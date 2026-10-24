@@ -37,6 +37,7 @@ const TESTING_ENV_BASE = {
   ACTIONS_RESULTS_URL: 'http://localhost:3000/',
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
   SKIP_TOKEN_VALIDATION: 'true',
+  MANAGEMENT_API_KEY: 'vitest-management-api-key',
 } satisfies Omit<
   typeof envBaseSchema.infer,
   | 'CACHE_CLEANUP_OLDER_THAN_DAYS'
