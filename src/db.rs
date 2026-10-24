@@ -7,8 +7,8 @@ use std::net::Ipv6Addr;
 use std::str::FromStr as _;
 
 use sea_query::{
-    Asterisk, Expr, Iden, MysqlQueryBuilder, PostgresQueryBuilder, Query, QueryBuilder,
-    SelectStatement, SimpleExpr, SqliteQueryBuilder,
+    Alias, Asterisk, Expr, Func, Iden, LikeExpr, MysqlQueryBuilder, PostgresQueryBuilder, Query,
+    QueryBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
 };
 use sea_query_binder::SqlxBinder;
 use serde::Serialize;
@@ -37,6 +37,28 @@ impl Dialect {
             Self::Postgres => &PostgresQueryBuilder,
             Self::Mysql => &MysqlQueryBuilder,
             Self::Sqlite => &SqliteQueryBuilder,
+        }
+    }
+
+    /// `column` starts with `prefix`, compared exactly.
+    pub(crate) fn starts_with(self, column: impl Iden + 'static, prefix: &str) -> SimpleExpr {
+        match self {
+            // A LIKE pattern bound as a parameter makes SQLite recompile the statement on every
+            // run, which cost half of a lookup; neither form can use an index here.
+            Self::Sqlite => Expr::expr(Func::cust(Alias::new("substr")).args([
+                Expr::col(column).into(),
+                Expr::val(1).into(),
+                Expr::val(i64::try_from(prefix.chars().count()).unwrap_or(i64::MAX)).into(),
+            ]))
+            .eq(prefix),
+            // MySQL can serve a LIKE prefix from the key index.
+            Self::Postgres | Self::Mysql => {
+                let escaped = prefix
+                    .replace('\\', r"\\")
+                    .replace('%', r"\%")
+                    .replace('_', r"\_");
+                Expr::col(column).like(LikeExpr::new(format!("{escaped}%")).escape('\\'))
+            }
         }
     }
 
@@ -148,13 +170,6 @@ impl Db {
             .test_before_acquire(dialect != Dialect::Sqlite)
             .after_connect(move |connection, _meta| {
                 Box::pin(async move {
-                    // Keys match exactly, like GitHub's; SQLite's `like` ignores ASCII case unless
-                    // told otherwise, on every connection.
-                    if dialect == Dialect::Sqlite {
-                        sqlx::query("pragma case_sensitive_like = on")
-                            .execute(&mut *connection)
-                            .await?;
-                    }
                     // WAL commits append to the log and sync only at checkpoints, instead of
                     // syncing a rollback journal and the database on every commit. A crash can
                     // lose the last commits, never consistency; a cache can afford that. The

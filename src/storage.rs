@@ -16,8 +16,7 @@ use axum::body::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
 use sea_query::{
-    Alias, CaseStatement, Cond, Expr, Func, JoinType, LikeExpr, LockType, Order, Query,
-    SelectStatement,
+    Alias, CaseStatement, Cond, Expr, Func, JoinType, LockType, Order, Query, SelectStatement,
 };
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -116,13 +115,6 @@ fn part_object(folder: &str, index: impl Display) -> String {
 
 fn merged_object(folder: &str) -> String {
     format!("{folder}/merged")
-}
-
-fn escape_like(value: &str) -> String {
-    value
-        .replace('\\', r"\\")
-        .replace('%', r"\%")
-        .replace('_', r"\_")
 }
 
 fn entry_identity(identity: &EntryIdentity) -> Cond {
@@ -991,10 +983,7 @@ impl Storage {
                 })
             })
         };
-        let prefix = |key: &str| {
-            Expr::col(CacheEntries::Key)
-                .like(LikeExpr::new(format!("{}%", escape_like(key))).escape('\\'))
-        };
+        let prefix = |key: &str| self.db.dialect.starts_with(CacheEntries::Key, key);
         let of_query = |select: &mut SelectStatement| {
             select
                 .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
