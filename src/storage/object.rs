@@ -19,7 +19,7 @@ use tokio::io::AsyncWriteExt as _;
 
 use super::adapter::{
     ByteStream, DownloadStream, Extent, RangeRequest, ReadError, StorageDeletion, StorageFolder,
-    StorageObject, UploadKind, clamp_range,
+    UploadKind, clamp_range,
 };
 use crate::config::{AzBlobAuth, StorageConfig};
 use crate::error::{Failure, Result};
@@ -425,24 +425,11 @@ impl ObjectAdapter {
         self.delete_prefix(&self.path(folder)).await
     }
 
-    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<StorageObject>> {
-        let folder = self.path(folder);
+    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<u64>> {
         self.store
-            .list(Some(&folder))
+            .list(Some(&self.path(folder)))
             .map_err(Failure::from)
-            .map_ok(|object| StorageObject {
-                name: object
-                    .location
-                    .prefix_match(&folder)
-                    .map(|parts| {
-                        parts
-                            .map(|part| part.as_ref().to_owned())
-                            .collect::<Vec<_>>()
-                            .join("/")
-                    })
-                    .unwrap_or_default(),
-                bytes: object.size,
-            })
+            .map_ok(|object| object.size)
             .try_collect()
             .await
     }

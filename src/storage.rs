@@ -611,10 +611,6 @@ impl Storage {
                         Uploads::Id,
                         Uploads::Key,
                         Uploads::Version,
-                        Uploads::Scope,
-                        Uploads::RepoId,
-                        Uploads::CreatedAt,
-                        Uploads::LastPartUploadedAt,
                         Uploads::StartedPartUploadCount,
                         Uploads::FinishedPartUploadCount,
                         Uploads::FolderName,
@@ -653,7 +649,7 @@ impl Storage {
         }
         let size_bytes = parts
             .iter()
-            .fold(0_u64, |total, part| total.saturating_add(part.bytes));
+            .fold(0_u64, |total, bytes| total.saturating_add(*bytes));
         let location = StorageLocation {
             id: uuid::Uuid::new_v4().to_string(),
             folder_name: upload.folder_name.clone(),
@@ -999,43 +995,39 @@ impl Storage {
                 .to_owned()
         };
 
+        let Some(first_scope) = query.scopes.first() else {
+            return Ok(None);
+        };
         // The common hit, the primary key in the first scope, straight from the key index.
-        if let Some(scope) = query.scopes.first() {
-            let exact = select_entries()
-                .and_where(Expr::col(CacheEntries::Key).eq(query.primary_key.as_str()))
-                .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
-                .and_where(Expr::col(CacheEntries::Scope).eq(scope.as_str()))
-                .and_where(Expr::col(CacheEntries::RepoId).eq(query.repo_id.as_str()))
-                .order_by(CacheEntries::UpdatedAt, Order::Desc)
-                .limit(1)
-                .to_owned();
-            if let Some(entry) = self.db.optional(&self.db.reads, &exact).await? {
-                return Ok(Some(CacheEntryMatch {
-                    entry,
-                    match_type: MatchType::ExactPrimary,
-                }));
-            }
+        let primary = select_entries()
+            .and_where(Expr::col(CacheEntries::Key).eq(query.primary_key.as_str()))
+            .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
+            .and_where(Expr::col(CacheEntries::Scope).eq(first_scope.as_str()))
+            .and_where(Expr::col(CacheEntries::RepoId).eq(query.repo_id.as_str()))
+            .order_by(CacheEntries::UpdatedAt, Order::Desc)
+            .limit(1)
+            .to_owned();
+        if let Some(entry) = self.db.optional(&self.db.reads, &primary).await? {
+            return Ok(Some(CacheEntryMatch {
+                entry,
+                match_type: MatchType::ExactPrimary,
+            }));
         }
 
         // Everything else in one query: each row ranks by the first candidate it satisfies.
-        let mut rank: Option<CaseStatement> = None;
-        for (position, (scope, _, key, exact)) in candidates().enumerate() {
-            let condition = Cond::all()
-                .add(Expr::col(CacheEntries::Scope).eq(scope.as_str()))
-                .add(if exact {
-                    Expr::col(CacheEntries::Key).eq(key)
-                } else {
-                    prefix(key)
-                });
-            let position = i64::try_from(position).unwrap_or(i64::MAX);
-            rank = Some(match rank {
-                None => Expr::case(condition, position),
-                Some(rank) => rank.case(condition, position),
-            });
-        }
-        let Some(rank) = rank else {
-            return Ok(None);
-        };
+        let rank = candidates().enumerate().fold(
+            CaseStatement::new(),
+            |rank, (position, (scope, _, key, exact))| {
+                let condition = Cond::all()
+                    .add(Expr::col(CacheEntries::Scope).eq(scope.as_str()))
+                    .add(if exact {
+                        Expr::col(CacheEntries::Key).eq(key)
+                    } else {
+                        prefix(key)
+                    });
+                rank.case(condition, i64::try_from(position).unwrap_or(i64::MAX))
+            },
+        );
         let ranked = of_query(
             select_entries()
                 .expr_as(rank.finally(i64::MAX), Alias::new("matchRank"))

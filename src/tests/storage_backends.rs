@@ -13,8 +13,7 @@ async fn folder_operations_do_not_match_sibling_prefixes() {
     put(adapter, "abc123/merged", b"bb").await;
 
     let objects = adapter.list_folder("abc").await.unwrap();
-    assert_eq!(objects.len(), 1, "only the folder's own object");
-    assert_eq!(objects[0].bytes, 1, "its size");
+    assert_eq!(objects, [1], "only the folder's own object");
     let deleted = adapter.delete_folder("abc").await.unwrap();
     assert_eq!(
         (deleted.objects, deleted.bytes),

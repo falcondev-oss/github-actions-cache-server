@@ -512,10 +512,6 @@ pub(crate) struct Upload {
     pub(crate) id: i64,
     pub(crate) key: String,
     pub(crate) version: String,
-    pub(crate) scope: String,
-    pub(crate) repo_id: String,
-    pub(crate) created_at: i64,
-    pub(crate) last_part_uploaded_at: Option<i64>,
     pub(crate) started_part_upload_count: i64,
     pub(crate) finished_part_upload_count: i64,
     #[sqlx(try_from = "Utf8Text")]

@@ -11,7 +11,7 @@ use tokio_util::io::ReaderStream;
 
 use super::adapter::{
     ByteStream, DownloadStream, Extent, FilesystemUsage, RangeRequest, ReadError, StorageDeletion,
-    StorageFolder, StorageObject, clamp_range,
+    StorageFolder, clamp_range,
 };
 use crate::error::{Failure, Result};
 
@@ -221,7 +221,7 @@ impl FilesystemAdapter {
         })
     }
 
-    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<StorageObject>> {
+    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<u64>> {
         let mut entries = match fs::read_dir(self.safe_path(folder)?).await {
             Ok(entries) => entries,
             Err(error) if is_not_found(&error) => return Ok(Vec::new()),
@@ -232,10 +232,7 @@ impl FilesystemAdapter {
             if entry.file_type().await?.is_dir() {
                 continue;
             }
-            objects.push(StorageObject {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                bytes: fs::metadata(entry.path()).await?.len(),
-            });
+            objects.push(fs::metadata(entry.path()).await?.len());
         }
         Ok(objects)
     }

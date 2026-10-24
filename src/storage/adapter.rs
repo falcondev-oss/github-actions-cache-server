@@ -96,13 +96,6 @@ pub(crate) enum ReadError {
     Failed(#[from] Failure),
 }
 
-/// An object below a folder, named relative to it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StorageObject {
-    pub(crate) name: String,
-    pub(crate) bytes: u64,
-}
-
 /// A top-level folder with its aggregated contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StorageFolder {
@@ -218,8 +211,8 @@ impl Adapter {
         }
     }
 
-    /// Objects under a folder, named relative to it.
-    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<StorageObject>> {
+    /// Sizes of the objects under a folder.
+    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<u64>> {
         match self {
             Self::Filesystem(adapter) => adapter.list_folder(folder).await,
             Self::Object(adapter) => adapter.list_folder(folder).await,

@@ -325,19 +325,11 @@ impl Cleanup {
                 Expr::col((CacheEntries::Table, CacheEntries::LocationId))
                     .equals((StorageLocations::Table, StorageLocations::Id)),
             )
+            .and_where(updated().lt(cutoff))
             .cond_where(
                 Cond::any()
-                    .add(
-                        Cond::all()
-                            .add(last_downloaded().is_null())
-                            .add(updated().lt(cutoff)),
-                    )
-                    .add(
-                        Cond::all()
-                            .add(last_downloaded().is_not_null())
-                            .add(last_downloaded().lt(cutoff))
-                            .add(updated().lt(cutoff)),
-                    ),
+                    .add(last_downloaded().is_null())
+                    .add(last_downloaded().lt(cutoff)),
             )
             .and_where(no_active_reader_lease(None))
             .limit(PAGE_SIZE.into())

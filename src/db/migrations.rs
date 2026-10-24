@@ -10,7 +10,7 @@ use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use sea_query::{Expr, Order, Query};
 use sea_query_binder::SqlxBinder as _;
-use sqlx::{Acquire as _, AnyConnection, FromRow, Row as _};
+use sqlx::{Acquire as _, AnyConnection, FromRow};
 
 use super::{Db, Dialect, EntryIdentity, Uploads};
 use crate::error::{Failure, Result};
@@ -425,17 +425,14 @@ async fn run(connection: &mut AnyConnection, dialect: Dialect, count: usize) -> 
         .await?;
     }
 
-    let executed = sqlx::query(&format!(
+    let executed: Vec<String> = sqlx::query_scalar(&format!(
         "select {} from {} order by {}",
         q("name"),
         q("kysely_migration"),
         q("name"),
     ))
     .fetch_all(&mut *connection)
-    .await?
-    .iter()
-    .map(|row| row.try_get::<String, _>(0))
-    .collect::<Result<Vec<_>, _>>()?;
+    .await?;
 
     for (index, name) in executed.iter().enumerate() {
         if MIGRATIONS
@@ -524,13 +521,10 @@ mod tests {
     }
 
     async fn recorded_migrations(db: &Db) -> Vec<String> {
-        sqlx::query("select name from kysely_migration order by name")
+        sqlx::query_scalar("select name from kysely_migration order by name")
             .fetch_all(&db.pool)
             .await
             .unwrap()
-            .iter()
-            .map(|row| row.try_get(0).unwrap())
-            .collect()
     }
 
     /// Two uploads for one reservation, which the old schema allowed, and another one.
