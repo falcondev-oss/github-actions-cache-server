@@ -1023,7 +1023,7 @@ impl Storage {
             .order_by(CacheEntries::UpdatedAt, Order::Desc)
             .limit(1)
             .to_owned();
-        self.db.optional(&self.db.pool, &select).await
+        self.db.optional(&self.db.reads, &select).await
     }
 
     /// Matches a cache entry and hands out a URL to download it from.
@@ -1044,7 +1044,7 @@ impl Storage {
             let location: Option<StorageLocation> = self
                 .db
                 .optional(
-                    &self.db.pool,
+                    &self.db.reads,
                     select_locations().and_where(
                         Expr::col((StorageLocations::Table, StorageLocations::Id))
                             .eq(entry.location_id.as_str()),

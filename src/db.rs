@@ -53,10 +53,22 @@ impl Dialect {
     }
 }
 
-/// Connection pool plus the dialect its queries are rendered for.
+/// SQLite read connections; WAL readers don't block each other or the writer.
+const READ_CONNECTIONS: u32 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    ReadWrite,
+    ReadOnly,
+}
+
+/// Connection pools plus the dialect their queries are rendered for.
 #[derive(Debug, Clone)]
 pub(crate) struct Db {
     pub(crate) pool: AnyPool,
+    /// For reads outside a transaction. On SQLite these are separate read-only connections,
+    /// which WAL lets run alongside the single writer; elsewhere it is `pool`.
+    pub(crate) reads: AnyPool,
     pub(crate) dialect: Dialect,
 }
 
@@ -75,16 +87,22 @@ impl Db {
     /// Connects without migrating.
     async fn open(config: &DbConfig) -> Result<Self> {
         sqlx::any::install_default_drivers();
-        let (url, dialect, max_connections) = match config {
+        let (url, dialect, max_connections, read_url) = match config {
             DbConfig::Postgres(PostgresConnection::Url(url)) => {
-                (url.clone(), Dialect::Postgres, 10)
+                (url.clone(), Dialect::Postgres, 10, None)
             }
             DbConfig::Postgres(PostgresConnection::Params(params)) => (
                 server_url(Dialect::Postgres, params)?,
                 Dialect::Postgres,
                 10,
+                None,
             ),
-            DbConfig::Mysql(params) => (server_url(Dialect::Mysql, params)?, Dialect::Mysql, 10),
+            DbConfig::Mysql(params) => (
+                server_url(Dialect::Mysql, params)?,
+                Dialect::Mysql,
+                10,
+                None,
+            ),
             DbConfig::Sqlite { path } => {
                 if let Some(parent) = path
                     .parent()
@@ -96,13 +114,34 @@ impl Db {
                     .filename(path)
                     .create_if_missing(true)
                     .to_url_lossy();
+                let read_url = SqliteConnectOptions::new()
+                    .filename(path)
+                    .read_only(true)
+                    .to_url_lossy();
                 // SQLite allows one writer; a single connection serializes access the way the
                 // database expects instead of surfacing `SQLITE_BUSY` under load.
-                (url.into(), Dialect::Sqlite, 1)
+                (url.into(), Dialect::Sqlite, 1, Some(read_url.to_string()))
             }
         };
         let options = AnyConnectOptions::from_str(&url)?;
-        let pool = AnyPoolOptions::new()
+        let pool = Self::pool_options(dialect, max_connections, Access::ReadWrite)
+            .connect_with(options)
+            .await?;
+        let reads = match read_url {
+            // Lazy: the writer has to create the file and switch it to WAL first.
+            Some(read_url) => Self::pool_options(dialect, READ_CONNECTIONS, Access::ReadOnly)
+                .connect_lazy_with(AnyConnectOptions::from_str(&read_url)?),
+            None => pool.clone(),
+        };
+        Ok(Self {
+            pool,
+            reads,
+            dialect,
+        })
+    }
+
+    fn pool_options(dialect: Dialect, max_connections: u32, access: Access) -> AnyPoolOptions {
+        AnyPoolOptions::new()
             .max_connections(max_connections)
             // A local SQLite file can't go stale, and pinging it on every checkout doubles the
             // queue on its single connection.
@@ -112,23 +151,22 @@ impl Db {
                     // Keys match exactly, like GitHub's; SQLite's `like` ignores ASCII case unless
                     // told otherwise, on every connection.
                     if dialect == Dialect::Sqlite {
-                        // WAL commits append to the log and sync only at checkpoints, instead of
-                        // syncing a rollback journal and the database on every commit. A crash
-                        // can lose the last commits, never consistency; a cache can afford that.
-                        for pragma in [
-                            "pragma case_sensitive_like = on",
-                            "pragma journal_mode = wal",
-                            "pragma synchronous = normal",
-                        ] {
+                        sqlx::query("pragma case_sensitive_like = on")
+                            .execute(&mut *connection)
+                            .await?;
+                    }
+                    // WAL commits append to the log and sync only at checkpoints, instead of
+                    // syncing a rollback journal and the database on every commit. A crash can
+                    // lose the last commits, never consistency; a cache can afford that. The
+                    // journal mode is stored in the file, so read-only connections inherit it.
+                    if dialect == Dialect::Sqlite && access == Access::ReadWrite {
+                        for pragma in ["pragma journal_mode = wal", "pragma synchronous = normal"] {
                             sqlx::query(pragma).execute(&mut *connection).await?;
                         }
                     }
                     Ok(())
                 })
             })
-            .connect_with(options)
-            .await?;
-        Ok(Self { pool, dialect })
     }
 
     fn sql(&self, query: &impl SqlxBinder) -> (String, sea_query_binder::SqlxValues) {
