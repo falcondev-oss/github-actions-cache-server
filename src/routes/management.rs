@@ -396,11 +396,14 @@ async fn delete_cache_entry(
 async fn delete_cache_entries(
     State(state): State<AppState>,
     RawQuery(raw): RawQuery,
-    body: Option<Json<EntryFilter>>,
+    body: axum::body::Bytes,
 ) -> Result<(), ApiError> {
-    let filter = match body {
-        Some(Json(filter)) => filter,
-        None => EntryFilter::parse(&Params::parse(raw.as_deref()))?,
+    // Read whatever the Content-Type, like the original server.
+    let filter = if body.is_empty() {
+        EntryFilter::parse(&Params::parse(raw.as_deref()))?
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|error| ApiError::bad_request(format!("Input validation failed: {error}")))?
     };
     let db = &state.storage.db;
     db.execute(

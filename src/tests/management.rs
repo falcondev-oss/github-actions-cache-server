@@ -40,11 +40,11 @@ async fn bulk_deletion_respects_every_filter() {
         "a null filter is rejected, not dropped"
     );
 
-    // The original server read the filters from a JSON body only.
+    // The original server read the filters from a JSON body only, whatever its Content-Type.
     let deleted = http
         .delete(&entries)
         .header("x-api-key", "secret")
-        .json(&serde_json::json!({ "key": "same-key", "repoId": "123" }))
+        .body(r#"{ "key": "same-key", "repoId": "123" }"#)
         .send()
         .await
         .unwrap();

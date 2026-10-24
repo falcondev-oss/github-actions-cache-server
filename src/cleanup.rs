@@ -71,8 +71,9 @@ fn next_run<Tz: TimeZone>(now: &DateTime<Tz>, period_minutes: u32) -> DateTime<T
         .find_map(
             |boundary| match now.timezone().from_local_datetime(&boundary) {
                 LocalResult::Single(time) => Some(time).filter(|time| time > now),
+                // `Local` lists the two occurrences latest first.
                 LocalResult::Ambiguous(first, second) => {
-                    [first, second].into_iter().find(|time| time > now)
+                    [first, second].into_iter().filter(|time| time > now).min()
                 }
                 LocalResult::None => None,
             },

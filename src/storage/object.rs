@@ -47,6 +47,8 @@ pub(crate) struct ObjectAdapter {
     prefix: Path,
     /// Streams Parts of a known length to presigned URLs.
     http: reqwest::Client,
+    /// How long a presigned upload may go without sending a byte or getting its response.
+    idle_timeout: Option<Duration>,
     /// Headers a presigned single-request upload needs on this backend.
     put_headers: &'static [(&'static str, &'static str)],
     /// Objects recently seen to exist, so lookups skip a request each. Objects never change, and
@@ -63,13 +65,16 @@ fn client_options(read_timeout: Duration) -> ClientOptions {
     }
 }
 
-/// The client for presigned uploads, with the store's read timeout.
-fn presigned_client(read_timeout: Duration) -> reqwest::Result<reqwest::Client> {
-    let builder = reqwest::Client::builder();
-    if read_timeout.is_zero() {
-        builder.build()
-    } else {
-        builder.read_timeout(read_timeout).build()
+/// Waits until `activity` has not moved for `timeout`.
+async fn idle(activity: &Mutex<Instant>, timeout: Duration) {
+    loop {
+        let last = *activity.lock().unwrap_or_else(PoisonError::into_inner);
+        match last.checked_add(timeout) {
+            Some(deadline) if deadline > Instant::now() => {
+                tokio::time::sleep_until(deadline.into()).await;
+            }
+            Some(_) | None => return,
+        }
     }
 }
 
@@ -215,7 +220,8 @@ impl ObjectAdapter {
             store,
             signer,
             prefix,
-            http: presigned_client(read_timeout)?,
+            http: reqwest::Client::new(),
+            idle_timeout: (!read_timeout.is_zero()).then_some(read_timeout),
             put_headers,
             known: Mutex::default(),
         })
@@ -328,6 +334,14 @@ impl ObjectAdapter {
     }
 
     async fn put_presigned(&self, url: url::Url, stream: ByteStream, length: u64) -> Result<()> {
+        // Like a socket timeout, it measures silence rather than the whole upload.
+        let activity = Arc::new(Mutex::new(Instant::now()));
+        let stream = {
+            let activity = Arc::clone(&activity);
+            stream.inspect(move |_| {
+                *activity.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+            })
+        };
         let mut request = self
             .http
             .put(url)
@@ -336,7 +350,15 @@ impl ObjectAdapter {
         for (name, value) in self.put_headers {
             request = request.header(*name, *value);
         }
-        let response = request.send().await?;
+        let response = match self.idle_timeout {
+            Some(timeout) => tokio::select! {
+                response = request.send() => response?,
+                () = idle(&activity, timeout) => {
+                    return Err(Failure::msg("storage stopped responding to an upload"));
+                }
+            },
+            None => request.send().await?,
+        };
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();

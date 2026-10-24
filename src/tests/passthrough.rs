@@ -99,9 +99,12 @@ async fn follows_redirects_of_the_results_origin() {
     let origin = axum::Router::new()
         .route(
             "/moved",
-            axum::routing::get(|| async { axum::response::Redirect::temporary("/target") }),
+            axum::routing::put(|| async { axum::response::Redirect::temporary("/target") }),
         )
-        .route("/target", axum::routing::get(|| async { "arrived" }));
+        .route(
+            "/target",
+            axum::routing::put(|body: String| async move { body }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin_url = format!("http://{}", listener.local_addr().unwrap());
     drop(tokio::spawn(
@@ -113,10 +116,11 @@ async fn follows_redirects_of_the_results_origin() {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap()
-        .get(format!("{}/moved", server.url))
+        .put(format!("{}/moved", server.url))
+        .body("payload")
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 200, "followed");
-    assert_eq!(response.text().await.unwrap(), "arrived", "target body");
+    assert_eq!(response.status(), 200, "followed with the body");
+    assert_eq!(response.text().await.unwrap(), "payload", "body replayed");
 }
