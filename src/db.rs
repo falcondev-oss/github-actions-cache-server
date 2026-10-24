@@ -135,10 +135,16 @@ impl Db {
                     tokio::fs::create_dir_all(parent).await?;
                 }
                 // An in-memory database lives in its one connection, so it has no readers.
-                let read_url = (path.as_os_str() != IN_MEMORY).then(|| sqlite_url(path, "ro"));
+                let read_url =
+                    (path.as_os_str() != IN_MEMORY).then(|| sqlite_url(path, Access::ReadOnly));
                 // SQLite allows one writer; a single connection serializes access the way the
                 // database expects instead of surfacing `SQLITE_BUSY` under load.
-                (sqlite_url(path, "rwc"), Dialect::Sqlite, 1, read_url)
+                (
+                    sqlite_url(path, Access::ReadWrite),
+                    Dialect::Sqlite,
+                    1,
+                    read_url,
+                )
             }
         };
         let options = AnyConnectOptions::from_str(&url)?;
@@ -248,12 +254,16 @@ const IN_MEMORY: &str = ":memory:";
 
 /// A SQLite URL; sqlx decodes `%` in the filename. (`to_url_lossy` keeps a literal `%` and panics
 /// on `:memory:`.)
-fn sqlite_url(path: &Path, mode: &str) -> String {
+fn sqlite_url(path: &Path, access: Access) -> String {
     const FILENAME: &AsciiSet = &CONTROLS.add(b' ').add(b'#').add(b'%').add(b'?');
     let filename = path.to_string_lossy();
     if filename == IN_MEMORY {
         return format!("sqlite:{IN_MEMORY}");
     }
+    let mode = match access {
+        Access::ReadWrite => "rwc",
+        Access::ReadOnly => "ro",
+    };
     format!(
         "sqlite:{}?mode={mode}",
         utf8_percent_encode(&filename, FILENAME)
@@ -699,7 +709,7 @@ mod tests {
     fn sqlite_urls_keep_filenames() {
         use sqlx::sqlite::SqliteConnectOptions;
         let filename = |path: &str| {
-            SqliteConnectOptions::from_str(&sqlite_url(Path::new(path), "rwc"))
+            SqliteConnectOptions::from_str(&sqlite_url(Path::new(path), Access::ReadWrite))
                 .unwrap()
                 .get_filename()
                 .to_owned()
@@ -715,7 +725,8 @@ mod tests {
             "relative"
         );
         assert!(
-            SqliteConnectOptions::from_str(&sqlite_url(Path::new(IN_MEMORY), "rwc")).is_ok(),
+            SqliteConnectOptions::from_str(&sqlite_url(Path::new(IN_MEMORY), Access::ReadWrite))
+                .is_ok(),
             "in memory"
         );
     }
