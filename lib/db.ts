@@ -141,7 +141,10 @@ export const getDatabase = createSingletonPromise(async () => {
               max: 10,
             },
       )
-      await pool.connect()
+      // Fail fast on bad connection settings, then hand the client back: a
+      // checked-out client keeps `pool.end()` (Kysely's `destroy()`) waiting forever.
+      const probe = await pool.connect()
+      probe.release()
 
       return new PostgresDialect({
         pool,
