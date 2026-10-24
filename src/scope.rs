@@ -127,6 +127,9 @@ pub(crate) struct TokenVerifier {
 
 impl TokenVerifier {
     pub(crate) fn new(config: &Config) -> Result<Self> {
+        if config.skip_token_validation {
+            tracing::warn!("token validation is disabled; this must not be used in production");
+        }
         let issuer = config.actions_token_issuer.clone();
         Ok(Self {
             fallback_jwks: RemoteJwks::new(format!("{issuer}/.well-known/jwks")),
@@ -189,7 +192,6 @@ impl TokenVerifier {
 
     async fn claims(&self, token: &str) -> Result<Claims> {
         if self.skip_validation {
-            tracing::warn!("token validation is disabled; this must not be used in production");
             return Ok(jsonwebtoken::dangerous::insecure_decode::<Claims>(token)?.claims);
         }
         let header = jsonwebtoken::decode_header(token)?;
