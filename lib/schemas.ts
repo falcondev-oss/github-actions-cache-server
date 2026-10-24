@@ -87,6 +87,7 @@ export const envBaseSchema = type({
   'DEBUG?': 'unknown',
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',
   'EAGER_MERGE': 'boolean = false',
+  'MAX_CONCURRENT_MERGES': 'number.integer >= 1 = 16',
   'BENCHMARK': 'boolean = false',
   'SKIP_TOKEN_VALIDATION': 'boolean = false',
   'MANAGEMENT_API_KEY?': 'string',
