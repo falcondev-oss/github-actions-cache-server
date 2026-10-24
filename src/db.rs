@@ -112,9 +112,16 @@ impl Db {
                     // Keys match exactly, like GitHub's; SQLite's `like` ignores ASCII case unless
                     // told otherwise, on every connection.
                     if dialect == Dialect::Sqlite {
-                        sqlx::query("pragma case_sensitive_like = on")
-                            .execute(connection)
-                            .await?;
+                        // WAL commits append to the log and sync only at checkpoints, instead of
+                        // syncing a rollback journal and the database on every commit. A crash
+                        // can lose the last commits, never consistency; a cache can afford that.
+                        for pragma in [
+                            "pragma case_sensitive_like = on",
+                            "pragma journal_mode = wal",
+                            "pragma synchronous = normal",
+                        ] {
+                            sqlx::query(pragma).execute(&mut *connection).await?;
+                        }
                     }
                     Ok(())
                 })
