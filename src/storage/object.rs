@@ -63,6 +63,16 @@ fn client_options(read_timeout: Duration) -> ClientOptions {
     }
 }
 
+/// The client for presigned uploads, with the store's read timeout.
+fn presigned_client(read_timeout: Duration) -> reqwest::Result<reqwest::Client> {
+    let builder = reqwest::Client::builder();
+    if read_timeout.is_zero() {
+        builder.build()
+    } else {
+        builder.read_timeout(read_timeout).build()
+    }
+}
+
 /// Configures `builder` from a connection string. `allow_http` lives in the client options, so they
 /// must already be set: replacing them afterwards would turn plain-HTTP endpoints back off.
 fn azure_from_connection_string(
@@ -113,6 +123,7 @@ impl ObjectAdapter {
     /// Builds the adapter below a custom prefix, which isolates tests sharing a bucket.
     pub(crate) async fn with_prefix(config: &StorageConfig, prefix: Path) -> Result<Self> {
         let mut put_headers: &'static [(&'static str, &'static str)] = &[];
+        let mut read_timeout = READ_TIMEOUT;
         let (store, signer): (Arc<dyn ObjectStore>, Arc<dyn Signer>) = match config {
             StorageConfig::S3 {
                 bucket,
@@ -122,6 +133,7 @@ impl ObjectAdapter {
                 access_key_id,
                 secret_access_key,
             } => {
+                read_timeout = *socket_timeout;
                 let mut builder = AmazonS3Builder::from_env()
                     .with_bucket_name(bucket)
                     .with_region(region)
@@ -203,7 +215,7 @@ impl ObjectAdapter {
             store,
             signer,
             prefix,
-            http: reqwest::Client::new(),
+            http: presigned_client(read_timeout)?,
             put_headers,
             known: Mutex::default(),
         })

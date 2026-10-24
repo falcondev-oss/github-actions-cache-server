@@ -1232,19 +1232,27 @@ struct EvictionCandidate {
 }
 
 /// Takes the Merge Lease and records the Merge as started; `None` while another worker holds it.
+/// Takes the Merge Lease of a location that is not merged yet. Checked under the lease, so a
+/// caller holding a stale snapshot cannot redo (and on failure roll back) a completed Merge.
 async fn claim_merge(db: &Db, id: &str) -> Result<Option<String>> {
     let Some(token) = acquire_merge_lease(db, id).await? else {
         return Ok(None);
     };
-    db.execute(
-        &db.pool,
-        Query::update()
-            .table(StorageLocations::Table)
-            .value(StorageLocations::MergeStartedAt, now_ms())
-            .and_where(Expr::col(StorageLocations::Id).eq(id)),
-    )
-    .await?;
-    Ok(Some(token))
+    let started = db
+        .execute(
+            &db.pool,
+            Query::update()
+                .table(StorageLocations::Table)
+                .value(StorageLocations::MergeStartedAt, now_ms())
+                .and_where(Expr::col(StorageLocations::Id).eq(id))
+                .and_where(Expr::col(StorageLocations::MergedAt).is_null()),
+        )
+        .await;
+    if matches!(started, Ok(1)) {
+        return Ok(Some(token));
+    }
+    release_merge_lease(db, id, &token).await?;
+    started.map(|_| None)
 }
 
 /// Writes the merged object under the lease `token`, then marks the Merge complete.
@@ -1379,6 +1387,40 @@ mod tests {
             (slow, fast),
             (CHUNKS * 64 * 1024, CHUNKS * 64 * 1024),
             "both get every byte"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merged_location_is_not_claimed_again() {
+        let server = crate::tests::harness::TestServer::start().await;
+        let db = server.db();
+        let location = crate::tests::harness::save_parts(
+            server.storage(),
+            "merged",
+            &[b"a".to_vec(), b"b".to_vec()],
+        )
+        .await;
+        db.execute(
+            &db.pool,
+            Query::update()
+                .table(StorageLocations::Table)
+                .value(StorageLocations::MergedAt, now_ms())
+                .and_where(Expr::col(StorageLocations::Id).eq(location.id.as_str())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            claim_merge(db, &location.id).await.unwrap(),
+            None,
+            "not claimed"
+        );
+        assert!(
+            acquire_merge_lease(db, &location.id)
+                .await
+                .unwrap()
+                .is_some(),
+            "the lease was released"
         );
     }
 

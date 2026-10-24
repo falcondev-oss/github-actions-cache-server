@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
-use jsonwebtoken::jwk::{Jwk, JwkSet};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet, KeyOperations, PublicKeyUse};
+use jsonwebtoken::{Algorithm, AlgorithmFamily, DecodingKey, Header, Validation};
 use serde::Deserialize;
 use tokio::sync::{Mutex, OnceCell};
 
@@ -80,25 +80,22 @@ impl RemoteJwks {
         })
     }
 
-    async fn key(&self, http: &reqwest::Client, kid: Option<&str>) -> Result<Jwk> {
-        let find = |set: &JwkSet| {
-            kid.map_or_else(
-                || match set.keys.as_slice() {
-                    [only] => Some(only.clone()),
-                    _ => None,
-                },
-                |kid| set.find(kid).cloned(),
-            )
+    /// The keys that may have signed a token with `header`.
+    async fn keys(&self, http: &reqwest::Client, header: &Header) -> Result<Vec<Jwk>> {
+        let select = |set: &JwkSet| {
+            set.keys
+                .iter()
+                .filter(|jwk| selects(jwk, header))
+                .cloned()
+                .collect::<Vec<_>>()
         };
-        let missing = || Failure::msg("no matching key in JWKS");
         if let Some((set, fetched_at)) = self.cached.lock().await.as_ref() {
-            let key = find(set);
-            if let Some(key) = key.clone().filter(|_| fetched_at.elapsed() < JWKS_MAX_AGE) {
-                return Ok(key);
-            }
+            let keys = select(set);
             // An unknown key refetches the set, but at most once per cooldown.
-            if fetched_at.elapsed() < JWKS_COOLDOWN {
-                return key.ok_or_else(missing);
+            if (!keys.is_empty() && fetched_at.elapsed() < JWKS_MAX_AGE)
+                || fetched_at.elapsed() < JWKS_COOLDOWN
+            {
+                return Ok(keys);
             }
         }
         let set: JwkSet = http
@@ -108,10 +105,36 @@ impl RemoteJwks {
             .error_for_status()?
             .json()
             .await?;
-        let key = find(&set);
+        let keys = select(&set);
         *self.cached.lock().await = Some((set, Instant::now()));
-        key.ok_or_else(missing)
+        Ok(keys)
     }
+}
+
+/// Whether `jwk` may verify a token with `header`, selected like the original server's `jose`: by
+/// `kid`, key type and `alg`, and only among keys meant for verifying signatures.
+fn selects(jwk: &Jwk, header: &Header) -> bool {
+    let common = &jwk.common;
+    matches!(
+        (&jwk.algorithm, header.alg.family()),
+        (AlgorithmParameters::RSA(_), AlgorithmFamily::Rsa)
+            | (AlgorithmParameters::EllipticCurve(_), AlgorithmFamily::Ec)
+            | (AlgorithmParameters::OctetKeyPair(_), AlgorithmFamily::Ed)
+    ) && header
+        .kid
+        .as_ref()
+        .is_none_or(|kid| common.key_id.as_ref() == Some(kid))
+        && common
+            .public_key_use
+            .as_ref()
+            .is_none_or(|key_use| *key_use == PublicKeyUse::Signature)
+        && common
+            .key_operations
+            .as_ref()
+            .is_none_or(|operations| operations.contains(&KeyOperations::Verify))
+        && common.key_algorithm.is_none_or(|algorithm| {
+            Algorithm::try_from(algorithm).is_ok_and(|algorithm| algorithm == header.alg)
+        })
 }
 
 /// Verifies runtime tokens against the configured issuer.
@@ -195,35 +218,27 @@ impl TokenVerifier {
             return Ok(jsonwebtoken::dangerous::insecure_decode::<Claims>(token)?.claims);
         }
         let header = jsonwebtoken::decode_header(token)?;
-        let jwk = self
-            .jwks()
-            .await
-            .key(&self.http, header.kid.as_deref())
-            .await?;
-        let algorithm = match jwk.common.key_algorithm {
-            Some(key_algorithm) => Algorithm::try_from(key_algorithm)?,
-            None => header.alg,
-        };
-        if algorithm != header.alg
-            || matches!(
-                algorithm,
-                Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512
-            )
-        {
-            return Err(Failure::msg(
-                "token algorithm does not match the signing key",
-            ));
-        }
-        let key = DecodingKey::from_jwk(&jwk)?;
+        let keys = self.jwks().await.keys(&self.http, &header).await?;
         // Like the original server's `jose`: the issuer is required, `exp` and `nbf` are checked
         // when present without leeway, and the audience is not checked.
-        let mut validation = Validation::new(algorithm);
+        let mut validation = Validation::new(header.alg);
         validation.set_issuer(&[&self.issuer]);
         validation.set_required_spec_claims(&["iss"]);
         validation.validate_nbf = true;
         validation.validate_aud = false;
         validation.leeway = 0;
-        Ok(jsonwebtoken::decode::<Claims>(token, &key, &validation)?.claims)
+        // Without a `kid`, several keys can match; like `jose`, the first that verifies wins.
+        let mut verified = Err(Failure::msg("no matching key in JWKS"));
+        for jwk in &keys {
+            verified = DecodingKey::from_jwk(jwk)
+                .and_then(|key| jsonwebtoken::decode::<Claims>(token, &key, &validation))
+                .map(|data| data.claims)
+                .map_err(Failure::from);
+            if verified.is_ok() {
+                break;
+            }
+        }
+        verified
     }
 
     /// Authorizes a request from its `Authorization: Bearer` runtime token.
@@ -282,6 +297,55 @@ mod tests {
         ])
         .unwrap();
         TokenVerifier::new(&config).unwrap()
+    }
+
+    #[test]
+    fn selects_keys_like_jose() {
+        let jwk = |extra: serde_json::Value| {
+            let mut key = serde_json::json!({ "kty": "RSA", "n": "AQAB", "e": "AQAB" });
+            key.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<Jwk>(key).unwrap()
+        };
+        let ec = serde_json::from_value::<Jwk>(
+            serde_json::json!({ "kty": "EC", "crv": "P-256", "x": "AA", "y": "AA" }),
+        )
+        .unwrap();
+        let rs256 = Header::new(Algorithm::RS256);
+        let with_kid = Header {
+            kid: Some("k".to_owned()),
+            ..Header::new(Algorithm::RS256)
+        };
+
+        assert!(
+            selects(&jwk(serde_json::json!({})), &rs256),
+            "plain RSA key"
+        );
+        assert!(!selects(&ec, &rs256), "key type must fit the algorithm");
+        assert!(
+            !selects(&jwk(serde_json::json!({ "use": "enc" })), &rs256),
+            "encryption key"
+        );
+        assert!(
+            !selects(&jwk(serde_json::json!({ "key_ops": ["encrypt"] })), &rs256),
+            "key_ops without verify"
+        );
+        assert!(
+            !selects(&jwk(serde_json::json!({ "alg": "RS384" })), &rs256),
+            "other alg"
+        );
+        assert!(
+            !selects(&jwk(serde_json::json!({ "kid": "other" })), &with_kid),
+            "other kid"
+        );
+        assert!(
+            selects(
+                &jwk(serde_json::json!({ "kid": "k", "use": "sig", "alg": "RS256" })),
+                &with_kid
+            ),
+            "matching signing key"
+        );
     }
 
     #[tokio::test]
