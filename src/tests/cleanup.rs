@@ -202,7 +202,12 @@ async fn retention_drains_more_than_one_page() {
 #[tokio::test]
 async fn part_cleanup_waits_for_an_active_parts_download() {
     let server = TestServer::start().await;
-    let location = save_parts(server.storage(), "parts-reader", &[b"cache-data".to_vec()]).await;
+    let location = save_parts(
+        server.storage(),
+        "parts-reader",
+        &[b"cache-".to_vec(), b"data".to_vec()],
+    )
+    .await;
     let storage = server.storage();
     let merging = storage.download(&location.id, None).await.unwrap().unwrap();
     let reading_parts = storage.download(&location.id, None).await.unwrap().unwrap();
@@ -218,7 +223,7 @@ async fn part_cleanup_waits_for_an_active_parts_download() {
         .unwrap();
     assert_eq!(
         part_count(&server, &location.folder_name).await,
-        1,
+        2,
         "parts are still being read"
     );
 

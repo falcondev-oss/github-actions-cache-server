@@ -123,7 +123,7 @@ async fn ignores_ranges_of_unmerged_entries_and_pins_bytes_to_a_location() {
     let server = TestServer::start().await;
     let key = uuid::Uuid::new_v4().to_string();
     let first = save_parts(server.storage(), &key, &parts()).await;
-    let resaved = save_parts(server.storage(), &key, &[b"resaved".to_vec()]).await;
+    let resaved = save_parts(server.storage(), &key, &[b"re".to_vec(), b"saved".to_vec()]).await;
     assert_ne!(first.id, resaved.id, "a re-save gets a new location");
 
     let stale = get(&server, &first.id, Some("bytes=0-10")).await;
@@ -139,6 +139,24 @@ async fn ignores_ranges_of_unmerged_entries_and_pins_bytes_to_a_location() {
         response.bytes().await.unwrap().as_ref(),
         b"resaved",
         "whole body from parts"
+    );
+
+    let single = save_parts(server.storage(), "single", &[b"one part".to_vec()]).await;
+    let ranged = get(&server, &single.id, Some("bytes=4-7")).await;
+    assert_eq!(
+        ranged.status(),
+        206,
+        "a single Part needs no Merge to serve ranges"
+    );
+    assert_eq!(
+        header(&ranged, "content-range"),
+        Some("bytes 4-7/8".to_owned()),
+        "content-range"
+    );
+    assert_eq!(
+        ranged.bytes().await.unwrap().as_ref(),
+        b"part",
+        "ranged body"
     );
 }
 

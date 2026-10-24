@@ -117,6 +117,23 @@ fn merged_object(folder: &str) -> String {
     format!("{folder}/merged")
 }
 
+/// The one object holding all of a location's bytes, and the reader lease that protects it: the
+/// merged object, or the only Part of a single-Part location, which needs no Merge.
+fn whole_object(location: &StorageLocation) -> Option<(String, ReaderLeaseScope)> {
+    if location.merged_at.is_some() {
+        return Some((
+            merged_object(&location.folder_name),
+            ReaderLeaseScope::Storage,
+        ));
+    }
+    (location.part_count == 1 && location.parts_deleted_at.is_none()).then(|| {
+        (
+            part_object(&location.folder_name, 0),
+            ReaderLeaseScope::Parts,
+        )
+    })
+}
+
 fn entry_identity(identity: &EntryIdentity) -> Cond {
     Cond::all()
         .add(Expr::col((CacheEntries::Table, CacheEntries::Key)).eq(identity.key.as_str()))
@@ -334,11 +351,8 @@ impl Storage {
         location: &StorageLocation,
         range: Option<RangeRequest>,
     ) -> Result<DownloadStream, ReadError> {
-        if location.merged_at.is_some() {
-            return self
-                .adapter
-                .download_stream(&merged_object(&location.folder_name), range)
-                .await;
+        if let Some((object, _)) = whole_object(location) {
+            return self.adapter.download_stream(&object, range).await;
         }
         self.ensure_parts_exist(location).await?;
         // No range: an unmerged entry is concatenated from its parts as it is read, so there is
@@ -438,63 +452,35 @@ impl Storage {
         location: &StorageLocation,
         write: BoxFuture<'static, Result<()>>,
     ) -> Result<bool> {
-        let Some(token) = acquire_merge_lease(&self.db, &location.id).await? else {
+        let Some(token) = claim_merge(&self.db, &location.id).await? else {
             return Ok(false);
         };
-        self.db
-            .execute(
-                &self.db.pool,
-                Query::update()
-                    .table(StorageLocations::Table)
-                    .value(StorageLocations::MergeStartedAt, now_ms())
-                    .and_where(Expr::col(StorageLocations::Id).eq(location.id.as_str())),
-            )
-            .await?;
+        drop(self.merges.spawn(run_merge(
+            self.db.clone(),
+            location.id.clone(),
+            token,
+            write,
+        )));
+        Ok(true)
+    }
 
-        let db = self.db.clone();
-        let id = location.id.clone();
+    /// Like [`Self::start_merge`], but claims the Merge Lease in the background too, for callers
+    /// that don't wait on the Merge.
+    fn start_merge_detached(
+        &self,
+        location: &StorageLocation,
+        write: BoxFuture<'static, Result<()>>,
+    ) {
+        let (db, id) = (self.db.clone(), location.id.clone());
         drop(self.merges.spawn(async move {
-            let renewal = {
-                let (db, id, token) = (db.clone(), id.clone(), token.clone());
-                keep_renewing(move || {
-                    let (db, id, token) = (db.clone(), id.clone(), token.clone());
-                    async move {
-                        // A transient failure must not end the renewal: the merged object would
-                        // then be thrown away once the lease expires mid-merge.
-                        renew_merge_lease(&db, &id, &token).await.or_else(|error| {
-                            tracing::warn!(
-                                %error,
-                                storage_location_id = id,
-                                "failed to renew Merge Lease"
-                            );
-                            Ok(true)
-                        })
-                    }
-                })
-            };
-            let merged = async {
-                write.await?;
-                // The merged object is already written, so losing a deadlock here must not throw
-                // the merge away; the fence is re-checked on every attempt.
-                retry_on_lock_conflict(|| complete_merge(&db, &id, &token)).await
-            }
-            .await;
-            if let Err(error) = merged {
-                tracing::error!(%error, storage_location_id = id, "merge failed");
-                if let Err(rollback_error) = roll_back_merge(&db, &id, &token).await {
-                    tracing::error!(
-                        %rollback_error,
-                        storage_location_id = id,
-                        "failed to roll back merge"
-                    );
+            match claim_merge(&db, &id).await {
+                Ok(Some(token)) => run_merge(db, id, token, write).await,
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, storage_location_id = id, "failed to start merge");
                 }
             }
-            drop(renewal);
-            if let Err(error) = release_merge_lease(&db, &id, &token).await {
-                tracing::warn!(%error, storage_location_id = id, "failed to release Merge Lease");
-            }
         }));
-        Ok(true)
     }
 
     /// Writes `{folder}/merged` from a location's Parts.
@@ -529,7 +515,7 @@ impl Storage {
         let upload: Option<UploadFolder> = self
             .db
             .optional(
-                &self.db.pool,
+                &self.db.reads,
                 Query::select()
                     .columns([Uploads::Id, Uploads::FolderName])
                     .from(Uploads::Table)
@@ -681,7 +667,7 @@ impl Storage {
         if let Err(error) = self.enforce_storage_budget().await {
             tracing::warn!(%error, "Capacity-based Eviction failed after upload completion");
         }
-        if self.config.eager_merge {
+        if self.config.eager_merge && whole_object(&location).is_none() {
             // Eager Merge (ADR-0009): only the lease acquisition is awaited; the Merge itself
             // runs in the background.
             if let Err(error) = self
@@ -882,11 +868,7 @@ impl Storage {
         let Some(location) = location else {
             return Ok(None);
         };
-        let scope = if location.merged_at.is_some() {
-            ReaderLeaseScope::Storage
-        } else {
-            ReaderLeaseScope::Parts
-        };
+        let scope = whole_object(&location).map_or(ReaderLeaseScope::Parts, |(_, scope)| scope);
         let lease_id = create_reader_lease(
             &self.db,
             &mut *tx,
@@ -943,7 +925,7 @@ impl Storage {
         location: &StorageLocation,
         range: Option<RangeRequest>,
     ) -> Result<DownloadStream, ReadError> {
-        if location.merged_at.is_some() {
+        if whole_object(location).is_some() {
             return self.download_location(location, range).await;
         }
         self.ensure_parts_exist(location).await?;
@@ -951,8 +933,7 @@ impl Storage {
         // Local Parts are cheap to read twice, so the client reads them at its own pace while
         // the Merge copies them in the background.
         if let Adapter::Filesystem(_) = self.adapter.as_ref() {
-            self.start_merge(location, self.merge_parts(location))
-                .await?;
+            self.start_merge_detached(location, self.merge_parts(location));
             return self.download_location(location, range).await;
         }
         // Object storage is read once and teed into the response and the Merge.
@@ -1129,7 +1110,7 @@ impl Storage {
             );
             let (true, Some(_), Adapter::Object(store)) = (
                 self.config.enable_direct_downloads,
-                location.merged_at,
+                whole_object(&location),
                 self.adapter.as_ref(),
             ) else {
                 return Ok(Some(DownloadUrlMatch {
@@ -1138,8 +1119,8 @@ impl Storage {
                 }));
             };
 
-            // Merged entry with direct downloads enabled: take a reader lease bounded by the
-            // signed URL lifetime, then sign. One deadline bounds both, so the URL never outlives
+            // An entry in one object with direct downloads enabled: take a reader lease bounded by
+            // the signed URL lifetime, then sign. One deadline bounds both, so the URL never outlives
             // the lease.
             let expires_at = deadline(DIRECT_DOWNLOAD_LEASE_DURATION);
             let mut tx = self.db.pool.begin().await?;
@@ -1156,15 +1137,9 @@ impl Storage {
                 )
                 .await?;
             let current = current.ok_or_else(|| Failure::msg("Storage location not found"))?;
-            if current.merged_at.is_some() {
-                create_reader_lease(
-                    &self.db,
-                    &mut *tx,
-                    &current.id,
-                    ReaderLeaseScope::Storage,
-                    expires_at,
-                )
-                .await?;
+            let whole = whole_object(&current);
+            if let Some((_, scope)) = &whole {
+                create_reader_lease(&self.db, &mut *tx, &current.id, *scope, expires_at).await?;
                 self.db
                     .execute(
                         &mut *tx,
@@ -1178,11 +1153,11 @@ impl Storage {
             tx.commit().await?;
 
             // The merge could have been undone between validation and the lease read.
-            let download_url = match current.merged_at {
-                Some(_) => {
+            let download_url = match whole {
+                Some((object, _)) => {
                     store
                         .create_download_url(
-                            &merged_object(&current.folder_name),
+                            &object,
                             Duration::from_millis(
                                 u64::try_from(expires_at.saturating_sub(now_ms())).unwrap_or(0),
                             ),
@@ -1251,6 +1226,57 @@ struct EvictionCandidate {
     #[sqlx(try_from = "crate::db::Utf8Text")]
     folder_name: String,
     size_bytes: Option<i64>,
+}
+
+/// Takes the Merge Lease and records the Merge as started; `None` while another worker holds it.
+async fn claim_merge(db: &Db, id: &str) -> Result<Option<String>> {
+    let Some(token) = acquire_merge_lease(db, id).await? else {
+        return Ok(None);
+    };
+    db.execute(
+        &db.pool,
+        Query::update()
+            .table(StorageLocations::Table)
+            .value(StorageLocations::MergeStartedAt, now_ms())
+            .and_where(Expr::col(StorageLocations::Id).eq(id)),
+    )
+    .await?;
+    Ok(Some(token))
+}
+
+/// Writes the merged object under the lease `token`, then marks the Merge complete.
+async fn run_merge(db: Db, id: String, token: String, write: BoxFuture<'static, Result<()>>) {
+    let renewal = {
+        let (db, id, token) = (db.clone(), id.clone(), token.clone());
+        keep_renewing(move || {
+            let (db, id, token) = (db.clone(), id.clone(), token.clone());
+            async move {
+                // A transient failure must not end the renewal: the merged object would then be
+                // thrown away once the lease expires mid-merge.
+                renew_merge_lease(&db, &id, &token).await.or_else(|error| {
+                    tracing::warn!(%error, storage_location_id = id, "failed to renew Merge Lease");
+                    Ok(true)
+                })
+            }
+        })
+    };
+    let merged = async {
+        write.await?;
+        // The merged object is already written, so losing a deadlock here must not throw the
+        // merge away; the fence is re-checked on every attempt.
+        retry_on_lock_conflict(|| complete_merge(&db, &id, &token)).await
+    }
+    .await;
+    if let Err(error) = merged {
+        tracing::error!(%error, storage_location_id = id, "merge failed");
+        if let Err(rollback_error) = roll_back_merge(&db, &id, &token).await {
+            tracing::error!(%rollback_error, storage_location_id = id, "failed to roll back merge");
+        }
+    }
+    drop(renewal);
+    if let Err(error) = release_merge_lease(&db, &id, &token).await {
+        tracing::warn!(%error, storage_location_id = id, "failed to release Merge Lease");
+    }
 }
 
 async fn complete_merge(db: &Db, id: &str, token: &str) -> Result<()> {
