@@ -27,6 +27,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Root, like the previous image, so existing volumes stay writable.
 FROM gcr.io/distroless/static-debian12
 
+# mimalloc: return freed memory to the OS right away, and keep transparent huge pages out of its
+# arenas, where hosts with THP set to "always" would back every touched page with 2 MiB.
+ENV MIMALLOC_PURGE_DELAY=0 MIMALLOC_ALLOW_THP=0
+
 # The default `.data/...` paths stay where the previous image kept them.
 WORKDIR /app
 

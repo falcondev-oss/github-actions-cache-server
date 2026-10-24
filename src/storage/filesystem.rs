@@ -15,7 +15,8 @@ use super::adapter::{
 };
 use crate::error::{Failure, Result};
 
-const READ_CHUNK_BYTES: usize = 64 * 1024;
+/// Each read is a hop to a blocking thread; larger reads make fewer of them.
+const READ_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct FilesystemAdapter {

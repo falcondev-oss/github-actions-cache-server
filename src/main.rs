@@ -30,6 +30,11 @@ use crate::routes::{AppState, router};
 use crate::scope::TokenVerifier;
 use crate::storage::{Adapter, Storage};
 
+/// musl's allocator serializes on a global lock and is slow at the sizes request buffers churn
+/// through; the image is a static musl binary.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn version() -> String {
     let version = env!("CARGO_PKG_VERSION");
     option_env!("BUILD_HASH").map_or_else(
