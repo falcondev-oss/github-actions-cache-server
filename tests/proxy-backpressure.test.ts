@@ -9,6 +9,8 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import * as h3 from 'h3'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { getDatabase } from '~/lib/db'
+import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
 
 const MiB = 1024 * 1024
@@ -167,4 +169,112 @@ describe('proxy routes apply backpressure', () => {
 
     await vi.waitFor(() => expect(source.destroyed).toBe(true), { timeout: 5000, interval: 50 })
   }, 20_000)
+
+  describe('download idle timeout', () => {
+    const originalIdleTimeout = env.DOWNLOAD_IDLE_TIMEOUT_MS
+    beforeAll(() => {
+      env.DOWNLOAD_IDLE_TIMEOUT_MS = 500
+    })
+    afterAll(() => {
+      env.DOWNLOAD_IDLE_TIMEOUT_MS = originalIdleTimeout
+    })
+
+    test.each([
+      { response: 'a whole entry', status: 200, range: undefined },
+      { response: 'a Range', status: 206, range: { start: 0, end: ENTRY_BYTES - 1 } },
+    ])(
+      'releases the storage read of a client that stopped reading $response',
+      async ({ status, range }) => {
+        // Real timers and sockets on purpose: the stall comes from TCP flow control,
+        // which fake timers cannot drive.
+        let pulled = 0
+        function* entry() {
+          while (pulled < ENTRY_BYTES) {
+            pulled += CHUNK_BYTES
+            yield Buffer.alloc(CHUNK_BYTES)
+          }
+        }
+        const source = Readable.from(entry(), { objectMode: false, highWaterMark: CHUNK_BYTES })
+        const storage = await getStorage()
+        vi.spyOn(storage, 'download').mockResolvedValue({
+          stream: source,
+          size: ENTRY_BYTES,
+          range,
+        })
+
+        const { port } = server.address() as AddressInfo
+        const serverSide = once(server, 'request') as Promise<[IncomingMessage, ServerResponse]>
+        const req = http.get(`http://localhost:${port}/download/${randomUUID()}`, {
+          headers: range ? { range: `bytes=${range.start}-${range.end}` } : {},
+        })
+        req.on('error', () => undefined)
+        const [res] = (await once(req, 'response')) as [IncomingMessage]
+        expect(res.statusCode).toBe(status)
+        res.once('data', () => res.pause()) // stops reading, keeps the connection open
+        const [, serverRes] = await serverSide
+        const serverClosed = once(serverRes, 'close')
+
+        // Without an idle timeout neither ever happens: the pipe just stays parked.
+        await expect(once(source, 'close')).rejects.toMatchObject({
+          code: 'ERR_DOWNLOAD_IDLE_TIMEOUT',
+        })
+        await serverClosed
+        expect(pulled).toBeLessThan(ENTRY_BYTES)
+        req.destroy()
+      },
+      20_000,
+    )
+
+    test('a stalled first restore is closed and its Merge still completes', async () => {
+      const storage = await getStorage()
+      const db = await getDatabase()
+      const reservation = {
+        key: `idle-unmerged-${randomUUID()}`,
+        version: 'v1',
+        scope: 'refs/heads/main',
+        repoId: '123',
+      }
+      const upload = await storage.createUpload(reservation)
+      // Far more than loopback socket buffers hold, so the stalled client really blocks the tee.
+      for (let i = 0; i < 4; i++)
+        await storage.uploadPart(upload.id, i, Readable.from([Buffer.alloc(8 * MiB, i)]))
+      await storage.completeUpload(reservation)
+      const { locationId } = await db
+        .selectFrom('cache_entries')
+        .where('key', '=', reservation.key)
+        .select('locationId')
+        .executeTakeFirstOrThrow()
+
+      const { port } = server.address() as AddressInfo
+      const serverSide = once(server, 'request') as Promise<[IncomingMessage, ServerResponse]>
+      const req = http.get(`http://localhost:${port}/download/${locationId}`)
+      req.on('error', () => undefined)
+      const [res] = (await once(req, 'response')) as [IncomingMessage]
+      expect(res.statusCode).toBe(200)
+      res.once('data', () => res.pause())
+      const [, serverRes] = await serverSide
+      await once(serverRes, 'close')
+      req.destroy()
+
+      // The pump keeps feeding the merge once the client's side of the tee is gone.
+      await storage.waitForOngoingMerges()
+      const location = await db
+        .selectFrom('storage_locations')
+        .where('id', '=', locationId)
+        .select('mergedAt')
+        .executeTakeFirstOrThrow()
+      expect(location.mergedAt).not.toBeNull()
+      await vi.waitFor(
+        async () => {
+          const leases = await db
+            .selectFrom('storage_reader_leases')
+            .where('storageLocationId', '=', locationId)
+            .select('id')
+            .execute()
+          expect(leases, 'reader leases left behind').toHaveLength(0)
+        },
+        { timeout: 5000, interval: 50 },
+      )
+    }, 30_000)
+  })
 })

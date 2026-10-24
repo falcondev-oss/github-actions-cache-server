@@ -88,6 +88,7 @@ export const envBaseSchema = type({
   'ENABLE_DIRECT_DOWNLOADS': 'boolean = false',
   'EAGER_MERGE': 'boolean = false',
   'MAX_CONCURRENT_MERGES': 'number.integer >= 1 = 16',
+  'DOWNLOAD_IDLE_TIMEOUT_MS': 'number.integer >= 0 = 300000',
   'BENCHMARK': 'boolean = false',
   'SKIP_TOKEN_VALIDATION': 'boolean = false',
   'MANAGEMENT_API_KEY?': 'string',
