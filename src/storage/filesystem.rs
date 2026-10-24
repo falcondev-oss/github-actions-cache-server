@@ -156,6 +156,46 @@ impl FilesystemAdapter {
         written
     }
 
+    /// Writes the concatenation of `parts` to `name`, atomically like an upload. The kernel
+    /// copies the bytes (`copy_file_range`), so they never pass through this process.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a kernel-side copy is one blocking call per part, not a stream of async reads"
+    )]
+    pub(crate) async fn concat(&self, parts: &[String], name: &str) -> Result<()> {
+        let path = self.safe_path(name)?;
+        let temp = self.safe_path(&format!("tmp-{}", uuid::Uuid::new_v4()))?;
+        let sources = parts
+            .iter()
+            .map(|part| self.safe_path(part))
+            .collect::<Result<Vec<_>>>()?;
+        let written = {
+            let temp = temp.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut merged = std::fs::File::create(&temp)?;
+                for source in sources {
+                    io::copy(&mut std::fs::File::open(source)?, &mut merged)?;
+                }
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::rename(&temp, &path)
+            })
+            .await
+            .map_err(io::Error::other)
+            .and_then(|written| written)
+        };
+        if written.is_err() {
+            match fs::remove_file(&temp).await {
+                Err(error) if !is_not_found(&error) => {
+                    tracing::warn!(path = %temp.display(), %error, "failed to remove temp file");
+                }
+                Ok(()) | Err(_) => {}
+            }
+        }
+        Ok(written?)
+    }
+
     pub(crate) async fn object_exists(&self, name: &str) -> Result<bool> {
         Ok(fs::try_exists(self.safe_path(name)?).await?)
     }

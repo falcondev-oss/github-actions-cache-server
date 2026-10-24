@@ -497,6 +497,27 @@ impl Storage {
         Ok(true)
     }
 
+    /// Writes `{folder}/merged` from a location's Parts.
+    fn merge_parts(&self, location: &StorageLocation) -> BoxFuture<'static, Result<()>> {
+        let adapter = Arc::clone(&self.adapter);
+        let merged = merged_object(&location.folder_name);
+        let part_stream = stream_parts(Arc::clone(&adapter), location);
+        let parts: Vec<String> = (0..location.part_count)
+            .map(|index| part_object(&location.folder_name, index))
+            .collect();
+        async move {
+            match adapter.as_ref() {
+                Adapter::Filesystem(filesystem) => filesystem.concat(&parts, &merged).await,
+                Adapter::Object(_) => {
+                    adapter
+                        .upload_stream(&merged, part_stream, UploadKind::Merged)
+                        .await
+                }
+            }
+        }
+        .boxed()
+    }
+
     /// Stores one Part of an upload. False when the upload does not exist, or was deleted while
     /// the Part was streaming (the written Part is then Orphaned Storage, ADR-0001).
     pub(crate) async fn upload_part(
@@ -663,18 +684,10 @@ impl Storage {
         if self.config.eager_merge {
             // Eager Merge (ADR-0009): only the lease acquisition is awaited; the Merge itself
             // runs in the background.
-            let write = {
-                let adapter = Arc::clone(&self.adapter);
-                let part_stream = stream_parts(Arc::clone(&adapter), &location);
-                let merged = merged_object(&location.folder_name);
-                async move {
-                    adapter
-                        .upload_stream(&merged, part_stream, UploadKind::Merged)
-                        .await
-                }
-                .boxed()
-            };
-            if let Err(error) = self.start_merge(&location, write).await {
+            if let Err(error) = self
+                .start_merge(&location, self.merge_parts(&location))
+                .await
+            {
                 tracing::warn!(%error, "Eager Merge failed to start after upload completion");
             }
         }
@@ -935,6 +948,14 @@ impl Storage {
         }
         self.ensure_parts_exist(location).await?;
 
+        // Local Parts are cheap to read twice, so the client reads them at its own pace while
+        // the Merge copies them in the background.
+        if let Adapter::Filesystem(_) = self.adapter.as_ref() {
+            self.start_merge(location, self.merge_parts(location))
+                .await?;
+            return self.download_location(location, range).await;
+        }
+        // Object storage is read once and teed into the response and the Merge.
         let (merger_sender, merger_receiver) = mpsc::channel(1);
         let write = {
             let adapter = Arc::clone(&self.adapter);
