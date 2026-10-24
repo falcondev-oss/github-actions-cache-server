@@ -32,9 +32,11 @@ volumes:
 
 All optional.
 
-| Variable                 | Default | Effect                                                                        |
-| ------------------------ | ------- | ----------------------------------------------------------------------------- |
-| `STORAGE_S3_MAX_SOCKETS` | `50`    | Sockets per S3 connection pool, for `http://` and `https://` endpoints alike. |
+| Variable                              | Default | Effect                                                                                                                                            |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STORAGE_S3_MAX_SOCKETS`              | `50`    | Sockets per S3 data pool, for `http://` and `https://` endpoints alike. Reads (GetObject) and writes (uploads, Merges) each get a pool this size. |
+| `STORAGE_S3_CONTROL_MAX_SOCKETS`      | `16`    | Sockets for HEAD, LIST and DELETE requests (cache lookups, cleanup), kept apart from bulk transfers.                                              |
+| `STORAGE_S3_CONTROL_QUEUE_TIMEOUT_MS` | `5000`  | How long a control request waits for a socket and connection before failing; `0` waits forever.                                                   |
 
 ## Documentation
 

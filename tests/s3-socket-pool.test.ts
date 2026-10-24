@@ -38,4 +38,22 @@ describe.skipIf(process.env.VITEST_STORAGE_DRIVER !== 's3')('s3 socket pool', ()
       await storage.adapter.deleteFolder(folder)
     }
   })
+
+  test('a lookup HEAD does not queue behind held reads', async () => {
+    s3Env.STORAGE_S3_MAX_SOCKETS = 1
+    const storage = await Storage.fromEnv()
+    const folder = `socket-pool-${randomUUID()}`
+    await storage.adapter.uploadStream(`${folder}/a`, Readable.from([Buffer.from('a')]))
+
+    // A paused restore (or a Merge waiting to upload) keeps its GET socket.
+    const held = await storage.adapter.createDownloadStream(`${folder}/a`)
+    try {
+      const lookup = storage.adapter.objectExists(`${folder}/a`)
+      const answered = await Promise.race([lookup, sleep(1000, 'queued')])
+      expect(answered, 'HeadObject answered while every data socket is held').toBe(true)
+    } finally {
+      held.stream.destroy()
+      await storage.adapter.deleteFolder(folder)
+    }
+  })
 })
