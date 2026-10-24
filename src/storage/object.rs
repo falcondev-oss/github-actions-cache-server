@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use axum::http::Method;
 use axum::http::header::CONTENT_LENGTH;
-use futures_util::{StreamExt as _, TryStreamExt as _};
+use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder};
 use object_store::buffered::BufWriter;
@@ -64,6 +64,62 @@ fn client_options(read_timeout: Duration) -> ClientOptions {
         options.with_read_timeout(read_timeout)
     }
 }
+
+/// Sends `stream` as the body of `request`. With `idle_timeout`, it fails once neither the body
+/// nor the response has made progress for that long, like a socket timeout.
+async fn upload_watched(
+    request: reqwest::RequestBuilder,
+    stream: ByteStream,
+    idle_timeout: Option<Duration>,
+) -> Result<()> {
+    // Pieces are small, so the body asking for the next one means the socket took the last.
+    let activity = Arc::new(Mutex::new(Instant::now()));
+    let stream = {
+        let activity = Arc::clone(&activity);
+        stream
+            .flat_map(|chunk| {
+                stream::iter(match chunk {
+                    Ok(bytes) => (0..bytes.len())
+                        .step_by(PROGRESS_BYTES)
+                        .map(|start| {
+                            let end = start.saturating_add(PROGRESS_BYTES).min(bytes.len());
+                            Ok(bytes.slice(start..end))
+                        })
+                        .collect(),
+                    Err(error) => vec![Err(error)],
+                })
+            })
+            .inspect(move |_| {
+                *activity.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+            })
+    };
+    let upload = async {
+        let response = request
+            .body(reqwest::Body::wrap_stream(stream))
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let body = response.text().await.unwrap_or_default();
+        Err(Failure::msg(format!(
+            "storage rejected an upload: {status} {body}"
+        )))
+    };
+    match idle_timeout {
+        Some(timeout) => tokio::select! {
+            uploaded = upload => uploaded,
+            () = idle(&activity, timeout) => {
+                Err(Failure::msg("storage stopped responding to an upload"))
+            }
+        },
+        None => upload.await,
+    }
+}
+
+/// Size of the pieces a presigned upload tracks its progress by.
+const PROGRESS_BYTES: usize = 64 * 1024;
 
 /// Waits until `activity` has not moved for `timeout`.
 async fn idle(activity: &Mutex<Instant>, timeout: Duration) {
@@ -258,7 +314,7 @@ impl ObjectAdapter {
         // An empty object has no satisfiable range; serve it whole, like the filesystem does.
         if size == 0 {
             return Ok(DownloadStream {
-                stream: futures_util::stream::empty().boxed(),
+                stream: stream::empty().boxed(),
                 extent: Extent::Whole { size: 0 },
             });
         }
@@ -334,39 +390,11 @@ impl ObjectAdapter {
     }
 
     async fn put_presigned(&self, url: url::Url, stream: ByteStream, length: u64) -> Result<()> {
-        // Like a socket timeout, it measures silence rather than the whole upload.
-        let activity = Arc::new(Mutex::new(Instant::now()));
-        let stream = {
-            let activity = Arc::clone(&activity);
-            stream.inspect(move |_| {
-                *activity.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
-            })
-        };
-        let mut request = self
-            .http
-            .put(url)
-            .header(CONTENT_LENGTH, length)
-            .body(reqwest::Body::wrap_stream(stream));
+        let mut request = self.http.put(url).header(CONTENT_LENGTH, length);
         for (name, value) in self.put_headers {
             request = request.header(*name, *value);
         }
-        let response = match self.idle_timeout {
-            Some(timeout) => tokio::select! {
-                response = request.send() => response?,
-                () = idle(&activity, timeout) => {
-                    return Err(Failure::msg("storage stopped responding to an upload"));
-                }
-            },
-            None => request.send().await?,
-        };
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(Failure::msg(format!(
-                "storage rejected an upload: {status} {body}"
-            )));
-        }
-        Ok(())
+        upload_watched(request, stream, self.idle_timeout).await
     }
 
     pub(crate) async fn object_exists(&self, name: &str) -> Result<bool> {
@@ -425,8 +453,7 @@ impl ObjectAdapter {
                 .iter()
                 .fold(0_u64, |total, object| total.saturating_add(object.size)),
         };
-        let locations =
-            futures_util::stream::iter(objects.into_iter().map(|object| Ok(object.location)));
+        let locations = stream::iter(objects.into_iter().map(|object| Ok(object.location)));
         let failures: Vec<_> = self
             .store
             .delete_stream(locations.boxed())
@@ -491,5 +518,68 @@ impl ObjectAdapter {
 
     pub(crate) async fn clear(&self) -> Result<()> {
         self.delete_prefix(&self.prefix).await.map(|_deleted| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::{Body, Bytes};
+    use axum::http::StatusCode;
+    use axum::response::Response;
+    use axum::routing::put;
+
+    use super::*;
+
+    const TIMEOUT: Duration = Duration::from_millis(500);
+
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        drop(tokio::spawn(
+            async move { axum::serve(listener, app).await },
+        ));
+        url
+    }
+
+    async fn upload(url: &str, body: ByteStream) -> Result<()> {
+        let request = reqwest::Client::new().put(url);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            upload_watched(request, body, Some(TIMEOUT)),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_slow_but_progressing_upload_does_not_time_out() {
+        let url = serve(axum::Router::new().route("/", put(|_: Bytes| async {}))).await;
+        // Four times the timeout in total, never silent for half of it.
+        let body = stream::iter(0..8)
+            .then(|_| async {
+                tokio::time::sleep(TIMEOUT / 4).await;
+                Ok(Bytes::from_static(b"chunk"))
+            })
+            .boxed();
+        upload(&url, body).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stalled_error_body_times_out() {
+        let url = serve(axum::Router::new().route(
+            "/",
+            put(|| async {
+                let body = stream::once(async { Ok::<_, io::Error>(Bytes::from_static(b"x")) })
+                    .chain(stream::pending());
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(CONTENT_LENGTH, 1000)
+                    .body(Body::from_stream(body))
+                    .unwrap()
+            }),
+        ))
+        .await;
+        let body = stream::once(async { Ok(Bytes::from_static(b"data")) }).boxed();
+        assert!(upload(&url, body).await.is_err());
     }
 }
