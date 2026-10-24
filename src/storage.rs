@@ -1123,8 +1123,8 @@ impl Storage {
             };
 
             // An entry in one object with direct downloads enabled: take a reader lease bounded by
-            // the signed URL lifetime, then sign. One deadline bounds both, so the URL never outlives
-            // the lease.
+            // the signed URL lifetime, then sign. One deadline bounds both, so the URL never
+            // outlives the lease.
             let expires_at = deadline(DIRECT_DOWNLOAD_LEASE_DURATION);
             let mut tx = self.db.pool.begin().await?;
             let current: Option<StorageLocation> = self
