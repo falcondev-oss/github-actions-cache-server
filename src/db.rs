@@ -175,7 +175,14 @@ impl Db {
                     // lose the last commits, never consistency; a cache can afford that. The
                     // journal mode is stored in the file, so read-only connections inherit it.
                     if dialect == Dialect::Sqlite && access == Access::ReadWrite {
-                        for pragma in ["pragma journal_mode = wal", "pragma synchronous = normal"] {
+                        for pragma in [
+                            "pragma journal_mode = wal",
+                            "pragma synchronous = normal",
+                            // A checkpoint syncs the log and the database file, inline in a
+                            // commit; every 1000 pages (the default) that stalls the writer
+                            // tens of times a second under load.
+                            "pragma wal_autocheckpoint = 10000",
+                        ] {
                             sqlx::query(pragma).execute(&mut *connection).await?;
                         }
                     }

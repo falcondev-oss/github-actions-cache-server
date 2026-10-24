@@ -601,7 +601,7 @@ impl Storage {
         let upload: Option<Upload> = self
             .db
             .optional(
-                &self.db.pool,
+                &self.db.reads,
                 // Not `*`: `sqlx::Any` cannot decode Postgres' `char(64)` reservation hash.
                 Query::select()
                     .columns([
