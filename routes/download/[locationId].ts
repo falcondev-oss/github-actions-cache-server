@@ -24,6 +24,12 @@ function parseRange(header: string | undefined): RangeRequest | undefined {
   return { start, end }
 }
 
+class DownloadIdleTimeoutError extends Error {
+  constructor() {
+    super(`No bytes sent for ${env.DOWNLOAD_IDLE_TIMEOUT_MS} ms`)
+  }
+}
+
 export default defineEventHandler(async (event) => {
   const parsedPathParams = pathParamsSchema.safeParse(event.context.params)
   if (!parsedPathParams.success)
@@ -86,11 +92,7 @@ export default defineEventHandler(async (event) => {
   const idleTimer =
     env.DOWNLOAD_IDLE_TIMEOUT_MS > 0
       ? setTimeout(() => {
-          download.stream.destroy(
-            Object.assign(new Error(`No bytes sent for ${env.DOWNLOAD_IDLE_TIMEOUT_MS} ms`), {
-              code: 'ERR_DOWNLOAD_IDLE_TIMEOUT',
-            }),
-          )
+          download.stream.destroy(new DownloadIdleTimeoutError())
         }, env.DOWNLOAD_IDLE_TIMEOUT_MS)
       : undefined
   if (idleTimer) download.stream.on('data', () => idleTimer.refresh())
@@ -102,7 +104,7 @@ export default defineEventHandler(async (event) => {
     // read waited for a socket) without taking ownership of the source.
     download.stream.destroy()
     const { code, message } = err as NodeJS.ErrnoException
-    if (code === 'ERR_DOWNLOAD_IDLE_TIMEOUT') {
+    if (err instanceof DownloadIdleTimeoutError) {
       logger.warn(`Download /download/${locationId} closed: ${message}`)
       return
     }

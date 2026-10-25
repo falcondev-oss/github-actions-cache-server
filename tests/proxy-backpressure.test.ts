@@ -178,6 +178,29 @@ describe('proxy routes apply backpressure', () => {
       env.DOWNLOAD_IDLE_TIMEOUT_MS = originalIdleTimeout
     })
 
+    test('keeps a download open while bytes keep moving', async () => {
+      const chunks = 8
+      // Slower in total than the idle timeout, but never idle for that long.
+      const source = Readable.from(
+        (async function* () {
+          for (let i = 0; i < chunks; i++) {
+            await sleep(200)
+            yield Buffer.alloc(CHUNK_BYTES)
+          }
+        })(),
+      )
+      const storage = await getStorage()
+      vi.spyOn(storage, 'download').mockResolvedValue({
+        stream: source,
+        size: chunks * CHUNK_BYTES,
+      })
+
+      const { port } = server.address() as AddressInfo
+      const res = await fetch(`http://localhost:${port}/download/${randomUUID()}`)
+      const body = await res.arrayBuffer()
+      expect(body.byteLength).toBe(chunks * CHUNK_BYTES)
+    }, 20_000)
+
     test('releases the storage read of a client that stopped reading', async () => {
       // Real timers and sockets on purpose: the stall comes from TCP flow control,
       // which fake timers cannot drive.
@@ -206,9 +229,7 @@ describe('proxy routes apply backpressure', () => {
       const serverClosed = once(serverRes, 'close')
 
       // Without an idle timeout neither ever happens: the pipe just stays parked.
-      await expect(once(source, 'close')).rejects.toMatchObject({
-        code: 'ERR_DOWNLOAD_IDLE_TIMEOUT',
-      })
+      await expect(once(source, 'close')).rejects.toThrow('No bytes sent')
       await serverClosed
       expect(pulled).toBeLessThan(ENTRY_BYTES)
       req.destroy()
