@@ -9,6 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import * as h3 from 'h3'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { env } from '~/lib/env'
 import { getStorage } from '~/lib/storage'
 
 const MiB = 1024 * 1024
@@ -167,4 +168,71 @@ describe('proxy routes apply backpressure', () => {
 
     await vi.waitFor(() => expect(source.destroyed).toBe(true), { timeout: 5000, interval: 50 })
   }, 20_000)
+
+  describe('download idle timeout', () => {
+    const originalIdleTimeout = env.DOWNLOAD_IDLE_TIMEOUT_MS
+    beforeAll(() => {
+      env.DOWNLOAD_IDLE_TIMEOUT_MS = 500
+    })
+    afterAll(() => {
+      env.DOWNLOAD_IDLE_TIMEOUT_MS = originalIdleTimeout
+    })
+
+    test('keeps a download open while bytes keep moving', async () => {
+      const chunks = 8
+      // Slower in total than the idle timeout, but never idle for that long.
+      const source = Readable.from(
+        (async function* () {
+          for (let i = 0; i < chunks; i++) {
+            await sleep(200)
+            yield Buffer.alloc(CHUNK_BYTES)
+          }
+        })(),
+      )
+      const storage = await getStorage()
+      vi.spyOn(storage, 'download').mockResolvedValue({
+        stream: source,
+        size: chunks * CHUNK_BYTES,
+      })
+
+      const { port } = server.address() as AddressInfo
+      const res = await fetch(`http://localhost:${port}/download/${randomUUID()}`)
+      const body = await res.arrayBuffer()
+      expect(body.byteLength).toBe(chunks * CHUNK_BYTES)
+    }, 20_000)
+
+    test('releases the storage read of a client that stopped reading', async () => {
+      // Real timers and sockets on purpose: the stall comes from TCP flow control,
+      // which fake timers cannot drive.
+      let pulled = 0
+      function* entry() {
+        while (pulled < ENTRY_BYTES) {
+          pulled += CHUNK_BYTES
+          yield Buffer.alloc(CHUNK_BYTES)
+        }
+      }
+      const source = Readable.from(entry(), { objectMode: false, highWaterMark: CHUNK_BYTES })
+      const storage = await getStorage()
+      vi.spyOn(storage, 'download').mockResolvedValue({
+        stream: source,
+        size: ENTRY_BYTES,
+      })
+
+      const { port } = server.address() as AddressInfo
+      const serverSide = once(server, 'request') as Promise<[IncomingMessage, ServerResponse]>
+      const req = http.get(`http://localhost:${port}/download/${randomUUID()}`)
+      req.on('error', () => undefined)
+      const [res] = (await once(req, 'response')) as [IncomingMessage]
+      expect(res.statusCode).toBe(200)
+      res.once('data', () => res.pause()) // stops reading, keeps the connection open
+      const [, serverRes] = await serverSide
+      const serverClosed = once(serverRes, 'close')
+
+      // Without an idle timeout neither ever happens: the pipe just stays parked.
+      await expect(once(source, 'close')).rejects.toThrow('No bytes sent')
+      await serverClosed
+      expect(pulled).toBeLessThan(ENTRY_BYTES)
+      req.destroy()
+    }, 20_000)
+  })
 })
