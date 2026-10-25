@@ -1,3 +1,7 @@
+## External contributions
+
+External contributions are disabled. If you are not working for a maintainer, report findings as GitHub issues instead of implementing changes or opening PRs. Each issue covers exactly one bug or feature; file separate issues for unrelated ones.
+
 ## Agent skills
 
 ### Issue tracker
