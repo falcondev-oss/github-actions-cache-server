@@ -34,6 +34,12 @@ config:
   # bucket. Doubles storage per entry until the parts cleanup job runs.
   eagerMerge: false
 
+  # -- Merges one process runs at once, eager or lazy. Beyond it, restores stream the parts and a later download merges.
+  maxConcurrentMerges: 16
+
+  # -- Closes a download whose storage read has not moved for this long (client stopped reading). Set to 0 to disable.
+  downloadIdleTimeoutMs: 300000
+
   # -- Number of days to keep stale cache data before deleting it. Set to 0 to disable.
   cacheCleanupOlderThanDays: 90
 

@@ -127,6 +127,10 @@ Generate environment variables from config values.
   value: {{ .Values.config.enableDirectDownloads | quote }}
 - name: EAGER_MERGE
   value: {{ .Values.config.eagerMerge | quote }}
+- name: MAX_CONCURRENT_MERGES
+  value: {{ .Values.config.maxConcurrentMerges | quote }}
+- name: DOWNLOAD_IDLE_TIMEOUT_MS
+  value: {{ .Values.config.downloadIdleTimeoutMs | quote }}
 - name: CACHE_CLEANUP_OLDER_THAN_DAYS
   value: {{ .Values.config.cacheCleanupOlderThanDays | quote }}
 {{- if .Values.config.cacheMaxSizeBytes }}
