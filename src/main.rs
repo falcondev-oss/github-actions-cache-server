@@ -25,6 +25,7 @@ use crate::cleanup::Cleanup;
 use crate::config::Config;
 use crate::db::Db;
 use crate::error::Result;
+use crate::http::StalledClientListener;
 use crate::metrics::Metrics;
 use crate::routes::{AppState, router};
 use crate::scope::TokenVerifier;
@@ -91,6 +92,7 @@ async fn shutdown_signal() {
 async fn serve(config: Config) -> Result<()> {
     tracing::info!("🚀 Starting GitHub Actions Cache Server ({})", version());
     let (host, port) = (config.host.clone(), config.port);
+    let timeout = config.download_idle_timeout;
     let adapter = Adapter::from_config(&config.storage).await?;
     let state = build_state(config, adapter).await?;
     let listener = match host {
@@ -107,6 +109,7 @@ async fn serve(config: Config) -> Result<()> {
     state.cleanup.spawn_schedules();
     let storage = Arc::clone(&state.storage);
     tracing::info!(address = %listener.local_addr()?, "listening");
+    let listener = StalledClientListener { listener, timeout };
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;

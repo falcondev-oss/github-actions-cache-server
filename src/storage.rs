@@ -19,7 +19,7 @@ use sea_query::{
     Alias, CaseStatement, Cond, Expr, Func, JoinType, LockType, Order, Query, SelectStatement,
 };
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use utoipa::ToSchema;
@@ -104,6 +104,9 @@ pub(crate) struct Storage {
     pub(crate) adapter: Arc<Adapter>,
     config: Arc<Config>,
     merges: TaskTracker,
+    /// One permit per Merge this process may run at once. Each Merge holds storage connections
+    /// and buffers for its whole duration; unbounded, a burst of first restores exhausts them.
+    merge_slots: Arc<Semaphore>,
 }
 
 /// Where a folder keeps its Parts.
@@ -276,6 +279,7 @@ impl Storage {
         let storage = Self {
             db,
             adapter: Arc::new(adapter),
+            merge_slots: Arc::new(Semaphore::new(config.max_concurrent_merges)),
             config,
             merges: TaskTracker::new(),
         };
@@ -446,13 +450,17 @@ impl Storage {
 
     /// Runs a Merge under a Merge Lease in the background. `write` produces `{folder}/merged`; a
     /// lease-fenced transaction then marks the Merge complete. Returns false when another worker
-    /// holds the lease. Writing straight to the final object is safe (ADR-0004). Failures are
-    /// logged and the merge state rolled back.
+    /// holds the lease or this process already runs `MAX_CONCURRENT_MERGES` Merges; a later
+    /// download retries a skipped Merge. Writing straight to the final object is safe (ADR-0004).
+    /// Failures are logged and the merge state rolled back.
     async fn start_merge(
         &self,
         location: &StorageLocation,
         write: BoxFuture<'static, Result<()>>,
     ) -> Result<bool> {
+        let Ok(slot) = Arc::clone(&self.merge_slots).try_acquire_owned() else {
+            return Ok(false);
+        };
         let Some(token) = claim_merge(&self.db, &location.id).await? else {
             return Ok(false);
         };
@@ -461,6 +469,7 @@ impl Storage {
             location.id.clone(),
             token,
             write,
+            slot,
         )));
         Ok(true)
     }
@@ -472,10 +481,13 @@ impl Storage {
         location: &StorageLocation,
         write: BoxFuture<'static, Result<()>>,
     ) {
+        let Ok(slot) = Arc::clone(&self.merge_slots).try_acquire_owned() else {
+            return;
+        };
         let (db, id) = (self.db.clone(), location.id.clone());
         drop(self.merges.spawn(async move {
             match claim_merge(&db, &id).await {
-                Ok(Some(token)) => run_merge(db, id, token, write).await,
+                Ok(Some(token)) => run_merge(db, id, token, write, slot).await,
                 Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(%error, storage_location_id = id, "failed to start merge");
@@ -1247,8 +1259,15 @@ async fn claim_merge(db: &Db, id: &str) -> Result<Option<String>> {
     started.map(|_| None)
 }
 
-/// Writes the merged object under the lease `token`, then marks the Merge complete.
-async fn run_merge(db: Db, id: String, token: String, write: BoxFuture<'static, Result<()>>) {
+/// Writes the merged object under the lease `token`, then marks the Merge complete. Holds `_slot`
+/// until the lease is released.
+async fn run_merge(
+    db: Db,
+    id: String,
+    token: String,
+    write: BoxFuture<'static, Result<()>>,
+    _slot: OwnedSemaphorePermit,
+) {
     let renewal = {
         let (db, id, token) = (db.clone(), id.clone(), token.clone());
         keep_renewing(move || {
@@ -1428,6 +1447,56 @@ mod tests {
             merge_input,
             CHUNKS * 64 * 1024,
             "the merge still gets every byte"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_merges_beyond_the_cap() {
+        use crate::tests::harness::{
+            TestServer, eventually, find_location, insert_location, unmerged_location,
+        };
+
+        let server = TestServer::with(&[("MAX_CONCURRENT_MERGES", "1")]).await;
+        let (storage, db) = (server.storage(), server.db());
+        let [first, second] =
+            [(); 2].map(|()| unmerged_location(&uuid::Uuid::new_v4().to_string()));
+        for location in [&first, &second] {
+            insert_location(db, location).await;
+        }
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
+        let write = async move {
+            drop(held.await);
+            Ok(())
+        };
+        assert!(
+            storage.start_merge(&first, write.boxed()).await.unwrap(),
+            "the first merge starts"
+        );
+        let done = || async { Ok(()) }.boxed();
+        assert!(
+            !storage.start_merge(&second, done()).await.unwrap(),
+            "past the cap"
+        );
+        let skipped = find_location(db, &second.id).await.unwrap();
+        assert_eq!(
+            skipped.merge_started_at, None,
+            "a skipped merge is not claimed"
+        );
+
+        release.send(()).unwrap();
+        eventually(|| async {
+            find_location(db, &first.id)
+                .await
+                .unwrap()
+                .merged_at
+                .is_some()
+        })
+        .await;
+        // The slot is freed just after the merge completes.
+        eventually(|| async { storage.merge_slots.available_permits() == 1 }).await;
+        assert!(
+            storage.start_merge(&second, done()).await.unwrap(),
+            "a freed slot takes the next merge"
         );
     }
 }

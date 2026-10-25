@@ -188,6 +188,10 @@ impl TestServer {
         let prefix = format!("{}/gh-actions-cache", uuid::Uuid::new_v4());
         let config = Config::from_vars(vars.clone()).unwrap();
         let adapter = Adapter::isolated(&config.storage, &prefix).await.unwrap();
+        let listener = crate::http::StalledClientListener {
+            listener,
+            timeout: config.download_idle_timeout,
+        };
         let state = crate::build_state(config, adapter).await.unwrap();
         let app = router(state.clone());
         drop(tokio::spawn(

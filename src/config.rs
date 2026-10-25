@@ -5,6 +5,7 @@ use std::num::{NonZeroU16, NonZeroU64};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use tokio::sync::Semaphore;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +37,10 @@ pub(crate) struct Config {
     pub(crate) debug: bool,
     pub(crate) enable_direct_downloads: bool,
     pub(crate) eager_merge: bool,
+    /// Merges this process runs at once, eager or lazy; at least 1.
+    pub(crate) max_concurrent_merges: usize,
+    /// How long a response may wait for its client to read; `None` waits forever.
+    pub(crate) download_idle_timeout: Option<Duration>,
     pub(crate) skip_token_validation: bool,
     /// Never empty; `None` disables the management API.
     pub(crate) management_api_key: Option<String>,
@@ -345,6 +350,17 @@ impl Vars {
             })
     }
 
+    fn download_idle_timeout(&self) -> Result<Option<Duration>, ConfigError> {
+        // `i32` caps it like the original server, at the largest delay a Node timer accepts.
+        let millis = self
+            .integer::<i32>(
+                "DOWNLOAD_IDLE_TIMEOUT_MS",
+                "an integer between 0 and 2147483647",
+            )?
+            .map_or(300_000, i32::unsigned_abs);
+        Ok((millis != 0).then(|| Duration::from_millis(millis.into())))
+    }
+
     fn percent(&self, key: &str, default: f64) -> Result<Percent, ConfigError> {
         let percent = self.number(key)?.unwrap_or(default);
         if percent > 0.0 && percent <= 100.0 {
@@ -409,6 +425,14 @@ impl Config {
             debug: vars.non_empty("DEBUG").is_some(),
             enable_direct_downloads: vars.boolean("ENABLE_DIRECT_DOWNLOADS")?,
             eager_merge: vars.boolean("EAGER_MERGE")?,
+            max_concurrent_merges: vars
+                .integer::<NonZeroU64>("MAX_CONCURRENT_MERGES", "an integer >= 1")?
+                .map_or(16, |merges| {
+                    usize::try_from(merges.get())
+                        .unwrap_or(usize::MAX)
+                        .min(Semaphore::MAX_PERMITS)
+                }),
+            download_idle_timeout: vars.download_idle_timeout()?,
             skip_token_validation: vars.boolean("SKIP_TOKEN_VALIDATION")?,
             management_api_key: vars.non_empty("MANAGEMENT_API_KEY").map(str::to_owned),
             storage: vars.storage()?,
@@ -525,6 +549,27 @@ mod tests {
         );
         assert_eq!(parsed.port, 3000, "empty port falls back to the default");
         assert_eq!(parsed.host, None, "empty host listens everywhere");
+    }
+
+    #[test]
+    fn bounds_merge_and_download_limits() {
+        let defaults = config(&[]).unwrap();
+        assert_eq!(defaults.max_concurrent_merges, 16, "default merge cap");
+        assert_eq!(
+            defaults.download_idle_timeout,
+            Some(Duration::from_mins(5)),
+            "default idle timeout"
+        );
+        assert!(
+            config(&[("MAX_CONCURRENT_MERGES", "0")]).is_err(),
+            "no merges"
+        );
+        let disabled = config(&[("DOWNLOAD_IDLE_TIMEOUT_MS", "0")]).unwrap();
+        assert_eq!(disabled.download_idle_timeout, None, "0 disables it");
+        assert!(
+            config(&[("DOWNLOAD_IDLE_TIMEOUT_MS", "2147483648")]).is_err(),
+            "beyond the original server's bound"
+        );
     }
 
     #[test]

@@ -45,7 +45,12 @@ pub(super) async fn forward(
     let (parts, body) = request.into_parts();
     let path = parts.uri.path_and_query().map_or("/", |path| path.as_str());
     let url = format!("{}{path}", state.config.default_actions_results_url);
-    tracing::debug!(path, url, "proxying unknown path");
+    // Without the query, which can carry credentials such as signed URL parameters.
+    tracing::debug!(
+        path = parts.uri.path(),
+        upstream = state.config.default_actions_results_url,
+        "proxying unknown path"
+    );
 
     let mut headers = forwardable(&parts.headers);
     // Leaving the encoding to the origin's default keeps the body byte-for-byte passthrough.
@@ -59,7 +64,7 @@ pub(super) async fn forward(
         upstream = upstream.body(body);
     }
     let upstream = upstream.send().await.map_err(|error| {
-        tracing::warn!(%error, "Results Passthrough failed");
+        tracing::warn!(error = %error.without_url(), "Results Passthrough failed");
         HttpError::new(StatusCode::BAD_GATEWAY, "Bad Gateway")
     })?;
 
@@ -69,7 +74,9 @@ pub(super) async fn forward(
     }
     response
         .body(Body::from_stream(
-            upstream.bytes_stream().map_err(std::io::Error::other),
+            upstream
+                .bytes_stream()
+                .map_err(|error| std::io::Error::other(error.without_url())),
         ))
         .map_err(|error| HttpError::new(StatusCode::BAD_GATEWAY, error.to_string()))
 }

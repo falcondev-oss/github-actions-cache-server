@@ -6,8 +6,8 @@ use futures_util::StreamExt as _;
 use sea_query::{Expr, Query};
 
 use super::harness::{
-    TestServer, entry, find_location, insert_entry, insert_location, merged_location, put, query,
-    read_all, save_parts, storage_driver, unmerged_location,
+    TestServer, entry, eventually, find_location, insert_entry, insert_location, merged_location,
+    put, query, read_all, save_parts, storage_driver, unmerged_location,
 };
 use crate::db::{MergeLeases, StorageLocation, StorageReaderLeases, now_ms};
 
@@ -379,5 +379,41 @@ async fn a_direct_download_lease_covers_the_signed_url_lifetime() {
         body.as_ref(),
         b"merged-data",
         "the signed url serves the object"
+    );
+}
+
+#[tokio::test]
+async fn closes_a_download_whose_client_stopped_reading() {
+    let server = TestServer::with(&[("DOWNLOAD_IDLE_TIMEOUT_MS", "200")]).await;
+    let folder = uuid::Uuid::new_v4().to_string();
+    // Far more than the socket buffers between server and client hold.
+    let data: &'static [u8] = Box::leak(vec![7_u8; 32 * 1024 * 1024].into_boxed_slice());
+    put(server.adapter(), &format!("{folder}/merged"), data).await;
+    let location = merged_location(&folder);
+    insert_location(server.db(), &location).await;
+    insert_entry(server.db(), &entry("idle", &location.id, now_ms())).await;
+
+    let response = get(&server, &location.id, None).await;
+    assert_eq!(response.status(), 200);
+    let lease = || async {
+        server
+            .db()
+            .optional::<Lease>(
+                &server.db().pool,
+                Query::select()
+                    .column(StorageReaderLeases::ExpiresAt)
+                    .from(StorageReaderLeases::Table)
+                    .and_where(
+                        Expr::col(StorageReaderLeases::StorageLocationId).eq(location.id.as_str()),
+                    ),
+            )
+            .await
+            .unwrap()
+    };
+    assert!(lease().await.is_some(), "the download holds a reader lease");
+    eventually(|| async { lease().await.is_none() }).await;
+    assert!(
+        response.bytes().await.is_err(),
+        "the client sees a failed download, not a complete one"
     );
 }

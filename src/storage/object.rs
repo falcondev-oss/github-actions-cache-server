@@ -97,7 +97,9 @@ async fn upload_watched(
         let response = request
             .body(reqwest::Body::wrap_stream(stream))
             .send()
-            .await?;
+            .await
+            // The URL is presigned: its query is a credential and must not reach the logs.
+            .map_err(reqwest::Error::without_url)?;
         let status = response.status();
         if status.is_success() {
             return Ok(());
