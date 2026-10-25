@@ -37,6 +37,7 @@ const TESTING_ENV_BASE = {
   ACTIONS_RESULTS_URL: 'http://localhost:3000/',
   ACTIONS_CACHE_URL: 'http://localhost:3000/',
   SKIP_TOKEN_VALIDATION: 'true',
+  MANAGEMENT_API_KEY: 'vitest-management-api-key',
 } satisfies Omit<
   typeof envBaseSchema.infer,
   | 'CACHE_CLEANUP_OLDER_THAN_DAYS'
@@ -85,6 +86,9 @@ const TESTING_ENV_BY_STORAGE_DRIVER = {
     AWS_REGION: 'us-east-1',
     STORAGE_S3_BUCKET: 'vitest',
     STORAGE_S3_SOCKET_TIMEOUT_MS: 10_000,
+    STORAGE_S3_MAX_SOCKETS: 50,
+    STORAGE_S3_CONTROL_MAX_SOCKETS: 16,
+    STORAGE_S3_CONTROL_QUEUE_TIMEOUT_MS: 5000,
     AWS_ACCESS_KEY_ID: 'rustfsadmin',
     AWS_SECRET_ACCESS_KEY: 'rustfsadmin',
     AWS_ENDPOINT_URL: 'http://localhost:9000',

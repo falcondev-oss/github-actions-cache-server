@@ -77,16 +77,22 @@ export default defineEventHandler(async (event) => {
   // `sendStream` neither waits for `drain` nor notices client aborts; `pipeline` does both
   // and destroys the source, which releases its reader lease. `_handled` is an h3 v1 internal.
   event._handled = true
+  const { res } = event.node
   try {
-    await pipeline(download.stream, event.node.res)
+    await pipeline(download.stream, res)
   } catch (err) {
-    // Client went away mid-body. Expected on cancelled jobs and parallel runners.
-    if ((err as NodeJS.ErrnoException).code === 'ERR_STREAM_PREMATURE_CLOSE') {
-      logger.debug(`Client aborted /download/${locationId}: ${(err as Error).message}`)
+    // An unpiped body pins its storage socket and reader lease. `pipeline` refuses a
+    // destination the client already closed (ERR_STREAM_UNABLE_TO_PIPE, e.g. while the
+    // read waited for a socket) without taking ownership of the source.
+    download.stream.destroy()
+    const { code, message } = err as NodeJS.ErrnoException
+    // Client went away. Expected on cancelled jobs and parallel runners.
+    if (code === 'ERR_STREAM_PREMATURE_CLOSE' || code === 'ERR_STREAM_UNABLE_TO_PIPE') {
+      logger.debug(`Client aborted /download/${locationId}: ${message}`)
       return
     }
     // Headers are out, so Nitro's error handler would crash with ERR_HTTP_HEADERS_SENT.
-    if (event.node.res.headersSent) {
+    if (res.headersSent) {
       logger.error(`Download stream failed for ${locationId}`, { error: err })
       return
     }

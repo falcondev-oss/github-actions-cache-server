@@ -179,6 +179,12 @@ Generate environment variables from config values.
 {{- end }}
 - name: STORAGE_S3_SOCKET_TIMEOUT_MS
   value: {{ .socketTimeoutMs | quote }}
+- name: STORAGE_S3_MAX_SOCKETS
+  value: {{ .maxSockets | quote }}
+- name: STORAGE_S3_CONTROL_MAX_SOCKETS
+  value: {{ .controlMaxSockets | quote }}
+- name: STORAGE_S3_CONTROL_QUEUE_TIMEOUT_MS
+  value: {{ .controlQueueTimeoutMs | quote }}
 {{- end }}
 {{- else if eq .Values.config.storage.driver "gcs" }}
 {{- with .Values.config.storage.gcs }}

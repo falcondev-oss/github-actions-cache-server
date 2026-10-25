@@ -97,6 +97,12 @@ config:
       # secretAccessKey: ''
       # -- Socket inactivity timeout in milliseconds. Set to 0 to disable.
       socketTimeoutMs: 10000
+      # -- Sockets per S3 data pool (reads and writes each get one).
+      maxSockets: 50
+      # -- Sockets for HEAD, LIST and DELETE requests.
+      controlMaxSockets: 16
+      # -- How long each attempt of a control request waits for a socket and connection. Set to 0 to wait forever.
+      controlQueueTimeoutMs: 5000
 
     # -- Google Cloud Storage driver settings
     # See https://gha-cache-server.falcondev.io/storage-drivers/google-cloud-storage
