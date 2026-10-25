@@ -384,6 +384,10 @@ async fn a_direct_download_lease_covers_the_signed_url_lifetime() {
 
 #[tokio::test]
 async fn closes_a_download_whose_client_stopped_reading() {
+    // The timeout sits on the connection, the same on every backend; emulators reject the upload.
+    if storage_driver() != "filesystem" {
+        return;
+    }
     let server = TestServer::with(&[("DOWNLOAD_IDLE_TIMEOUT_MS", "200")]).await;
     let folder = uuid::Uuid::new_v4().to_string();
     // Far more than the socket buffers between server and client hold.
