@@ -1526,10 +1526,9 @@ class AzBlobAdapter implements StorageAdapter {
     if (!(await container.exists()))
       throw new Error(`Container ${env.STORAGE_AZBLOB_CONTAINER} does not exist`)
 
-    return new AzBlobAdapter({ sdk, service, container })
+    return new AzBlobAdapter({ service, container })
   }
 
-  private sdk
   private service
   private container
   private keyPrefix = 'gh-actions-cache'
@@ -1556,16 +1555,7 @@ class AzBlobAdapter implements StorageAdapter {
     },
   }
 
-  constructor({
-    sdk,
-    service,
-    container,
-  }: {
-    sdk: typeof import('@azure/storage-blob')
-    service: BlobServiceClient
-    container: ContainerClient
-  }) {
-    this.sdk = sdk
+  constructor({ service, container }: { service: BlobServiceClient; container: ContainerClient }) {
     this.service = service
     this.container = container
   }
@@ -1576,20 +1566,21 @@ class AzBlobAdapter implements StorageAdapter {
 
   /** Returns a signer for read-only SAS URLs, fetching the user delegation key once. */
   private async sasSigner(expiresAt: number) {
+    const sdk = await import('@azure/storage-blob')
     // Backdated so clock skew doesn't make the SAS "not yet valid".
     const startsOn = new Date(Date.now() - 5 * 60 * 1000)
     const expiresOn = new Date(expiresAt)
-    const permissions = this.sdk.BlobSASPermissions.parse('r')
+    const permissions = sdk.BlobSASPermissions.parse('r')
     // A shared key signs directly; Entra ID credentials need a user delegation key.
     const delegationKey =
-      this.service.credential instanceof this.sdk.StorageSharedKeyCredential
+      this.service.credential instanceof sdk.StorageSharedKeyCredential
         ? undefined
         : await this.service.getUserDelegationKey(startsOn, expiresOn)
 
     return (objectName: string) => {
       const blob = this.blob(objectName)
       if (!delegationKey) return blob.generateSasUrl({ permissions, startsOn, expiresOn })
-      const sas = this.sdk.generateBlobSASQueryParameters(
+      const sas = sdk.generateBlobSASQueryParameters(
         {
           containerName: blob.containerName,
           blobName: blob.name,

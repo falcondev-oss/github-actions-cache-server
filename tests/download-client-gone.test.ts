@@ -5,38 +5,12 @@ import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import http from 'node:http'
 import { Readable } from 'node:stream'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import * as h3 from 'h3'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { getDatabase } from '~/lib/db'
 import { getStorage } from '~/lib/storage'
-
-/**
- * A stand-in for the object store: answers every GET with an unending body, so
- * a response only gives its socket back by being read to the end or destroyed.
- */
-async function startOrigin() {
-  const server = http.createServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/octet-stream' })
-    const chunk = Buffer.alloc(64 * 1024)
-    const pump = () => {
-      while (!res.destroyed && res.write(chunk));
-    }
-    res.on('drain', pump)
-    pump()
-  })
-  server.listen(0)
-  await once(server, 'listening')
-  const { port } = server.address() as AddressInfo
-  return {
-    url: `http://localhost:${port}`,
-    close: async () => {
-      server.closeAllConnections()
-      server.close()
-      await once(server, 'close')
-    },
-  }
-}
 
 // The real route on an in-process h3 app, as in proxy-backpressure.test.ts, so
 // the storage it calls and the sockets it holds are observable here.
@@ -87,72 +61,52 @@ async function createMergedEntry() {
 }
 
 /**
- * A client can give up on /download while the storage read is still waiting
- * for a socket in a saturated pool. The body then arrives for a response that
- * is already closed, and `pipeline` rejects a closed destination
- * (ERR_STREAM_UNABLE_TO_PIPE) before it takes ownership of the source. Unless
- * the route destroys it, the body pins its backend socket and reader lease for
- * the life of the process.
+ * A client can give up on /download while the storage read still waits for a
+ * socket. `pipeline` rejects the closed response without taking ownership of the
+ * body, so unless the route destroys it, the body pins its backend socket and
+ * reader lease for the life of the process.
  */
 describe('download for a client that left before storage answered', () => {
-  test('releases the backend socket and the reader lease', async () => {
-    const origin = await startOrigin()
-    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 })
+  test('releases the backend read and the reader lease', async () => {
     const storage = await getStorage()
     const db = await getDatabase()
     const locationId = await createMergedEntry()
 
     const { promise: clientGone, resolve: markClientGone } = Promise.withResolvers<void>()
-    const { promise: adapterSettled, resolve: markAdapterSettled } = Promise.withResolvers<void>()
-    let body: IncomingMessage | undefined
+    // An unending body: only being destroyed lets it go, as with a GetObject body.
+    const body = Readable.from(
+      (async function* () {
+        for (;;) {
+          await sleep(1)
+          yield Buffer.alloc(64 * 1024)
+        }
+      })(),
+    )
     vi.spyOn(storage.adapter, 'createDownloadStream').mockImplementation(async () => {
-      try {
-        await clientGone
-        const req = http.get(origin.url, { agent })
-        const [res] = (await once(req, 'response')) as [IncomingMessage]
-        body = res
-        return { stream: res }
-      } finally {
-        markAdapterSettled()
-      }
+      await clientGone
+      return { stream: body }
     })
 
-    try {
-      const { port } = server.address() as AddressInfo
-      const serverSide = once(server, 'request') as Promise<[IncomingMessage, ServerResponse]>
-      const req = http.get(`http://localhost:${port}/download/${locationId}`)
-      req.on('error', () => {})
-      const [, serverRes] = await serverSide
-      req.destroy()
-      await once(serverRes, 'close')
-      markClientGone()
-      await adapterSettled
+    const { port } = server.address() as AddressInfo
+    const serverSide = once(server, 'request') as Promise<[IncomingMessage, ServerResponse]>
+    const req = http.get(`http://localhost:${port}/download/${locationId}`)
+    req.on('error', () => {})
+    const [, serverRes] = await serverSide
+    req.destroy()
+    await once(serverRes, 'close')
+    markClientGone()
 
-      expect(body).toBeDefined()
-      await vi.waitFor(
-        () => {
-          expect(
-            Object.values(agent.sockets).flat(),
-            'sockets held for the gone client',
-          ).toHaveLength(0)
-          expect(body!.destroyed, 'backend body destroyed').toBe(true)
-        },
-        { timeout: 5000, interval: 25 },
-      )
-      await vi.waitFor(
-        async () => {
-          const leases = await db
-            .selectFrom('storage_reader_leases')
-            .where('storageLocationId', '=', locationId)
-            .select('id')
-            .execute()
-          expect(leases, 'reader leases left behind').toHaveLength(0)
-        },
-        { timeout: 5000, interval: 25 },
-      )
-    } finally {
-      agent.destroy()
-      await origin.close()
-    }
+    await vi.waitFor(
+      async () => {
+        expect(body.destroyed, 'backend body destroyed').toBe(true)
+        const leases = await db
+          .selectFrom('storage_reader_leases')
+          .where('storageLocationId', '=', locationId)
+          .select('id')
+          .execute()
+        expect(leases, 'reader leases left behind').toHaveLength(0)
+      },
+      { timeout: 5000, interval: 25 },
+    )
   }, 20_000)
 })

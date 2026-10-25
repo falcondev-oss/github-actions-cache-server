@@ -12,7 +12,7 @@ export function generateNumberId() {
  * The request path without its query string, for logging. A query can carry
  * credentials (signed URLs, SAS-style parameters), so it must never reach the logs.
  */
-export function loggedPath(event: H3Event) {
+export function pathWithoutQuery(event: H3Event) {
   return event.path.split('?', 1)[0]
 }
 

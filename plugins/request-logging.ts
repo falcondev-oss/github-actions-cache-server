@@ -1,6 +1,6 @@
 import { H3Error } from 'h3'
 import { env } from '~/lib/env'
-import { loggedPath } from '~/lib/helpers'
+import { pathWithoutQuery } from '~/lib/helpers'
 import { logger } from '~/lib/logger'
 
 export default defineNitroPlugin((nitro) => {
@@ -11,17 +11,19 @@ export default defineNitroPlugin((nitro) => {
     }
 
     logger.error(
-      `Response: ${event.method} ${loggedPath(event)} > ${error instanceof H3Error ? error.statusCode : '[no status code]'}\n`,
+      `Response: ${event.method} ${pathWithoutQuery(event)} > ${error instanceof H3Error ? error.statusCode : '[no status code]'}\n`,
       error,
     )
   })
 
   if (env.DEBUG) {
     nitro.hooks.hook('request', (event) => {
-      logger.debug(`Request: ${event.method} ${loggedPath(event)}`)
+      logger.debug(`Request: ${event.method} ${pathWithoutQuery(event)}`)
     })
     nitro.hooks.hook('afterResponse', (event) => {
-      logger.debug(`Response: ${event.method} ${loggedPath(event)} > ${getResponseStatus(event)}`)
+      logger.debug(
+        `Response: ${event.method} ${pathWithoutQuery(event)} > ${getResponseStatus(event)}`,
+      )
     })
   }
 })

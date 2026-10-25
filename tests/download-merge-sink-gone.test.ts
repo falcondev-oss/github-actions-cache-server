@@ -40,21 +40,11 @@ async function trackPartStreams() {
   return parts
 }
 
-/** Fails the background merge upload without reading it, as a broken S3 upload would. */
-async function failMergeUpload() {
-  const storage = await getStorage()
-  vi.spyOn(storage.adapter, 'uploadStream').mockRejectedValue(new Error('merge upload failed'))
-}
-
 /** Reads one chunk, then hangs up the way the route does when the client leaves. */
 async function leaveAfterFirstChunk(stream: Readable) {
   await once(stream, 'readable')
   expect(stream.read()).not.toBeNull()
   stream.destroy()
-}
-
-async function settles(promise: Promise<unknown>, timeoutMs = 5000) {
-  return Promise.race([promise.then(() => 'settled'), sleep(timeoutMs, 'still pending')])
 }
 
 async function locationState(locationId: string) {
@@ -95,7 +85,7 @@ describe('first download of an unmerged entry', () => {
     const { stream } = download
     await leaveAfterFirstChunk(stream)
 
-    expect(await settles(storage.waitForOngoingMerges()), 'merge settled').toBe('settled')
+    await storage.waitForOngoingMerges()
     const { mergedAt, mergeLeases } = await locationState(locationId)
     expect(mergedAt, 'merge completed').not.toBeNull()
     expect(mergeLeases, 'merge lease released').toHaveLength(0)
@@ -109,7 +99,8 @@ describe('first download of an unmerged entry', () => {
   test('a failed merge upload still serves the whole entry to the client', async () => {
     const storage = await getStorage()
     const { locationId } = await createUnmergedEntry()
-    await failMergeUpload()
+    // Fails the merge upload without reading it, as a broken S3 upload would.
+    vi.spyOn(storage.adapter, 'uploadStream').mockRejectedValue(new Error('merge upload failed'))
 
     const download = await storage.download(locationId)
     if (!download) throw new Error('download returned nothing')
@@ -119,9 +110,9 @@ describe('first download of an unmerged entry', () => {
       for await (const chunk of stream) received += (chunk as Buffer).length
     })()
 
-    expect(await settles(consumed), 'client download finished').toBe('settled')
+    await consumed
     expect(received).toBe(PART_COUNT * PART_BYTES)
-    expect(await settles(storage.waitForOngoingMerges()), 'merge settled').toBe('settled')
+    await storage.waitForOngoingMerges()
     const { mergedAt, mergeLeases } = await locationState(locationId)
     expect(mergedAt, 'failed merge not marked complete').toBeNull()
     expect(mergeLeases, 'merge lease released').toHaveLength(0)
@@ -130,7 +121,8 @@ describe('first download of an unmerged entry', () => {
   test('client and merge both gone stops reading and destroys the part stream', async () => {
     const storage = await getStorage()
     const { locationId } = await createUnmergedEntry()
-    await failMergeUpload()
+    // Fails the merge upload without reading it, as a broken S3 upload would.
+    vi.spyOn(storage.adapter, 'uploadStream').mockRejectedValue(new Error('merge upload failed'))
     // An unending part: only being destroyed lets it go, as with a GetObject body.
     const part = Readable.from(
       (async function* () {
@@ -151,7 +143,7 @@ describe('first download of an unmerged entry', () => {
       timeout: 5000,
       interval: 25,
     })
-    expect(await settles(storage.waitForOngoingMerges()), 'merge settled').toBe('settled')
+    await storage.waitForOngoingMerges()
     const { mergeLeases } = await locationState(locationId)
     expect(mergeLeases, 'merge lease released').toHaveLength(0)
   }, 20_000)
