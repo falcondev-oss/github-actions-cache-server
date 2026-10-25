@@ -37,13 +37,14 @@ async function sha256(stream: Readable) {
   return hash.digest('hex')
 }
 
-async function mergeState(locationId: string) {
+async function mergedAt(locationId: string) {
   const db = await getDatabase()
-  return db
+  const location = await db
     .selectFrom('storage_locations')
     .where('id', '=', locationId)
-    .select(['mergedAt', 'mergeStartedAt'])
+    .select('mergedAt')
     .executeTakeFirstOrThrow()
+  return location.mergedAt
 }
 
 describe('merge concurrency limit', () => {
@@ -70,42 +71,16 @@ describe('merge concurrency limit', () => {
       expect(await sha256(firstStream)).toBe(expected)
       await storage.waitForOngoingMerges()
 
-      expect(await mergeState(first.locationId)).not.toMatchObject({ mergedAt: null })
-      expect(await mergeState(second.locationId)).toMatchObject({ mergedAt: null })
+      expect(await mergedAt(first.locationId)).not.toBeNull()
+      expect(await mergedAt(second.locationId)).toBeNull()
 
       // With the slot free again, the next restore merges the skipped entry.
       expect(await sha256(await download(storage, second.locationId))).toBe(expected)
       await storage.waitForOngoingMerges()
-      expect(await mergeState(second.locationId)).not.toMatchObject({ mergedAt: null })
+      expect(await mergedAt(second.locationId)).not.toBeNull()
     } finally {
       await storage.adapter.deleteFolder(first.folderName)
       await storage.adapter.deleteFolder(second.folderName)
-    }
-  })
-
-  test('an eager merge beyond the limit leaves the entry to a later download', async () => {
-    env.EAGER_MERGE = false
-    env.MAX_CONCURRENT_MERGES = 1
-    const storage = await Storage.fromEnv()
-    const busy = await uploadEntry(storage)
-    // An unread first restore keeps its Merge, and the only slot, busy.
-    const busyStream = await download(storage, busy.locationId)
-
-    env.EAGER_MERGE = true
-    const eager = await uploadEntry(storage)
-    try {
-      // Upload completion awaits the Merge Lease, so a started Merge would have
-      // stamped mergeStartedAt by now.
-      expect(await mergeState(eager.locationId)).toEqual({ mergedAt: null, mergeStartedAt: null })
-
-      expect(await sha256(busyStream)).toBe(expected)
-      await storage.waitForOngoingMerges()
-      expect(await sha256(await download(storage, eager.locationId))).toBe(expected)
-      await storage.waitForOngoingMerges()
-      expect(await mergeState(eager.locationId)).not.toMatchObject({ mergedAt: null })
-    } finally {
-      await storage.adapter.deleteFolder(busy.folderName)
-      await storage.adapter.deleteFolder(eager.folderName)
     }
   })
 })

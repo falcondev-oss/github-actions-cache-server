@@ -83,17 +83,17 @@ export default defineEventHandler(async (event) => {
   // the connection open would hold the backend read, its reader lease and, on a
   // first restore, the Merge it paces forever. Bytes moving at any rate keep the
   // download alive.
-  let idleTimer: NodeJS.Timeout | undefined
-  if (env.DOWNLOAD_IDLE_TIMEOUT_MS > 0) {
-    idleTimer = setTimeout(() => {
-      download.stream.destroy(
-        Object.assign(new Error(`No bytes sent for ${env.DOWNLOAD_IDLE_TIMEOUT_MS} ms`), {
-          code: 'ERR_DOWNLOAD_IDLE_TIMEOUT',
-        }),
-      )
-    }, env.DOWNLOAD_IDLE_TIMEOUT_MS).unref()
-    download.stream.on('data', () => idleTimer?.refresh())
-  }
+  const idleTimer =
+    env.DOWNLOAD_IDLE_TIMEOUT_MS > 0
+      ? setTimeout(() => {
+          download.stream.destroy(
+            Object.assign(new Error(`No bytes sent for ${env.DOWNLOAD_IDLE_TIMEOUT_MS} ms`), {
+              code: 'ERR_DOWNLOAD_IDLE_TIMEOUT',
+            }),
+          )
+        }, env.DOWNLOAD_IDLE_TIMEOUT_MS)
+      : undefined
+  if (idleTimer) download.stream.on('data', () => idleTimer.refresh())
   try {
     await pipeline(download.stream, res)
   } catch (err) {

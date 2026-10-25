@@ -312,21 +312,19 @@ export class Storage {
     this.activeMerges++
     let mergeToken: string | undefined
     try {
-      mergeToken = await acquireMergeLease(this.db, location.id)
-      if (mergeToken)
+      const token = await acquireMergeLease(this.db, location.id)
+      if (token) {
         await this.db
           .updateTable('storage_locations')
           .set({ mergeStartedAt: Date.now() })
           .where('id', '=', location.id)
           .execute()
-    } catch (err) {
-      this.activeMerges--
-      throw err
+        mergeToken = token
+      }
+    } finally {
+      if (!mergeToken) this.activeMerges--
     }
-    if (!mergeToken) {
-      this.activeMerges--
-      return false
-    }
+    if (!mergeToken) return false
 
     const renewalTimer = setInterval(() => {
       void renewMergeLease(this.db, location.id, mergeToken)

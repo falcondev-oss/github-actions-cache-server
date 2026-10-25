@@ -38,7 +38,7 @@ All optional.
 | `STORAGE_S3_CONTROL_MAX_SOCKETS`      | `16`     | Sockets for HEAD, LIST and DELETE requests (cache lookups, cleanup), kept apart from bulk transfers.                                              |
 | `STORAGE_S3_CONTROL_QUEUE_TIMEOUT_MS` | `5000`   | How long each attempt of a control request waits for a socket and connection; `0` waits forever.                                                  |
 | `MAX_CONCURRENT_MERGES`               | `16`     | Merges one process runs at once. Beyond it, restores stream the parts and a later download merges.                                                |
-| `DOWNLOAD_IDLE_TIMEOUT_MS`            | `300000` | Closes a download whose client has not read a byte for this long; `0` disables.                                                                   |
+| `DOWNLOAD_IDLE_TIMEOUT_MS`            | `300000` | Closes a download whose storage read has not moved for this long (client stopped reading); `0` disables.                                          |
 
 ## Documentation
 
