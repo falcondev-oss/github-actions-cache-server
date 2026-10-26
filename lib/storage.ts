@@ -1,14 +1,16 @@
 /* eslint-disable ts/method-signature-style */
-import type { ContainerClient } from '@azure/storage-blob'
+import type { BlobServiceClient, ContainerClient } from '@azure/storage-blob'
+import type { Storage as GcsClient } from '@google-cloud/storage'
 import type { Kysely } from 'kysely'
+import type { Writable } from 'node:stream'
 import type { Database, StorageLocation } from './db'
 import type { Reservation } from './helpers'
 import type { Env } from './schemas'
 import { randomUUID } from 'node:crypto'
-import { once } from 'node:events'
 import { createReadStream, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
-import { Agent } from 'node:https'
+import { Agent as HttpAgent } from 'node:http'
+import { Agent as HttpsAgent } from 'node:https'
 import path from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -27,14 +29,6 @@ import {
 } from '@aws-sdk/client-s3'
 import { Upload as S3Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { DefaultAzureCredential } from '@azure/identity'
-import {
-  BlobSASPermissions,
-  BlobServiceClient,
-  generateBlobSASQueryParameters,
-  StorageSharedKeyCredential,
-} from '@azure/storage-blob'
-import { Storage as GcsClient } from '@google-cloud/storage'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { sql } from 'kysely'
 import { chunk } from 'remeda'
@@ -64,6 +58,23 @@ function escapeLikePattern(value: string) {
     .replaceAll('\\', '\\\\')
     .replaceAll('%', String.raw`\%`)
     .replaceAll('_', String.raw`\_`)
+}
+
+/**
+ * Resolves once `stream` wants more data or is closed. A destroyed stream emits
+ * no 'drain', and no 'error' when destroyed without one, so waiting on 'drain'
+ * alone hangs forever once its reader is gone.
+ */
+function drainOrClose(stream: Writable) {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  const done = () => {
+    stream.off('drain', done)
+    stream.off('close', done)
+    resolve()
+  }
+  stream.on('drain', done)
+  stream.on('close', done)
+  return promise
 }
 
 export class ObjectNotFoundError extends Error {
@@ -130,6 +141,7 @@ export class Storage {
 
   private db
   private mergeStreamPromises = new Set<Promise<void>>()
+  private activeMerges = 0
   adapter
 
   private constructor({ db, adapter }: { adapter: StorageAdapter; db: Kysely<Database> }) {
@@ -198,18 +210,25 @@ export class Storage {
   ) {
     if (location.partsDeletedAt) throw new Error('No parts to feed')
 
+    // Either sink can be destroyed mid-download: the route destroys the response
+    // when the client hangs up, and a failed merge upload destroys the merger.
+    // Waiting on a destroyed sink's 'drain' would park the pump forever, pinning
+    // the current part's backend read and renewing the merge lease. Keep feeding
+    // whichever sink is still open, and stop reading once both are gone.
+    const sinks = [responseStream, mergerStream]
     for await (const chunk of this.streamParts(location)) {
-      // attach both drain listeners simultaneously to prevent a race condition where the second stream being faster hangs forever
+      // attach every drain wait before awaiting any, so a faster sink's 'drain' is never missed
       const drains = []
-      if (!responseStream.write(chunk)) drains.push(once(responseStream, 'drain'))
-      if (!mergerStream.write(chunk)) drains.push(once(mergerStream, 'drain'))
+      for (const sink of sinks) {
+        if (sink.destroyed) continue
+        if (!sink.write(chunk) && !sink.destroyed) drains.push(drainOrClose(sink))
+      }
       await Promise.all(drains)
+      // Leaving the loop makes `streamParts` destroy the current part stream.
+      if (sinks.every((sink) => sink.destroyed)) return
     }
 
-    responseStream.end()
-    mergerStream.end()
-
-    await globalThis.gc?.()
+    for (const sink of sinks) if (!sink.destroyed) sink.end()
   }
 
   private async *streamParts(location: StorageLocation) {
@@ -221,8 +240,6 @@ export class Storage {
       )
 
       for await (const chunk of partStream) yield chunk
-
-      await globalThis.gc?.()
     }
   }
 
@@ -281,19 +298,33 @@ export class Storage {
   /**
    * Runs a Merge under a Merge Lease. `write` produces `${folderName}/merged`;
    * a lease-fenced transaction then marks the Merge complete. Returns false
-   * when another worker holds the lease. Writing straight to the final object
-   * is safe (ADR-0004). The returned promise never rejects: failures are logged
-   * and the merge state rolled back.
+   * when another worker holds the lease or this process already runs
+   * MAX_CONCURRENT_MERGES Merges; a skipped Merge is retried by a later
+   * download. Writing straight to the final object is safe (ADR-0004). The
+   * returned promise never rejects: failures are logged and the merge state
+   * rolled back.
    */
   private async startMerge(location: StorageLocation, write: () => Promise<void>) {
-    const mergeToken = await acquireMergeLease(this.db, location.id)
+    // Each Merge holds storage connections and buffers for its whole duration;
+    // unbounded, a burst of first restores or finalizes exhausts them.
+    if (this.activeMerges >= env.MAX_CONCURRENT_MERGES) return false
+    // Reserve the slot before the first await so concurrent callers cannot overshoot it.
+    this.activeMerges++
+    let mergeToken: string | undefined
+    try {
+      const token = await acquireMergeLease(this.db, location.id)
+      if (token) {
+        await this.db
+          .updateTable('storage_locations')
+          .set({ mergeStartedAt: Date.now() })
+          .where('id', '=', location.id)
+          .execute()
+        mergeToken = token
+      }
+    } finally {
+      if (!mergeToken) this.activeMerges--
+    }
     if (!mergeToken) return false
-
-    await this.db
-      .updateTable('storage_locations')
-      .set({ mergeStartedAt: Date.now() })
-      .where('id', '=', location.id)
-      .execute()
 
     const renewalTimer = setInterval(() => {
       void renewMergeLease(this.db, location.id, mergeToken)
@@ -341,6 +372,7 @@ export class Storage {
       })
       .finally(async () => {
         clearInterval(renewalTimer)
+        this.activeMerges--
         await releaseMergeLease(this.db, location.id, mergeToken)
       })
     this.mergeStreamPromises.add(mergePromise)
@@ -877,25 +909,52 @@ function accumulateFolder(
   folders.set(folderName, existing)
 }
 
+/** reads: GetObject; writes: uploads, multipart and part copies; control: HEAD, LIST, DELETE. */
+interface S3Clients {
+  reads: S3Client
+  writes: S3Client
+  control: S3Client
+}
+
 class S3Adapter implements StorageAdapter {
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 's3' }>) {
     const bucket = env.STORAGE_S3_BUCKET
-    const agent = new Agent({
-      keepAlive: true,
-      maxSockets: 50,
-      keepAliveMsecs: 1000,
-    })
-    const s3 = new S3Client({
-      forcePathStyle: true,
-      region: env.AWS_REGION,
-      requestHandler: new NodeHttpHandler({
-        httpsAgent: agent,
-        socketTimeout: env.STORAGE_S3_SOCKET_TIMEOUT_MS,
-      }),
-    })
+    // One socket pool per kind of work. A streaming Merge holds a part GetObject
+    // open (paused by backpressure) while it waits for a socket to upload the
+    // merged object; in one shared pool, as many concurrent Merges as sockets
+    // deadlock it, and the HeadObject of every cache lookup queues behind all
+    // bulk transfers. Write holders never wait on reads and control requests
+    // hold a socket only briefly, so no wait cycle can span pools.
+    const createClient = (maxSockets: number, connectionTimeout?: number) => {
+      // Both protocols get the configured pool: NodeHttpHandler picks the agent by
+      // endpoint scheme, and an http:// endpoint (MinIO, RustFS, an in-cluster
+      // gateway) would otherwise fall back to the SDK's default agent and ignore
+      // the configured size.
+      const agentOptions = { keepAlive: true, maxSockets, keepAliveMsecs: 1000 }
+      return new S3Client({
+        forcePathStyle: true,
+        region: env.AWS_REGION,
+        requestHandler: new NodeHttpHandler({
+          httpAgent: new HttpAgent(agentOptions),
+          httpsAgent: new HttpsAgent(agentOptions),
+          socketTimeout: env.STORAGE_S3_SOCKET_TIMEOUT_MS,
+          connectionTimeout,
+        }),
+      })
+    }
+    const clients: S3Clients = {
+      reads: createClient(env.STORAGE_S3_MAX_SOCKETS),
+      writes: createClient(env.STORAGE_S3_MAX_SOCKETS),
+      // Bounds the wait for a socket plus the connect, so a starved lookup fails
+      // instead of hanging; cleared once a kept-alive socket is assigned.
+      control: createClient(
+        env.STORAGE_S3_CONTROL_MAX_SOCKETS,
+        env.STORAGE_S3_CONTROL_QUEUE_TIMEOUT_MS,
+      ),
+    }
 
     try {
-      await s3.send(
+      await clients.control.send(
         new HeadBucketCommand({
           Bucket: bucket,
         }),
@@ -907,10 +966,10 @@ class S3Adapter implements StorageAdapter {
       throw err
     }
 
-    return new S3Adapter({ s3, bucket })
+    return new S3Adapter({ clients, bucket })
   }
 
-  private s3
+  private clients
   private bucket
   private keyPrefix = 'gh-actions-cache'
 
@@ -922,12 +981,14 @@ class S3Adapter implements StorageAdapter {
     run: async (folderName: string, partCount: number) => {
       const Bucket = this.bucket
       const Key = `${this.keyPrefix}/${folderName}/merged`
-      const { UploadId } = await this.s3.send(new CreateMultipartUploadCommand({ Bucket, Key }))
+      const { UploadId } = await this.clients.writes.send(
+        new CreateMultipartUploadCommand({ Bucket, Key }),
+      )
       if (!UploadId) throw new Error('S3 did not return an UploadId')
       try {
         const Parts = []
         for (let PartNumber = 1; PartNumber <= partCount; PartNumber++) {
-          const copy = await this.s3.send(
+          const copy = await this.clients.writes.send(
             new UploadPartCopyCommand({
               Bucket,
               Key,
@@ -938,11 +999,11 @@ class S3Adapter implements StorageAdapter {
           )
           Parts.push({ PartNumber, ETag: copy.CopyPartResult?.ETag })
         }
-        await this.s3.send(
+        await this.clients.writes.send(
           new CompleteMultipartUploadCommand({ Bucket, Key, UploadId, MultipartUpload: { Parts } }),
         )
       } catch (err) {
-        await this.s3
+        await this.clients.writes
           .send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId }))
           .catch(() => {})
         throw err
@@ -950,8 +1011,8 @@ class S3Adapter implements StorageAdapter {
     },
   }
 
-  constructor({ bucket, s3 }: { s3: S3Client; bucket: string }) {
-    this.s3 = s3
+  constructor({ bucket, clients }: { clients: S3Clients; bucket: string }) {
+    this.clients = clients
     this.bucket = bucket
   }
 
@@ -959,7 +1020,7 @@ class S3Adapter implements StorageAdapter {
     let continuationToken: string | undefined
 
     do {
-      const response = await this.s3.send(
+      const response = await this.clients.control.send(
         new ListObjectsV2Command({
           Bucket: this.bucket,
           Prefix: prefix,
@@ -982,7 +1043,7 @@ class S3Adapter implements StorageAdapter {
   private async deleteByPrefix(prefix: string) {
     const deleted = { objects: 0, bytes: 0 }
     while (true) {
-      const listResponse = await this.s3.send(
+      const listResponse = await this.clients.control.send(
         new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix }),
       )
       if (!listResponse.Contents || listResponse.Contents.length === 0) break
@@ -998,7 +1059,7 @@ class S3Adapter implements StorageAdapter {
           listResponse.Contents.filter((obj): obj is { Key: string } => !!obj.Key),
           1000,
         ).map((chunkedObjects) =>
-          this.s3.send(
+          this.clients.control.send(
             new DeleteObjectsCommand({
               Bucket: this.bucket,
               Delete: {
@@ -1024,7 +1085,7 @@ class S3Adapter implements StorageAdapter {
 
   async createDownloadStream(objectName: string, range?: RangeRequest): Promise<DownloadStream> {
     try {
-      const response = await this.s3.send(
+      const response = await this.clients.reads.send(
         new GetObjectCommand({
           Bucket: this.bucket,
           Key: `${this.keyPrefix}/${objectName}`,
@@ -1051,7 +1112,7 @@ class S3Adapter implements StorageAdapter {
 
   async objectExists(objectName: string) {
     try {
-      await this.s3.send(
+      await this.clients.control.send(
         new HeadObjectCommand({
           Bucket: this.bucket,
           Key: `${this.keyPrefix}/${objectName}`,
@@ -1079,7 +1140,7 @@ class S3Adapter implements StorageAdapter {
 
   async uploadStream(objectName: string, iterator: AsyncIterable<Uint8Array>) {
     await new S3Upload({
-      client: this.s3,
+      client: this.clients.writes,
       params: {
         Bucket: this.bucket,
         Key: `${this.keyPrefix}/${objectName}`,
@@ -1135,7 +1196,7 @@ class S3Adapter implements StorageAdapter {
 
   async createDownloadUrl(objectName: string, expiresAt: number) {
     return getSignedUrl(
-      this.s3,
+      this.clients.reads,
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: `${this.keyPrefix}/${objectName}`,
@@ -1310,6 +1371,8 @@ class GcsAdapter implements StorageAdapter {
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'gcs' }>) {
     const bucketName = env.STORAGE_GCS_BUCKET
 
+    // Loaded only when selected: the SDKs of unused drivers stay out of the heap.
+    const { Storage: GcsClient } = await import('@google-cloud/storage')
     const gcs = new GcsClient({
       keyFilename: env.STORAGE_GCS_SERVICE_ACCOUNT_KEY,
       apiEndpoint: env.STORAGE_GCS_ENDPOINT,
@@ -1462,13 +1525,19 @@ class GcsAdapter implements StorageAdapter {
 
 class AzBlobAdapter implements StorageAdapter {
   static async fromEnv(env: Extract<Env, { STORAGE_DRIVER: 'azblob' }>) {
-    const service = env.STORAGE_AZBLOB_CONNECTION_STRING
-      ? BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
-      : new BlobServiceClient(
-          env.STORAGE_AZBLOB_ENDPOINT ??
-            `https://${env.STORAGE_AZBLOB_ACCOUNT}.blob.core.windows.net`,
-          new DefaultAzureCredential(),
-        )
+    // Loaded only when selected: the SDKs of unused drivers stay out of the heap.
+    const sdk = await import('@azure/storage-blob')
+    let service
+    if (env.STORAGE_AZBLOB_CONNECTION_STRING) {
+      service = sdk.BlobServiceClient.fromConnectionString(env.STORAGE_AZBLOB_CONNECTION_STRING)
+    } else {
+      const { DefaultAzureCredential } = await import('@azure/identity')
+      service = new sdk.BlobServiceClient(
+        env.STORAGE_AZBLOB_ENDPOINT ??
+          `https://${env.STORAGE_AZBLOB_ACCOUNT}.blob.core.windows.net`,
+        new DefaultAzureCredential(),
+      )
+    }
     const container = service.getContainerClient(env.STORAGE_AZBLOB_CONTAINER)
     if (!(await container.exists()))
       throw new Error(`Container ${env.STORAGE_AZBLOB_CONTAINER} does not exist`)
@@ -1513,20 +1582,21 @@ class AzBlobAdapter implements StorageAdapter {
 
   /** Returns a signer for read-only SAS URLs, fetching the user delegation key once. */
   private async sasSigner(expiresAt: number) {
+    const sdk = await import('@azure/storage-blob')
     // Backdated so clock skew doesn't make the SAS "not yet valid".
     const startsOn = new Date(Date.now() - 5 * 60 * 1000)
     const expiresOn = new Date(expiresAt)
-    const permissions = BlobSASPermissions.parse('r')
+    const permissions = sdk.BlobSASPermissions.parse('r')
     // A shared key signs directly; Entra ID credentials need a user delegation key.
     const delegationKey =
-      this.service.credential instanceof StorageSharedKeyCredential
+      this.service.credential instanceof sdk.StorageSharedKeyCredential
         ? undefined
         : await this.service.getUserDelegationKey(startsOn, expiresOn)
 
     return (objectName: string) => {
       const blob = this.blob(objectName)
       if (!delegationKey) return blob.generateSasUrl({ permissions, startsOn, expiresOn })
-      const sas = generateBlobSASQueryParameters(
+      const sas = sdk.generateBlobSASQueryParameters(
         {
           containerName: blob.containerName,
           blobName: blob.name,

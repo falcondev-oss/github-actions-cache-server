@@ -164,6 +164,7 @@ export const cacheEntriesRouter = base
         if (input.key) query = query.where('key', '=', input.key)
         if (input.version) query = query.where('version', '=', input.version)
         if (input.scope) query = query.where('scope', '=', input.scope)
+        if (input.repoId) query = query.where('repoId', '=', input.repoId)
 
         await query.execute()
         context.event.waitUntil(runTask('cleanup:storage-locations'))

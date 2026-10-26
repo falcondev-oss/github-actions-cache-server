@@ -45,6 +45,12 @@ config:
   # bucket. Doubles storage per entry until the parts cleanup job runs.
   eagerMerge: false
 
+  # -- Merges one process runs at once, eager or lazy. Beyond it, restores stream the parts and a later download merges.
+  maxConcurrentMerges: 16
+
+  # -- Closes a download whose storage read has not moved for this long (client stopped reading). Set to 0 to disable.
+  downloadIdleTimeoutMs: 300000
+
   # -- Number of days to keep stale cache data before deleting it. Set to 0 to disable.
   cacheCleanupOlderThanDays: 90
 
@@ -97,6 +103,12 @@ config:
       # secretAccessKey: ''
       # -- Socket inactivity timeout in milliseconds. Set to 0 to disable.
       socketTimeoutMs: 10000
+      # -- Sockets per S3 data pool (reads and writes each get one).
+      maxSockets: 50
+      # -- Sockets for HEAD, LIST and DELETE requests.
+      controlMaxSockets: 16
+      # -- How long each attempt of a control request waits for a socket and connection. Set to 0 to wait forever.
+      controlQueueTimeoutMs: 5000
 
     # -- Google Cloud Storage driver settings
     # See https://gha-cache-server.falcondev.io/storage-drivers/google-cloud-storage

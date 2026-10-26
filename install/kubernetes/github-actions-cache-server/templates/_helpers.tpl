@@ -127,6 +127,10 @@ Generate environment variables from config values.
   value: {{ .Values.config.enableDirectDownloads | quote }}
 - name: EAGER_MERGE
   value: {{ .Values.config.eagerMerge | quote }}
+- name: MAX_CONCURRENT_MERGES
+  value: {{ .Values.config.maxConcurrentMerges | quote }}
+- name: DOWNLOAD_IDLE_TIMEOUT_MS
+  value: {{ .Values.config.downloadIdleTimeoutMs | quote }}
 - name: CACHE_CLEANUP_OLDER_THAN_DAYS
   value: {{ .Values.config.cacheCleanupOlderThanDays | quote }}
 {{- if .Values.config.cacheMaxSizeBytes }}
@@ -179,6 +183,12 @@ Generate environment variables from config values.
 {{- end }}
 - name: STORAGE_S3_SOCKET_TIMEOUT_MS
   value: {{ .socketTimeoutMs | quote }}
+- name: STORAGE_S3_MAX_SOCKETS
+  value: {{ .maxSockets | quote }}
+- name: STORAGE_S3_CONTROL_MAX_SOCKETS
+  value: {{ .controlMaxSockets | quote }}
+- name: STORAGE_S3_CONTROL_QUEUE_TIMEOUT_MS
+  value: {{ .controlQueueTimeoutMs | quote }}
 {{- end }}
 {{- else if eq .Values.config.storage.driver "gcs" }}
 {{- with .Values.config.storage.gcs }}

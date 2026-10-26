@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 
 import { z } from 'zod'
 
+import { logger } from '~/lib/logger'
 import { getStorage } from '~/lib/storage'
 
 const pathParamsSchema = z.object({
@@ -35,10 +36,18 @@ export default defineEventHandler(async (event) => {
 
   const { uploadId } = parsedPathParams.data
 
-  // Not h3's `getRequestWebStream`: it enqueues every `data` event and never pauses the
-  // request, so a body arriving faster than storage consumes it is buffered in full.
-  const storage = await getStorage()
-  const stored = await storage.uploadPart(uploadId, chunkIndex, event.node.req)
+  let stored: boolean
+  try {
+    // Not h3's `getRequestWebStream`: it enqueues every `data` event and never pauses the
+    // request, so a body arriving faster than storage consumes it is buffered in full.
+    const storage = await getStorage()
+    stored = await storage.uploadPart(uploadId, chunkIndex, event.node.req)
+  } catch (err) {
+    // Logged here and rethrown as handled: Nitro logs unhandled errors with the
+    // full request URL, query string included.
+    logger.error(`Failed to store upload ${uploadId}`, err)
+    throw createError({ statusCode: 500, statusMessage: 'Failed to store upload' })
+  }
   if (!stored)
     throw createError({
       statusCode: 404,

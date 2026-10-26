@@ -36,4 +36,4 @@ RUN if echo "$BASE_IMAGE" | grep -q "node-caged"; then \
 			echo "export NODE_CAGED=false" > /app/.runtime-env; \
 		fi
 
-CMD ["sh", "-c", ". /app/.runtime-env && exec node --expose-gc /app/server/index.mjs"]
+CMD ["sh", "-c", ". /app/.runtime-env && exec node /app/server/index.mjs"]
