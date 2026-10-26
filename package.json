@@ -7,7 +7,7 @@
     "node": "^26.12.1"
   },
   "scripts": {
-    "prepare": "nitropack prepare",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null; nitropack prepare",
     "dev": "nitropack dev",
     "build": "nitropack build",
     "lint": "eslint --cache . && prettier --check --cache .",
