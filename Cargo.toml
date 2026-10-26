@@ -16,17 +16,15 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 mimalloc = { version = "0.1", default-features = false }
 jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 object_store = { version = "0.14", default-features = false, features = ["aws", "gcp", "azure"] }
-percent-encoding = "2"
 prometheus = { version = "0.14", default-features = false, features = ["process"] }
 prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "http2"] }
 rustix = { version = "1", default-features = false, features = ["fs", "std"] }
-sea-query = { version = "0.32", default-features = false, features = ["backend-mysql", "backend-postgres", "backend-sqlite", "derive", "thread-safe"] }
-sea-query-binder = { version = "0.7", features = ["sqlx-any", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
+sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["any", "mysql", "postgres", "sqlite", "derive", "macros", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
+sqlx = { version = "0.9", default-features = false, features = ["mysql", "mysql-rsa", "postgres", "sqlite-bundled", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-io-timeout = "1"

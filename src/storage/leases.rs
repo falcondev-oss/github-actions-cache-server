@@ -2,12 +2,12 @@
 
 use std::time::Duration;
 
-use sea_query::{Expr, Query};
-use sqlx::{Any, Executor};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ConnectionTrait, EntityTrait as _, QueryFilter as _};
 
 use crate::db::{
-    Db, MergeLeases, ReaderLeaseScope, StorageReaderLeases, is_unique_violation, now_ms,
-    retry_on_lock_conflict,
+    Db, ReaderLeaseScope, is_unique_violation, merge_leases, now_ms, retry_on_lock_conflict,
+    storage_reader_leases,
 };
 use crate::error::Result;
 
@@ -33,42 +33,37 @@ pub(crate) async fn acquire_merge_lease(
 ) -> Result<Option<String>> {
     let now = now_ms();
     let token = uuid::Uuid::new_v4().to_string();
-    let expires_at = deadline(LEASE_DURATION);
-    let taken_over = db
-        .execute(
-            &db.pool,
-            Query::update()
-                .table(MergeLeases::Table)
-                .values([
-                    (MergeLeases::Token, token.as_str().into()),
-                    (MergeLeases::ExpiresAt, expires_at.into()),
-                ])
-                .and_where(Expr::col(MergeLeases::StorageLocationId).eq(storage_location_id))
-                .and_where(Expr::col(MergeLeases::ExpiresAt).lte(now)),
+    let lease = merge_leases::ActiveModel {
+        token: Set(token.clone()),
+        expires_at: Set(deadline(LEASE_DURATION)),
+        ..Default::default()
+    };
+    let taken_over = merge_leases::Entity::update_many()
+        .set(lease.clone())
+        .filter(
+            merge_leases::COLUMN
+                .storage_location_id
+                .eq(storage_location_id),
         )
+        .filter(merge_leases::COLUMN.expires_at.lte(now))
+        .exec(&db.pool)
         .await?;
-    if taken_over == 1 {
+    if taken_over.rows_affected == 1 {
         return Ok(Some(token));
     }
-    let mut insert = Query::insert();
-    insert
-        .into_table(MergeLeases::Table)
-        .columns([
-            MergeLeases::StorageLocationId,
-            MergeLeases::Token,
-            MergeLeases::ExpiresAt,
-        ])
-        .values([
-            storage_location_id.into(),
-            token.as_str().into(),
-            expires_at.into(),
-        ])?;
     // A live lease of another worker makes the insert a unique violation. Detected here rather
     // than with `ON CONFLICT DO NOTHING`, which has no portable MySQL rendering.
-    match db.execute(&db.pool, &insert).await {
+    let lease = merge_leases::ActiveModel {
+        storage_location_id: Set(storage_location_id.to_owned()),
+        ..lease
+    };
+    match merge_leases::Entity::insert(lease)
+        .exec_without_returning(&db.pool)
+        .await
+    {
         Ok(_) => Ok(Some(token)),
-        Err(failure) if is_unique_violation(&failure) => Ok(None),
-        Err(failure) => Err(failure),
+        Err(error) if is_unique_violation(&error) => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -77,19 +72,21 @@ pub(crate) async fn renew_merge_lease(
     storage_location_id: &str,
     token: &str,
 ) -> Result<bool> {
-    let now = now_ms();
-    let renewed = db
-        .execute(
-            &db.pool,
-            Query::update()
-                .table(MergeLeases::Table)
-                .value(MergeLeases::ExpiresAt, deadline(LEASE_DURATION))
-                .and_where(Expr::col(MergeLeases::StorageLocationId).eq(storage_location_id))
-                .and_where(Expr::col(MergeLeases::Token).eq(token))
-                .and_where(Expr::col(MergeLeases::ExpiresAt).gt(now)),
+    let renewed = merge_leases::Entity::update_many()
+        .set(merge_leases::ActiveModel {
+            expires_at: Set(deadline(LEASE_DURATION)),
+            ..Default::default()
+        })
+        .filter(
+            merge_leases::COLUMN
+                .storage_location_id
+                .eq(storage_location_id),
         )
+        .filter(merge_leases::COLUMN.token.eq(token))
+        .filter(merge_leases::COLUMN.expires_at.gt(now_ms()))
+        .exec(&db.pool)
         .await?;
-    Ok(renewed == 1)
+    Ok(renewed.rows_affected == 1)
 }
 
 pub(crate) async fn release_merge_lease(
@@ -97,69 +94,55 @@ pub(crate) async fn release_merge_lease(
     storage_location_id: &str,
     token: &str,
 ) -> Result<()> {
-    db.execute(
-        &db.pool,
-        Query::delete()
-            .from_table(MergeLeases::Table)
-            .and_where(Expr::col(MergeLeases::StorageLocationId).eq(storage_location_id))
-            .and_where(Expr::col(MergeLeases::Token).eq(token)),
-    )
-    .await?;
+    merge_leases::Entity::delete_many()
+        .filter(
+            merge_leases::COLUMN
+                .storage_location_id
+                .eq(storage_location_id),
+        )
+        .filter(merge_leases::COLUMN.token.eq(token))
+        .exec(&db.pool)
+        .await?;
     Ok(())
 }
 
-pub(crate) async fn create_reader_lease<'c>(
-    db: &Db,
-    executor: impl Executor<'c, Database = Any>,
+pub(crate) async fn create_reader_lease(
+    db: &impl ConnectionTrait,
     storage_location_id: &str,
     scope: ReaderLeaseScope,
     expires_at: i64,
 ) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
-    let mut insert = Query::insert();
-    insert
-        .into_table(StorageReaderLeases::Table)
-        .columns([
-            StorageReaderLeases::Id,
-            StorageReaderLeases::StorageLocationId,
-            StorageReaderLeases::Scope,
-            StorageReaderLeases::ExpiresAt,
-        ])
-        .values([
-            id.as_str().into(),
-            storage_location_id.into(),
-            scope.as_str().into(),
-            expires_at.into(),
-        ])?;
-    db.execute(executor, &insert).await?;
+    storage_reader_leases::Entity::insert(storage_reader_leases::ActiveModel {
+        id: Set(id.clone()),
+        storage_location_id: Set(storage_location_id.to_owned()),
+        scope: Set(scope),
+        expires_at: Set(expires_at),
+    })
+    .exec_without_returning(db)
+    .await?;
     Ok(id)
 }
 
 pub(crate) async fn renew_reader_lease(db: &Db, id: &str) -> Result<bool> {
-    let now = now_ms();
-    let renewed = db
-        .execute(
-            &db.pool,
-            Query::update()
-                .table(StorageReaderLeases::Table)
-                .value(StorageReaderLeases::ExpiresAt, deadline(LEASE_DURATION))
-                .and_where(Expr::col(StorageReaderLeases::Id).eq(id))
-                .and_where(Expr::col(StorageReaderLeases::ExpiresAt).gt(now)),
-        )
+    let renewed = storage_reader_leases::Entity::update_many()
+        .set(storage_reader_leases::ActiveModel {
+            expires_at: Set(deadline(LEASE_DURATION)),
+            ..Default::default()
+        })
+        .filter(storage_reader_leases::COLUMN.id.eq(id))
+        .filter(storage_reader_leases::COLUMN.expires_at.gt(now_ms()))
+        .exec(&db.pool)
         .await?;
-    Ok(renewed == 1)
+    Ok(renewed.rows_affected == 1)
 }
 
 pub(crate) async fn release_reader_lease(db: &Db, id: &str) -> Result<()> {
     // races cascade deletes of the storage location, which lock rows in the opposite order
     retry_on_lock_conflict(|| async {
-        db.execute(
-            &db.pool,
-            Query::delete()
-                .from_table(StorageReaderLeases::Table)
-                .and_where(Expr::col(StorageReaderLeases::Id).eq(id)),
-        )
-        .await
+        Ok(storage_reader_leases::Entity::delete_by_id(id)
+            .exec(&db.pool)
+            .await?)
     })
     .await?;
     Ok(())

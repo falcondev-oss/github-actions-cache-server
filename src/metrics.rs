@@ -1,9 +1,8 @@
 //! Prometheus metrics (ADR-0007, ADR-0008).
 
 use prometheus::{IntCounter, IntCounterVec, IntGauge, Opts, Registry, TextEncoder};
-use sea_query::{Alias, Query};
 
-use crate::db::{Db, StorageLocations, TotalRow};
+use crate::db::Db;
 use crate::error::Result;
 
 /// Process-wide registry; scale with replicas and aggregate in `PromQL`.
@@ -73,18 +72,7 @@ impl Metrics {
     /// Renders the text exposition, computing storage bytes from the recorded payload sizes;
     /// rows predating size tracking read as 0 until reconciled on the next startup.
     pub(crate) async fn render(&self, db: &Db) -> Result<String> {
-        let total: TotalRow = db
-            .one(
-                &db.pool,
-                Query::select()
-                    .expr_as(
-                        db.dialect.sum_bigint(&StorageLocations::SizeBytes),
-                        Alias::new("total"),
-                    )
-                    .from(StorageLocations::Table),
-            )
-            .await?;
-        self.storage_bytes.set(total.total);
+        self.storage_bytes.set(db.stored_bytes().await?);
         Ok(TextEncoder::new().encode_to_string(&self.registry.gather())?)
     }
 }

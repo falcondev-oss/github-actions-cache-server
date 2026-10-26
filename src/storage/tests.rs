@@ -48,15 +48,15 @@ async fn a_merged_location_is_not_claimed_again() {
         &[b"a".to_vec(), b"b".to_vec()],
     )
     .await;
-    db.execute(
-        &db.pool,
-        Query::update()
-            .table(StorageLocations::Table)
-            .value(StorageLocations::MergedAt, now_ms())
-            .and_where(Expr::col(StorageLocations::Id).eq(location.id.as_str())),
-    )
-    .await
-    .unwrap();
+    storage_locations::Entity::update_many()
+        .set(storage_locations::ActiveModel {
+            merged_at: Set(Some(now_ms())),
+            ..Default::default()
+        })
+        .filter(storage_locations::COLUMN.id.eq(location.id.as_str()))
+        .exec(&db.pool)
+        .await
+        .unwrap();
 
     assert_eq!(
         claim_merge(db, &location.id).await.unwrap(),

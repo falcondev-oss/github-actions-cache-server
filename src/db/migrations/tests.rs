@@ -1,56 +1,48 @@
 use super::*;
 use crate::config::Config;
-use crate::db::{CacheEntry, select_entries};
+use crate::db::cache_entries;
 use crate::tests::harness::{self, entry, identity, unmerged_location};
-
-#[derive(Debug, PartialEq, Eq, FromRow)]
-struct UploadId {
-    id: i64,
-}
 
 async fn insert_legacy_upload(db: &Db, id: i64, key: &str, created_at: i64) {
     let identity = identity(key);
-    let mut insert = Query::insert();
-    insert
-        .into_table(Uploads::Table)
-        .columns([
-            Uploads::Id,
-            Uploads::Key,
-            Uploads::Version,
-            Uploads::Scope,
-            Uploads::RepoId,
-            Uploads::CreatedAt,
-            Uploads::FolderName,
-        ])
-        .values([
-            id.into(),
-            identity.key.into(),
-            identity.version.into(),
-            identity.scope.into(),
-            identity.repo_id.into(),
-            created_at.into(),
-            id.to_string().into(),
-        ])
-        .unwrap();
-    db.execute(&db.pool, &insert).await.unwrap();
+    uploads::Entity::insert(uploads::ActiveModel {
+        id: Set(id),
+        key: Set(identity.key),
+        version: Set(identity.version),
+        scope: Set(identity.scope),
+        repo_id: Set(identity.repo_id),
+        created_at: Set(created_at),
+        folder_name: Set(id.to_string()),
+        ..Default::default()
+    })
+    .exec_without_returning(&db.pool)
+    .await
+    .unwrap();
 }
 
-/// Ids of the uploads holding `key`'s reservation. Compared in SQL: `sqlx::Any` cannot decode
-/// Postgres' `char(64)`.
-async fn holders(db: &Db, key: &str) -> Vec<UploadId> {
-    let query = Query::select()
-        .column(Uploads::Id)
-        .from(Uploads::Table)
-        .and_where(Expr::col(Uploads::ReservationHash).eq(identity(key).reservation_hash()))
-        .to_owned();
-    db.all(&db.pool, &query).await.unwrap()
+/// Ids of the uploads holding `key`'s reservation.
+async fn holders(db: &Db, key: &str) -> Vec<i64> {
+    uploads::Entity::find()
+        .select_only()
+        .column(uploads::Column::Id)
+        .filter(
+            uploads::COLUMN
+                .reservation_hash
+                .eq(identity(key).reservation_hash()),
+        )
+        .into_tuple()
+        .all(&db.pool)
+        .await
+        .unwrap()
 }
 
 async fn recorded_migrations(db: &Db) -> Vec<String> {
-    sqlx::query_scalar("select name from kysely_migration order by name")
-        .fetch_all(&db.pool)
-        .await
-        .unwrap()
+    strings(
+        &db.pool,
+        "select name from kysely_migration order by name".to_owned(),
+    )
+    .await
+    .unwrap()
 }
 
 /// Two uploads for one reservation, which the old schema allowed, and another one.
@@ -63,14 +55,10 @@ async fn insert_legacy_uploads(db: &Db) {
 async fn assert_reservations_backfilled(db: &Db) {
     assert_eq!(
         holders(db, "twice").await,
-        [UploadId { id: 11 }],
+        [11],
         "the newest upload per reservation is kept"
     );
-    assert_eq!(
-        holders(db, "once").await,
-        [UploadId { id: 12 }],
-        "every upload is hashed"
-    );
+    assert_eq!(holders(db, "once").await, [12], "every upload is hashed");
     let names: Vec<String> = MIGRATIONS
         .iter()
         .map(|migration| migration.name.to_owned())
@@ -99,16 +87,16 @@ async fn upgrades_a_database_left_by_the_typescript_server() {
     ])
     .unwrap();
     let db = Db::open(&config.db).await.unwrap();
-    sqlx::raw_sql(include_str!("../testdata/kysely-v6.sql"))
-        .execute(&db.pool)
+    db.pool
+        .execute_unprepared(include_str!("../testdata/kysely-v6.sql"))
         .await
         .unwrap();
-    let before: Vec<CacheEntry> = db.all(&db.pool, &select_entries()).await.unwrap();
+    let before = cache_entries::Entity::find().all(&db.pool).await.unwrap();
     insert_legacy_uploads(&db).await;
 
     assert!(!migrate(&db).await.unwrap(), "no storage clear");
 
-    let after: Vec<CacheEntry> = db.all(&db.pool, &select_entries()).await.unwrap();
+    let after = cache_entries::Entity::find().all(&db.pool).await.unwrap();
     assert_eq!(before.len(), 2, "the fixture holds two entries");
     assert_eq!(after, before, "cache entries are kept");
     assert_reservations_backfilled(&db).await;
@@ -133,7 +121,7 @@ async fn upgrades_a_v6_schema_with_data_on_every_database() {
 
     assert!(!migrate(&db).await.unwrap(), "no storage clear");
 
-    let entries: Vec<CacheEntry> = db.all(&db.pool, &select_entries()).await.unwrap();
+    let entries = cache_entries::Entity::find().all(&db.pool).await.unwrap();
     assert_eq!(entries, [saved], "cache entries are kept");
     assert_reservations_backfilled(&db).await;
 }

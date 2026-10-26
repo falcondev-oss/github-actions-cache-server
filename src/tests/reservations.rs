@@ -1,13 +1,13 @@
 //! Upload reservations, block uploads to missing uploads, and exact key matching.
 
 use futures_util::future::join_all;
-use sea_query::{Expr, Query};
+use sea_orm::EntityTrait as _;
 
 use super::harness::{
     SCOPE, TestServer, byte_stream, entry, identity, insert_entry, insert_location, query,
     save_parts, unmerged_location,
 };
-use crate::db::{CacheEntry, Uploads};
+use crate::db::{CacheEntry, uploads};
 use crate::storage::{CreatedUpload, MatchType, Storage};
 
 async fn save(storage: &Storage, key: &str) {
@@ -193,14 +193,10 @@ async fn a_part_whose_upload_is_deleted_mid_stream_is_not_recorded() {
     let db = storage.db.clone();
     // Deletes the upload, the way `cleanup:uploads` would, while the part is streaming.
     let body = futures_util::stream::once(async move {
-        db.execute(
-            &db.pool,
-            Query::delete()
-                .from_table(Uploads::Table)
-                .and_where(Expr::col(Uploads::Id).eq(id)),
-        )
-        .await
-        .unwrap();
+        uploads::Entity::delete_by_id(id)
+            .exec(&db.pool)
+            .await
+            .unwrap();
         Ok(axum::body::Bytes::from_static(b"payload"))
     });
     let recorded = storage
