@@ -3,4 +3,4 @@ version = 1
 name = "github-actions-cache-server"
 
 [setup]
-script = "pnpm install"
+script = "cargo fetch"

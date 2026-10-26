@@ -1,0 +1,4 @@
+[env]
+# SQLite's memory statistics take a global mutex on every allocation, which serializes the
+# read connections; nothing reads the statistics.
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"
