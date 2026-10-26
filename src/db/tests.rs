@@ -1,61 +1,10 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use sqlx::error::{DatabaseError, ErrorKind};
 
 use super::*;
-
-#[test]
-fn server_urls_bracket_ipv6_and_pass_sockets() {
-    let params = |host: &str| ServerConnection {
-        database: "db".to_owned(),
-        host: host.to_owned(),
-        port: std::num::NonZeroU16::new(5432).unwrap(),
-        user: "u".to_owned(),
-        password: "p@ss%FF".to_owned(),
-    };
-    assert_eq!(
-        server_url(Dialect::Postgres, &params("::1")).unwrap(),
-        "postgres://u:p%40ss%25FF@[::1]:5432/db",
-        "IPv6 literal"
-    );
-    assert_eq!(
-        server_url(Dialect::Postgres, &params("/run/postgresql")).unwrap(),
-        "postgres://u:p%40ss%25FF@localhost:5432/db?host=%2Frun%2Fpostgresql",
-        "socket directory"
-    );
-    assert_eq!(
-        server_url(Dialect::Mysql, &params("/run/mysqld/mysqld.sock")).unwrap(),
-        "mysql://u:p%40ss%25FF@localhost:5432/db?socket=%2Frun%2Fmysqld%2Fmysqld.sock",
-        "socket file"
-    );
-}
-
-#[test]
-fn sqlite_urls_keep_filenames() {
-    use sqlx::sqlite::SqliteConnectOptions;
-    let filename = |path: &str| {
-        SqliteConnectOptions::from_str(&sqlite_url(Path::new(path), Access::ReadWrite))
-            .unwrap()
-            .get_filename()
-            .to_owned()
-    };
-    assert_eq!(
-        filename("/tmp/cache%2Fdb 1#?.sqlite"),
-        Path::new("/tmp/cache%2Fdb 1#?.sqlite"),
-        "absolute"
-    );
-    assert_eq!(
-        filename("data/cache.db"),
-        Path::new("data/cache.db"),
-        "relative"
-    );
-    assert!(
-        SqliteConnectOptions::from_str(&sqlite_url(Path::new(IN_MEMORY), Access::ReadWrite))
-            .is_ok(),
-        "in memory"
-    );
-}
 
 #[derive(Debug, thiserror::Error)]
 #[error("Deadlock found when trying to get lock")]
@@ -88,7 +37,9 @@ impl DatabaseError for LockConflict {
 }
 
 fn conflict(code: &'static str) -> Failure {
-    Failure::Db(sqlx::Error::Database(Box::new(LockConflict(code))))
+    Failure::Db(DbErr::Exec(RuntimeErr::SqlxError(Arc::new(
+        sqlx::Error::Database(Box::new(LockConflict(code))),
+    ))))
 }
 
 async fn attempts(

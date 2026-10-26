@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use sea_orm::EntityTrait as _;
+
 use super::harness::{
     TestServer, entry, eventually, find_location, identity, insert_entry, insert_location,
     merged_location, put, read_all, save_parts, storage_driver, unmerged_location,
@@ -267,12 +269,8 @@ async fn location_cleanup_waits_for_an_active_merged_download() {
         .await
         .unwrap()
         .unwrap();
-    server
-        .db()
-        .execute(
-            &server.db().pool,
-            sea_query::Query::delete().from_table(crate::db::CacheEntries::Table),
-        )
+    crate::db::cache_entries::Entity::delete_many()
+        .exec(&server.db().pool)
         .await
         .unwrap();
     server

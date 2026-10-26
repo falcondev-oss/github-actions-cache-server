@@ -1,28 +1,30 @@
-//! Database access shared by Postgres, MySQL and SQLite through `sqlx::Any`.
+//! Database access shared by Postgres, MySQL and SQLite through `SeaORM`.
 
+mod entities;
 mod migrations;
 
 use std::future::Future;
-use std::net::Ipv6Addr;
-use std::path::Path;
 use std::str::FromStr as _;
 
-use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC, utf8_percent_encode};
-use sea_query::{
-    Alias, Asterisk, Expr, Func, Iden, LikeExpr, MysqlQueryBuilder, PostgresQueryBuilder, Query,
-    QueryBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
+use sea_orm::sea_query::{Alias, Expr, ExprTrait as _, Func, LikeExpr};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait as _, QuerySelect as _, RuntimeErr, SqlErr,
 };
-use sea_query_binder::SqlxBinder;
-use serde::Serialize;
 use sha2::{Digest as _, Sha256};
-use sqlx::any::{AnyConnectOptions, AnyPoolOptions, AnyRow, AnyTypeInfo, AnyValueRef};
-use sqlx::mysql::MySqlDatabaseError;
-use sqlx::{Any, AnyPool, Executor, FromRow};
-use url::Url;
-use utoipa::ToSchema;
+use sqlx::mysql::{MySqlConnectOptions, MySqlDatabaseError, MySqlPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+pub(crate) use self::entities::storage_reader_leases::ReaderLeaseScope;
+pub(crate) use self::entities::{
+    cache_entries, merge_leases, storage_locations, storage_reader_leases, uploads,
+};
 use crate::config::{DbConfig, PostgresConnection, ServerConnection};
 use crate::error::{Failure, Result};
+
+pub(crate) type CacheEntry = cache_entries::Model;
+pub(crate) type StorageLocation = storage_locations::Model;
+pub(crate) type Upload = uploads::Model;
 
 /// SQL dialect of the configured database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,25 +35,18 @@ pub(crate) enum Dialect {
 }
 
 impl Dialect {
-    fn builder(self) -> &'static dyn QueryBuilder {
-        match self {
-            Self::Postgres => &PostgresQueryBuilder,
-            Self::Mysql => &MysqlQueryBuilder,
-            Self::Sqlite => &SqliteQueryBuilder,
-        }
-    }
-
     /// `column` starts with `prefix`, compared exactly.
-    pub(crate) fn starts_with(self, column: impl Iden + 'static, prefix: &str) -> SimpleExpr {
+    pub(crate) fn starts_with(self, column: impl ColumnTrait, prefix: &str) -> Expr {
         match self {
             // A LIKE pattern bound as a parameter makes SQLite recompile the statement on every
             // run, which cost half of a lookup; neither form can use an index here.
-            Self::Sqlite => Expr::expr(Func::cust(Alias::new("substr")).args([
-                Expr::col(column).into(),
-                Expr::val(1).into(),
-                Expr::val(i64::try_from(prefix.chars().count()).unwrap_or(i64::MAX)).into(),
-            ]))
-            .eq(prefix),
+            Self::Sqlite => Func::cust("substr")
+                .args([
+                    column.into_expr(),
+                    Expr::val(1),
+                    Expr::val(i64::try_from(prefix.chars().count()).unwrap_or(i64::MAX)),
+                ])
+                .eq(prefix),
             // MySQL can serve a LIKE prefix from the key index. `!` escapes, since a backslash
             // literal reads differently under MySQL's `NO_BACKSLASH_ESCAPES`.
             Self::Postgres | Self::Mysql => {
@@ -59,46 +54,36 @@ impl Dialect {
                     .replace('!', "!!")
                     .replace('%', "!%")
                     .replace('_', "!_");
-                Expr::col(column).like(LikeExpr::new(format!("{escaped}%")).escape('!'))
+                column.like(LikeExpr::new(format!("{escaped}%")).escape('!'))
             }
         }
     }
 
-    /// `CAST(COALESCE(SUM(col), 0) AS <64-bit int>)`; plain `SUM` is NUMERIC/DECIMAL on Postgres
-    /// and MySQL, which `sqlx::Any` cannot decode.
-    pub(crate) fn sum_bigint(self, column: &impl Iden) -> SimpleExpr {
-        let column = column.to_string();
-        Expr::cust(match self {
-            Self::Mysql => format!("CAST(COALESCE(SUM(`{column}`), 0) AS SIGNED)"),
-            Self::Postgres | Self::Sqlite => {
-                format!(r#"CAST(COALESCE(SUM("{column}"), 0) AS BIGINT)"#)
-            }
-        })
+    /// `CAST(COALESCE(SUM(column), 0) AS <64-bit int>)`; plain `SUM` is NUMERIC/DECIMAL on
+    /// Postgres and MySQL, which doesn't decode as `i64`.
+    pub(crate) fn sum_bigint(self, column: impl ColumnTrait) -> Expr {
+        let int64 = match self {
+            Self::Mysql => "SIGNED",
+            Self::Postgres | Self::Sqlite => "BIGINT",
+        };
+        Func::coalesce([column.into_expr().sum(), Expr::val(0)]).cast_as(Alias::new(int64))
     }
 }
 
 /// SQLite read connections; WAL readers don't block each other or the writer.
 const READ_CONNECTIONS: u32 = 8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Access {
-    ReadWrite,
-    ReadOnly,
-}
+const SERVER_CONNECTIONS: u32 = 10;
+const IN_MEMORY: &str = ":memory:";
 
 /// Connection pools plus the dialect their queries are rendered for.
 #[derive(Debug, Clone)]
 pub(crate) struct Db {
-    pub(crate) pool: AnyPool,
+    pub(crate) pool: DatabaseConnection,
     /// For reads outside a transaction. On SQLite these are separate read-only connections,
     /// which WAL lets run alongside the single writer; elsewhere it is `pool`.
-    pub(crate) reads: AnyPool,
+    pub(crate) reads: DatabaseConnection,
     pub(crate) dialect: Dialect,
 }
-
-/// Rows decoded from any of the supported databases.
-pub(crate) trait Record: for<'r> FromRow<'r, AnyRow> + Send + Unpin {}
-impl<T: for<'r> FromRow<'r, AnyRow> + Send + Unpin> Record for T {}
 
 impl Db {
     /// Connects and migrates; the flag says whether storage must be cleared (see migrations).
@@ -110,199 +95,114 @@ impl Db {
 
     /// Connects without migrating.
     async fn open(config: &DbConfig) -> Result<Self> {
-        sqlx::any::install_default_drivers();
-        let (url, dialect, max_connections, read_url) = match config {
-            DbConfig::Postgres(PostgresConnection::Url(url)) => {
-                (url.clone(), Dialect::Postgres, 10, None)
+        let (pool, dialect, reads) = match config {
+            DbConfig::Postgres(connection) => {
+                let options = match connection {
+                    PostgresConnection::Url(url) => PgConnectOptions::from_str(url)?,
+                    // A host that is a path is the Unix socket directory.
+                    PostgresConnection::Params(params) => PgConnectOptions::new()
+                        .host(&params.host)
+                        .port(params.port.get())
+                        .username(&params.user)
+                        .password(&params.password)
+                        .database(&params.database),
+                };
+                let pool = PgPoolOptions::new()
+                    .max_connections(SERVER_CONNECTIONS)
+                    .connect_with(options)
+                    .await?;
+                (pool.into(), Dialect::Postgres, None)
             }
-            DbConfig::Postgres(PostgresConnection::Params(params)) => (
-                server_url(Dialect::Postgres, params)?,
-                Dialect::Postgres,
-                10,
-                None,
-            ),
-            DbConfig::Mysql(params) => (
-                server_url(Dialect::Mysql, params)?,
-                Dialect::Mysql,
-                10,
-                None,
-            ),
+            DbConfig::Mysql(params) => {
+                let pool = MySqlPoolOptions::new()
+                    .max_connections(SERVER_CONNECTIONS)
+                    .connect_with(mysql_options(params))
+                    .await?;
+                (pool.into(), Dialect::Mysql, None)
+            }
             DbConfig::Sqlite { path } => {
-                if let Some(parent) = path
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
-                // An in-memory database lives in its one connection, so it has no readers.
-                let read_url =
-                    (path.as_os_str() != IN_MEMORY).then(|| sqlite_url(path, Access::ReadOnly));
                 // SQLite allows one writer; a single connection serializes access the way the
-                // database expects instead of surfacing `SQLITE_BUSY` under load.
-                (
-                    sqlite_url(path, Access::ReadWrite),
-                    Dialect::Sqlite,
-                    1,
-                    read_url,
-                )
-            }
-        };
-        let options = AnyConnectOptions::from_str(&url)?;
-        let mut pool_options = Self::pool_options(dialect, max_connections, Access::ReadWrite);
-        if read_url.is_none() && dialect == Dialect::Sqlite {
-            // An in-memory database is gone once its connection closes.
-            pool_options = pool_options
-                .min_connections(1)
-                .idle_timeout(None)
-                .max_lifetime(None);
-        }
-        let pool = pool_options.connect_with(options).await?;
-        let reads = match read_url {
-            // Lazy: the writer has to create the file and switch it to WAL first.
-            Some(read_url) => Self::pool_options(dialect, READ_CONNECTIONS, Access::ReadOnly)
-                .connect_lazy_with(AnyConnectOptions::from_str(&read_url)?),
-            None => pool.clone(),
-        };
-        Ok(Self {
-            pool,
-            reads,
-            dialect,
-        })
-    }
-
-    fn pool_options(dialect: Dialect, max_connections: u32, access: Access) -> AnyPoolOptions {
-        AnyPoolOptions::new()
-            .max_connections(max_connections)
-            // A local SQLite file can't go stale, and pinging it on every checkout doubles the
-            // queue on its single connection.
-            .test_before_acquire(dialect != Dialect::Sqlite)
-            .after_connect(move |connection, _meta| {
-                Box::pin(async move {
+                // database expects instead of surfacing `SQLITE_BUSY` under load. A local file
+                // can't go stale, and pinging it on every checkout doubles the queue on it.
+                let pool_options = || SqlitePoolOptions::new().test_before_acquire(false);
+                if path.as_os_str() == IN_MEMORY {
+                    // An in-memory database lives in its one connection, so it has no readers
+                    // and is gone once that connection closes.
+                    let pool = pool_options()
+                        .max_connections(1)
+                        .min_connections(1)
+                        .idle_timeout(None)
+                        .max_lifetime(None)
+                        .connect_with(SqliteConnectOptions::new().in_memory(true))
+                        .await?;
+                    (pool.into(), Dialect::Sqlite, None)
+                } else {
+                    if let Some(parent) = path
+                        .parent()
+                        .filter(|parent| !parent.as_os_str().is_empty())
+                    {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    let file = SqliteConnectOptions::new().filename(path);
                     // WAL commits append to the log and sync only at checkpoints, instead of
                     // syncing a rollback journal and the database on every commit. A crash can
                     // lose the last commits, never consistency; a cache can afford that. The
                     // journal mode is stored in the file, so read-only connections inherit it.
-                    if dialect == Dialect::Sqlite && access == Access::ReadWrite {
-                        for pragma in [
-                            "pragma journal_mode = wal",
-                            "pragma synchronous = normal",
-                            // A checkpoint syncs the log and the database file, inline in a
-                            // commit; every 1000 pages (the default) that stalls the writer
-                            // tens of times a second under load.
-                            "pragma wal_autocheckpoint = 10000",
-                        ] {
-                            sqlx::query(pragma).execute(&mut *connection).await?;
-                        }
-                    }
-                    Ok(())
-                })
-            })
+                    let writer = file
+                        .clone()
+                        .create_if_missing(true)
+                        .journal_mode(SqliteJournalMode::Wal)
+                        .synchronous(SqliteSynchronous::Normal)
+                        // A checkpoint syncs the log and the database file, inline in a commit;
+                        // every 1000 pages (the default) that stalls the writer tens of times a
+                        // second under load.
+                        .pragma("wal_autocheckpoint", "10000");
+                    let pool = pool_options()
+                        .max_connections(1)
+                        .connect_with(writer)
+                        .await?;
+                    // Lazy: the writer has to create the file and switch it to WAL first.
+                    let reads = pool_options()
+                        .max_connections(READ_CONNECTIONS)
+                        .connect_lazy_with(file.read_only(true));
+                    (pool.into(), Dialect::Sqlite, Some(reads.into()))
+                }
+            }
+        };
+        Ok(Self {
+            reads: reads.unwrap_or_else(|| DatabaseConnection::clone(&pool)),
+            pool,
+            dialect,
+        })
     }
 
-    fn sql(&self, query: &impl SqlxBinder) -> (String, sea_query_binder::SqlxValues) {
-        query.build_any_sqlx(self.dialect.builder())
-    }
-
-    pub(crate) async fn all<'c, T: Record>(
-        &self,
-        executor: impl Executor<'c, Database = Any>,
-        query: &(impl SqlxBinder + Sync),
-    ) -> Result<Vec<T>> {
-        let (sql, values) = self.sql(query);
-        Ok(sqlx::query_as_with::<Any, T, _>(&sql, values)
-            .fetch_all(executor)
-            .await?)
-    }
-
-    pub(crate) async fn optional<'c, T: Record>(
-        &self,
-        executor: impl Executor<'c, Database = Any>,
-        query: &(impl SqlxBinder + Sync),
-    ) -> Result<Option<T>> {
-        let (sql, values) = self.sql(query);
-        Ok(sqlx::query_as_with::<Any, T, _>(&sql, values)
-            .fetch_optional(executor)
-            .await?)
-    }
-
-    pub(crate) async fn one<'c, T: Record>(
-        &self,
-        executor: impl Executor<'c, Database = Any>,
-        query: &(impl SqlxBinder + Sync),
-    ) -> Result<T> {
-        let (sql, values) = self.sql(query);
-        Ok(sqlx::query_as_with::<Any, T, _>(&sql, values)
-            .fetch_one(executor)
-            .await?)
-    }
-
-    /// Executes a statement and returns the number of affected rows.
-    pub(crate) async fn execute<'c>(
-        &self,
-        executor: impl Executor<'c, Database = Any>,
-        query: &(impl SqlxBinder + Sync),
-    ) -> Result<u64> {
-        let (sql, values) = self.sql(query);
-        Ok(sqlx::query_with(&sql, values)
-            .execute(executor)
-            .await?
-            .rows_affected())
+    /// Bytes of all stored data, from the recorded payload sizes.
+    pub(crate) async fn stored_bytes(&self) -> Result<i64> {
+        let total: Option<i64> = storage_locations::Entity::find()
+            .select_only()
+            .expr(
+                self.dialect
+                    .sum_bigint(storage_locations::Column::SizeBytes),
+            )
+            .into_tuple()
+            .one(&self.pool)
+            .await?;
+        Ok(total.unwrap_or(0))
     }
 }
 
-const IN_MEMORY: &str = ":memory:";
-
-/// A SQLite URL; sqlx decodes `%` in the filename. (`to_url_lossy` keeps a literal `%` and panics
-/// on `:memory:`.)
-fn sqlite_url(path: &Path, access: Access) -> String {
-    const FILENAME: &AsciiSet = &CONTROLS.add(b' ').add(b'#').add(b'%').add(b'?');
-    let filename = path.to_string_lossy();
-    if filename == IN_MEMORY {
-        return format!("sqlite:{IN_MEMORY}");
-    }
-    let mode = match access {
-        Access::ReadWrite => "rwc",
-        Access::ReadOnly => "ro",
-    };
-    format!(
-        "sqlite:{}?mode={mode}",
-        utf8_percent_encode(&filename, FILENAME)
-    )
-}
-
-/// A connection URL for a database server. IPv6 literals are bracketed, and a host that is a
-/// path is a Unix socket directory (Postgres) or file (MySQL), passed as a query parameter.
-/// (`to_url_lossy` on the drivers' option builders panics on both.)
-fn server_url(dialect: Dialect, params: &ServerConnection) -> Result<String> {
-    let (scheme, socket_param) = match dialect {
-        Dialect::Postgres => ("postgres", "host"),
-        Dialect::Mysql => ("mysql", "socket"),
-        Dialect::Sqlite => return Err(Failure::msg("SQLite has no server")),
-    };
-    let invalid = || Failure::msg(format!("invalid {scheme} connection parameters"));
-    let mut url = Url::parse(&format!("{scheme}://localhost")).map_err(|_parse| invalid())?;
+/// A host that is a path is the Unix socket file.
+fn mysql_options(params: &ServerConnection) -> MySqlConnectOptions {
+    let options = MySqlConnectOptions::new()
+        .port(params.port.get())
+        .username(&params.user)
+        .password(&params.password)
+        .database(&params.database);
     if params.host.starts_with('/') {
-        url.query_pairs_mut()
-            .append_pair(socket_param, &params.host);
-    } else if params.host.parse::<Ipv6Addr>().is_ok() {
-        url.set_host(Some(&format!("[{}]", params.host)))
-            .map_err(|_parse| invalid())?;
+        options.socket(&params.host)
     } else {
-        url.set_host(Some(&params.host))
-            .map_err(|_parse| invalid())?;
+        options.host(&params.host)
     }
-    url.set_port(Some(params.port.get()))
-        .map_err(|()| invalid())?;
-    // sqlx decodes `%` in credentials, and `Url` leaves it as is.
-    let encoded = |credential: &str| utf8_percent_encode(credential, NON_ALPHANUMERIC).to_string();
-    url.set_username(&encoded(&params.user))
-        .map_err(|()| invalid())?;
-    url.set_password(Some(&encoded(&params.password)))
-        .map_err(|()| invalid())?;
-    url.path_segments_mut()
-        .map_err(|()| invalid())?
-        .push(&params.database);
-    Ok(url.into())
 }
 
 /// Milliseconds since the Unix epoch, the unit of every timestamp column.
@@ -339,12 +239,20 @@ where
 }
 
 /// Whether a statement was rejected by a unique constraint.
-pub(crate) fn is_unique_violation(failure: &Failure) -> bool {
-    matches!(failure, Failure::Db(sqlx::Error::Database(error)) if error.is_unique_violation())
+pub(crate) fn is_unique_violation(error: &DbErr) -> bool {
+    matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
 }
 
 fn is_retryable_lock_error(failure: &Failure) -> bool {
-    let Failure::Db(sqlx::Error::Database(error)) = failure else {
+    let Failure::Db(
+        DbErr::Conn(RuntimeErr::SqlxError(error))
+        | DbErr::Exec(RuntimeErr::SqlxError(error))
+        | DbErr::Query(RuntimeErr::SqlxError(error)),
+    ) = failure
+    else {
+        return false;
+    };
+    let sqlx::Error::Database(error) = &**error else {
         return false;
     };
     // Postgres `serialization_failure` / `deadlock_detected`; MySQL reports its deadlock as 40001.
@@ -358,131 +266,6 @@ fn is_retryable_lock_error(failure: &Failure) -> bool {
     error
         .try_downcast_ref::<MySqlDatabaseError>()
         .is_some_and(|error| matches!(error.number(), 1205 | 1213))
-}
-
-// Column names are camelCase: the schema was created by the original TypeScript server.
-
-#[derive(Debug, Clone, Copy, Iden)]
-pub(crate) enum CacheEntries {
-    Table,
-    #[iden = "id"]
-    Id,
-    #[iden = "key"]
-    Key,
-    #[iden = "version"]
-    Version,
-    #[iden = "scope"]
-    Scope,
-    #[iden = "repoId"]
-    RepoId,
-    #[iden = "updatedAt"]
-    UpdatedAt,
-    #[iden = "locationId"]
-    LocationId,
-}
-
-#[derive(Debug, Clone, Copy, Iden)]
-pub(crate) enum StorageLocations {
-    Table,
-    #[iden = "id"]
-    Id,
-    #[iden = "folderName"]
-    FolderName,
-    #[iden = "partCount"]
-    PartCount,
-    #[iden = "mergeStartedAt"]
-    MergeStartedAt,
-    #[iden = "mergedAt"]
-    MergedAt,
-    #[iden = "partsDeletedAt"]
-    PartsDeletedAt,
-    #[iden = "lastDownloadedAt"]
-    LastDownloadedAt,
-    #[iden = "sizeBytes"]
-    SizeBytes,
-}
-
-#[derive(Debug, Clone, Copy, Iden)]
-pub(crate) enum MergeLeases {
-    Table,
-    #[iden = "storageLocationId"]
-    StorageLocationId,
-    #[iden = "token"]
-    Token,
-    #[iden = "expiresAt"]
-    ExpiresAt,
-}
-
-#[derive(Debug, Clone, Copy, Iden)]
-pub(crate) enum StorageReaderLeases {
-    Table,
-    #[iden = "id"]
-    Id,
-    #[iden = "storageLocationId"]
-    StorageLocationId,
-    #[iden = "scope"]
-    Scope,
-    #[iden = "expiresAt"]
-    ExpiresAt,
-}
-
-#[derive(Debug, Clone, Copy, Iden)]
-pub(crate) enum Uploads {
-    Table,
-    #[iden = "id"]
-    Id,
-    #[iden = "key"]
-    Key,
-    #[iden = "version"]
-    Version,
-    #[iden = "scope"]
-    Scope,
-    #[iden = "repoId"]
-    RepoId,
-    #[iden = "createdAt"]
-    CreatedAt,
-    #[iden = "lastPartUploadedAt"]
-    LastPartUploadedAt,
-    #[iden = "startedPartUploadCount"]
-    StartedPartUploadCount,
-    #[iden = "finishedPartUploadCount"]
-    FinishedPartUploadCount,
-    #[iden = "folderName"]
-    FolderName,
-    #[iden = "reservationHash"]
-    ReservationHash,
-}
-
-/// A string column read leniently: through `sqlx::Any`, MySQL reports `text` columns (such as
-/// `folderName`, created as `text` by the original schema) as blobs.
-#[derive(Debug)]
-pub(crate) struct Utf8Text(String);
-
-impl sqlx::Type<Any> for Utf8Text {
-    fn type_info() -> AnyTypeInfo {
-        <String as sqlx::Type<Any>>::type_info()
-    }
-
-    fn compatible(ty: &AnyTypeInfo) -> bool {
-        <String as sqlx::Type<Any>>::compatible(ty) || <Vec<u8> as sqlx::Type<Any>>::compatible(ty)
-    }
-}
-
-impl<'r> sqlx::Decode<'r, Any> for Utf8Text {
-    fn decode(value: AnyValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        match <String as sqlx::Decode<Any>>::decode(value.clone()) {
-            Ok(text) => Ok(Self(text)),
-            Err(_not_text) => Ok(Self(String::from_utf8(
-                <Vec<u8> as sqlx::Decode<Any>>::decode(value)?,
-            )?)),
-        }
-    }
-}
-
-impl From<Utf8Text> for String {
-    fn from(text: Utf8Text) -> Self {
-        text.0
-    }
 }
 
 /// The key, version, scope and repository a cache entry or upload is saved under. At most one
@@ -504,170 +287,6 @@ impl EntryIdentity {
         let json = serde_json::to_vec(&tuple).unwrap_or_default();
         format!("{:x}", Sha256::digest(json))
     }
-}
-
-/// A cache item available for matching and restoration by a workflow.
-#[derive(Debug, Clone, PartialEq, Eq, FromRow, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-#[sqlx(rename_all = "camelCase")]
-pub(crate) struct CacheEntry {
-    pub(crate) id: String,
-    pub(crate) key: String,
-    pub(crate) version: String,
-    pub(crate) scope: String,
-    pub(crate) repo_id: String,
-    pub(crate) updated_at: i64,
-    pub(crate) location_id: String,
-}
-
-/// The stored data belonging to a cache entry.
-#[derive(Debug, Clone, PartialEq, Eq, FromRow, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-#[sqlx(rename_all = "camelCase")]
-pub(crate) struct StorageLocation {
-    pub(crate) id: String,
-    #[sqlx(try_from = "Utf8Text")]
-    pub(crate) folder_name: String,
-    pub(crate) part_count: i64,
-    pub(crate) merge_started_at: Option<i64>,
-    pub(crate) merged_at: Option<i64>,
-    pub(crate) parts_deleted_at: Option<i64>,
-    pub(crate) last_downloaded_at: Option<i64>,
-    pub(crate) size_bytes: Option<i64>,
-}
-
-/// Cache data that is being received but has not yet become a cache entry.
-#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
-#[sqlx(rename_all = "camelCase")]
-pub(crate) struct Upload {
-    pub(crate) id: i64,
-    pub(crate) key: String,
-    pub(crate) version: String,
-    pub(crate) started_part_upload_count: i64,
-    pub(crate) finished_part_upload_count: i64,
-    #[sqlx(try_from = "Utf8Text")]
-    pub(crate) folder_name: String,
-}
-
-/// Selects whole `storage_locations` rows.
-pub(crate) fn select_locations() -> SelectStatement {
-    Query::select()
-        .column((StorageLocations::Table, Asterisk))
-        .from(StorageLocations::Table)
-        .to_owned()
-}
-
-/// Selects whole `cache_entries` rows.
-pub(crate) fn select_entries() -> SelectStatement {
-    Query::select()
-        .column((CacheEntries::Table, Asterisk))
-        .from(CacheEntries::Table)
-        .to_owned()
-}
-
-pub(crate) async fn insert_location<'c>(
-    db: &Db,
-    executor: impl Executor<'c, Database = Any>,
-    location: &StorageLocation,
-) -> Result<()> {
-    let mut insert = Query::insert();
-    insert
-        .into_table(StorageLocations::Table)
-        .columns([
-            StorageLocations::Id,
-            StorageLocations::FolderName,
-            StorageLocations::PartCount,
-            StorageLocations::MergeStartedAt,
-            StorageLocations::MergedAt,
-            StorageLocations::PartsDeletedAt,
-            StorageLocations::LastDownloadedAt,
-            StorageLocations::SizeBytes,
-        ])
-        .values([
-            location.id.as_str().into(),
-            location.folder_name.as_str().into(),
-            location.part_count.into(),
-            location.merge_started_at.into(),
-            location.merged_at.into(),
-            location.parts_deleted_at.into(),
-            location.last_downloaded_at.into(),
-            location.size_bytes.into(),
-        ])?;
-    db.execute(executor, &insert).await?;
-    Ok(())
-}
-
-pub(crate) async fn insert_entry<'c>(
-    db: &Db,
-    executor: impl Executor<'c, Database = Any>,
-    entry: &CacheEntry,
-) -> Result<()> {
-    let mut insert = Query::insert();
-    insert
-        .into_table(CacheEntries::Table)
-        .columns([
-            CacheEntries::Id,
-            CacheEntries::Key,
-            CacheEntries::Version,
-            CacheEntries::Scope,
-            CacheEntries::RepoId,
-            CacheEntries::UpdatedAt,
-            CacheEntries::LocationId,
-        ])
-        .values([
-            entry.id.as_str().into(),
-            entry.key.as_str().into(),
-            entry.version.as_str().into(),
-            entry.scope.as_str().into(),
-            entry.repo_id.as_str().into(),
-            entry.updated_at.into(),
-            entry.location_id.as_str().into(),
-        ])?;
-    db.execute(executor, &insert).await?;
-    Ok(())
-}
-
-/// Which data a Storage Reader Lease protects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReaderLeaseScope {
-    Parts,
-    Storage,
-}
-
-impl ReaderLeaseScope {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Parts => "parts",
-            Self::Storage => "storage",
-        }
-    }
-}
-
-/// Single-column projections.
-#[derive(Debug, FromRow)]
-pub(crate) struct IdRow {
-    pub(crate) id: String,
-}
-
-#[derive(Debug, FromRow)]
-pub(crate) struct TotalRow {
-    pub(crate) total: i64,
-}
-
-#[derive(Debug, FromRow)]
-#[sqlx(rename_all = "camelCase")]
-pub(crate) struct UploadFolder {
-    pub(crate) id: i64,
-    #[sqlx(try_from = "Utf8Text")]
-    pub(crate) folder_name: String,
-}
-
-#[derive(Debug, FromRow)]
-#[sqlx(rename_all = "camelCase")]
-pub(crate) struct FolderRow {
-    pub(crate) id: String,
-    #[sqlx(try_from = "Utf8Text")]
-    pub(crate) folder_name: String,
 }
 
 #[cfg(test)]

@@ -13,7 +13,9 @@ use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_query::{Alias, Asterisk, Cond, Expr, Query};
+use sea_orm::{
+    Condition, EntityTrait as _, PaginatorTrait as _, QueryFilter as _, QuerySelect as _,
+};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
@@ -26,10 +28,7 @@ use utoipa_scalar::Scalar;
 use super::AppState;
 use crate::cleanup::Task;
 use crate::config::Config;
-use crate::db::{
-    CacheEntries, CacheEntry, StorageLocation, StorageLocations, TotalRow, select_entries,
-    select_locations,
-};
+use crate::db::{CacheEntry, StorageLocation, cache_entries, storage_locations};
 use crate::error::Failure;
 use crate::storage::{CacheEntryMatch, CacheQuery, LocationDeletion};
 
@@ -75,6 +74,12 @@ impl ApiError {
 
     fn bad_request(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "BAD_REQUEST", message)
+    }
+}
+
+impl From<sea_orm::DbErr> for ApiError {
+    fn from(error: sea_orm::DbErr) -> Self {
+        Failure::from(error).into()
     }
 }
 
@@ -189,12 +194,12 @@ impl EntryFilter {
     }
 
     /// Every given filter must match; an empty filter matches everything.
-    fn condition(&self) -> Cond {
+    fn condition(&self) -> Condition {
         [
-            (CacheEntries::Key, &self.key),
-            (CacheEntries::Version, &self.version),
-            (CacheEntries::Scope, &self.scope),
-            (CacheEntries::RepoId, &self.repo_id),
+            (cache_entries::COLUMN.key, &self.key),
+            (cache_entries::COLUMN.version, &self.version),
+            (cache_entries::COLUMN.scope, &self.scope),
+            (cache_entries::COLUMN.repo_id, &self.repo_id),
         ]
         .into_iter()
         .filter_map(|(column, value)| {
@@ -203,8 +208,8 @@ impl EntryFilter {
                 .filter(|value| !value.is_empty())
                 .map(|value| (column, value))
         })
-        .fold(Cond::all(), |condition, (column, value)| {
-            condition.add(Expr::col(column).eq(value))
+        .fold(Condition::all(), |condition, (column, value)| {
+            condition.add(column.eq(value))
         })
     }
 }
@@ -247,7 +252,7 @@ struct MatchQuery {
 
 #[derive(Debug, Serialize, ToSchema)]
 struct CacheEntryPage {
-    total: i64,
+    total: u64,
     items: Vec<CacheEntry>,
 }
 
@@ -267,14 +272,9 @@ async fn get_cache_entry(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<CacheEntry>, ApiError> {
-    let db = &state.storage.db;
-    let entry: Option<CacheEntry> = db
-        .optional(
-            &db.pool,
-            select_entries().and_where(Expr::col(CacheEntries::Id).eq(id)),
-        )
-        .await?;
-    entry
+    cache_entries::Entity::find_by_id(id)
+        .one(&state.storage.db.pool)
+        .await?
         .map(Json)
         .ok_or_else(|| ApiError::not_found("Cache entry not found"))
 }
@@ -331,29 +331,16 @@ async fn list_cache_entries(
     let filter = EntryFilter::parse(&params)?;
     let items_per_page: u64 = params.integer("itemsPerPage", 20, 1..=100)?;
     let page: u64 = params.integer("page", 1, 1..=u64::from(u32::MAX))?;
-    let db = &state.storage.db;
-    let items: Vec<CacheEntry> = db
-        .all(
-            &db.pool,
-            select_entries()
-                .cond_where(filter.condition())
-                .limit(items_per_page)
-                .offset(page.saturating_sub(1).saturating_mul(items_per_page)),
-        )
+    let db = &state.storage.db.pool;
+    let entries = cache_entries::Entity::find().filter(filter.condition());
+    let items = entries
+        .clone()
+        .limit(items_per_page)
+        .offset(page.saturating_sub(1).saturating_mul(items_per_page))
+        .all(db)
         .await?;
-    let total: TotalRow = db
-        .one(
-            &db.pool,
-            Query::select()
-                .expr_as(Expr::col(Asterisk).count(), Alias::new("total"))
-                .from(CacheEntries::Table)
-                .cond_where(filter.condition()),
-        )
-        .await?;
-    Ok(Json(CacheEntryPage {
-        total: total.total,
-        items,
-    }))
+    let total = entries.count(db).await?;
+    Ok(Json(CacheEntryPage { total, items }))
 }
 
 /// Delete cache entry
@@ -369,14 +356,9 @@ async fn delete_cache_entry(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(), ApiError> {
-    let db = &state.storage.db;
-    db.execute(
-        &db.pool,
-        Query::delete()
-            .from_table(CacheEntries::Table)
-            .and_where(Expr::col(CacheEntries::Id).eq(id)),
-    )
-    .await?;
+    cache_entries::Entity::delete_by_id(id)
+        .exec(&state.storage.db.pool)
+        .await?;
     state.cleanup.trigger(Task::StorageLocations);
     Ok(())
 }
@@ -405,14 +387,10 @@ async fn delete_cache_entries(
         serde_json::from_slice(&body)
             .map_err(|error| ApiError::bad_request(format!("Input validation failed: {error}")))?
     };
-    let db = &state.storage.db;
-    db.execute(
-        &db.pool,
-        Query::delete()
-            .from_table(CacheEntries::Table)
-            .cond_where(filter.condition()),
-    )
-    .await?;
+    cache_entries::Entity::delete_many()
+        .filter(filter.condition())
+        .exec(&state.storage.db.pool)
+        .await?;
     state.cleanup.trigger(Task::StorageLocations);
     Ok(())
 }
@@ -433,14 +411,9 @@ async fn get_storage_location(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<StorageLocation>, ApiError> {
-    let db = &state.storage.db;
-    let location: Option<StorageLocation> = db
-        .optional(
-            &db.pool,
-            select_locations().and_where(Expr::col(StorageLocations::Id).eq(id)),
-        )
-        .await?;
-    location
+    storage_locations::Entity::find_by_id(id)
+        .one(&state.storage.db.pool)
+        .await?
         .map(Json)
         .ok_or_else(|| ApiError::not_found("Storage location not found"))
 }

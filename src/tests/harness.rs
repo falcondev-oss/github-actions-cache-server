@@ -8,15 +8,14 @@ use std::time::Duration;
 use axum::body::Bytes;
 use base64::Engine as _;
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
-use sea_query::{Expr, JoinType};
-use sqlx::Connection as _;
+use sea_orm::{
+    ConnectionTrait as _, Database, EntityTrait as _, IntoActiveModel as _, QueryFilter as _,
+};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 use crate::config::Config;
-use crate::db::{
-    CacheEntries, CacheEntry, Db, StorageLocation, StorageLocations, select_locations,
-};
+use crate::db::{CacheEntry, Db, StorageLocation, cache_entries, storage_locations};
 use crate::routes::{AppState, router};
 use crate::storage::{Adapter, ByteStream, CacheQuery, EntryIdentity, Storage, UploadKind};
 
@@ -48,12 +47,12 @@ fn owned(vars: &[(&str, String)]) -> Vec<(String, String)> {
 }
 
 async fn create_database(url: &str, name: &str) {
-    sqlx::any::install_default_drivers();
-    let mut admin = sqlx::AnyConnection::connect(url).await.unwrap();
-    sqlx::query(&format!("create database {name}"))
-        .execute(&mut admin)
+    let admin = Database::connect(url).await.unwrap();
+    admin
+        .execute_unprepared(&format!("create database {name}"))
         .await
         .unwrap();
+    admin.close().await.unwrap();
 }
 
 pub(crate) async fn db_vars(dir: &Path) -> Vec<(String, String)> {
@@ -304,22 +303,24 @@ pub(crate) fn entry(key: &str, location_id: &str, updated_at: i64) -> CacheEntry
 }
 
 pub(crate) async fn insert_location(db: &Db, location: &StorageLocation) {
-    crate::db::insert_location(db, &db.pool, location)
+    storage_locations::Entity::insert(location.clone().into_active_model())
+        .exec_without_returning(&db.pool)
         .await
         .unwrap();
 }
 
 pub(crate) async fn insert_entry(db: &Db, entry: &CacheEntry) {
-    crate::db::insert_entry(db, &db.pool, entry).await.unwrap();
+    cache_entries::Entity::insert(entry.clone().into_active_model())
+        .exec_without_returning(&db.pool)
+        .await
+        .unwrap();
 }
 
 pub(crate) async fn find_location(db: &Db, id: &str) -> Option<StorageLocation> {
-    db.optional(
-        &db.pool,
-        select_locations().and_where(Expr::col(StorageLocations::Id).eq(id)),
-    )
-    .await
-    .unwrap()
+    storage_locations::Entity::find_by_id(id)
+        .one(&db.pool)
+        .await
+        .unwrap()
 }
 
 /// A lookup for `keys`, primary key first, in the default scope.
@@ -366,22 +367,13 @@ pub(crate) async fn save_parts(storage: &Storage, key: &str, parts: &[Vec<u8>]) 
         .await
         .unwrap()
         .unwrap();
-    let db = &storage.db;
-    let row: Option<StorageLocation> = db
-        .optional(
-            &db.pool,
-            select_locations()
-                .join(
-                    JoinType::InnerJoin,
-                    CacheEntries::Table,
-                    Expr::col((CacheEntries::Table, CacheEntries::LocationId))
-                        .equals((StorageLocations::Table, StorageLocations::Id)),
-                )
-                .and_where(Expr::col((CacheEntries::Table, CacheEntries::Key)).eq(key)),
-        )
+    storage_locations::Entity::find()
+        .inner_join(cache_entries::Entity)
+        .filter(cache_entries::COLUMN.key.eq(key))
+        .one(&storage.db.pool)
         .await
-        .unwrap();
-    row.unwrap()
+        .unwrap()
+        .unwrap()
 }
 
 /// Speaks the Twirp JSON + Azure block protocol the way `@actions/cache` does.

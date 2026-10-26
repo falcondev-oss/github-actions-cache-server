@@ -8,11 +8,13 @@ use std::collections::HashSet;
 
 use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
-use sea_query::{Expr, Order, Query};
-use sea_query_binder::SqlxBinder as _;
-use sqlx::{Acquire as _, AnyConnection, FromRow};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{
+    ConnectionTrait, DatabaseTransaction, EntityTrait as _, QueryFilter as _, QueryOrder as _,
+    QuerySelect as _, Statement, TransactionTrait as _,
+};
 
-use super::{Db, Dialect, EntryIdentity, Uploads};
+use super::{Db, Dialect, EntryIdentity, uploads};
 use crate::error::{Failure, Result};
 
 /// Kysely's advisory lock id for Postgres.
@@ -80,7 +82,7 @@ impl Ddl {
 }
 
 /// Work a migration does after its statements, with the migration's connection.
-type PostStep = for<'c> fn(&'c mut AnyConnection, &'c Ddl) -> BoxFuture<'c, Result<()>>;
+type PostStep = for<'c> fn(&'c DatabaseTransaction, &'c Ddl) -> BoxFuture<'c, Result<()>>;
 
 struct Migration {
     name: &'static str,
@@ -111,7 +113,7 @@ const MIGRATIONS: [Migration; 9] = [
     step("$5_storage_location_sizes", sizes),
     step("$6_cache_entries_locationId_index", location_index),
     Migration {
-        after: Some(|connection, d| backfill_reservation_hashes(connection, d).boxed()),
+        after: Some(|tx, d| backfill_reservation_hashes(tx, d).boxed()),
         ..step("$7_uploads_reservationHash", reservation_hash)
     },
     step("$8_exact_key_scope_collation", exact_collation),
@@ -266,65 +268,50 @@ fn exact_collation(d: &Ddl) -> Vec<String> {
         .collect()
 }
 
-#[derive(FromRow)]
-#[sqlx(rename_all = "camelCase")]
-struct ReservationRow {
-    id: i64,
-    key: String,
-    version: String,
-    scope: String,
-    repo_id: String,
-}
-
-async fn backfill_reservation_hashes(connection: &mut AnyConnection, d: &Ddl) -> Result<()> {
-    let (sql, values) = Query::select()
+async fn backfill_reservation_hashes(tx: &DatabaseTransaction, d: &Ddl) -> Result<()> {
+    let uploads: Vec<(i64, String, String, String, String)> = uploads::Entity::find()
+        .select_only()
         .columns([
-            Uploads::Id,
-            Uploads::Key,
-            Uploads::Version,
-            Uploads::Scope,
-            Uploads::RepoId,
+            uploads::Column::Id,
+            uploads::Column::Key,
+            uploads::Column::Version,
+            uploads::Column::Scope,
+            uploads::Column::RepoId,
         ])
-        .from(Uploads::Table)
-        .order_by(Uploads::CreatedAt, Order::Desc)
-        .build_any_sqlx(d.0.builder());
-    let uploads: Vec<ReservationRow> = sqlx::query_as_with(&sql, values)
-        .fetch_all(&mut *connection)
+        .order_by_desc(uploads::COLUMN.created_at)
+        .into_tuple()
+        .all(tx)
         .await?;
     let mut seen = HashSet::new();
-    for upload in uploads {
+    for (id, key, version, scope, repo_id) in uploads {
         let hash = EntryIdentity {
-            key: upload.key,
-            version: upload.version,
-            scope: upload.scope,
-            repo_id: upload.repo_id,
+            key,
+            version,
+            scope,
+            repo_id,
         }
         .reservation_hash();
         // Older uploads of a reservation are dropped; orphaned storage cleanup reclaims their
         // parts.
-        let (statement, arguments) = if seen.insert(hash.clone()) {
-            Query::update()
-                .table(Uploads::Table)
-                .value(Uploads::ReservationHash, hash)
-                .and_where(Expr::col(Uploads::Id).eq(upload.id))
-                .build_any_sqlx(d.0.builder())
+        if seen.insert(hash.clone()) {
+            uploads::Entity::update_many()
+                .set(uploads::ActiveModel {
+                    reservation_hash: Set(Some(hash)),
+                    ..Default::default()
+                })
+                .filter(uploads::COLUMN.id.eq(id))
+                .exec(tx)
+                .await?;
         } else {
-            Query::delete()
-                .from_table(Uploads::Table)
-                .and_where(Expr::col(Uploads::Id).eq(upload.id))
-                .build_any_sqlx(d.0.builder())
-        };
-        sqlx::query_with(&statement, arguments)
-            .execute(&mut *connection)
-            .await?;
+            uploads::Entity::delete_by_id(id).exec(tx).await?;
+        }
     }
-    sqlx::query(&format!(
+    tx.execute_unprepared(&format!(
         "create unique index {} on {} ({})",
         d.q("idx_uploads_reservationHash"),
         d.q("uploads"),
         d.q("reservationHash"),
     ))
-    .execute(&mut *connection)
     .await?;
     Ok(())
 }
@@ -345,93 +332,88 @@ pub(super) async fn migrate(db: &Db) -> Result<bool> {
 /// Applies the first `count` migrations.
 async fn migrate_through(db: &Db, count: usize) -> Result<bool> {
     tracing::info!("migrating database");
-    let mut connection = db.pool.acquire().await?;
+    // The transaction pins the connection holding the lock. MySQL commits DDL implicitly, so
+    // there it doesn't make the run atomic.
+    let tx = db.pool.begin().await?;
     let migrated = match db.dialect {
         Dialect::Postgres => {
-            sqlx::query(&format!("select pg_advisory_lock({POSTGRES_LOCK_ID})"))
-                .execute(&mut *connection)
+            tx.execute_unprepared(&format!("select pg_advisory_xact_lock({POSTGRES_LOCK_ID})"))
                 .await?;
-            let result = migrate_in_transaction(&mut connection, db.dialect, count).await;
-            sqlx::query(&format!("select pg_advisory_unlock({POSTGRES_LOCK_ID})"))
-                .execute(&mut *connection)
-                .await?;
-            result?
+            run(&tx, db.dialect, count).await?
         }
-        // MySQL commits DDL implicitly, so a transaction would not make the run atomic.
         Dialect::Mysql => {
-            sqlx::query(&format!("select get_lock('{MYSQL_LOCK_ID}', 3600)"))
-                .execute(&mut *connection)
+            tx.execute_unprepared(&format!("select get_lock('{MYSQL_LOCK_ID}', 3600)"))
                 .await?;
-            let result = run(&mut connection, db.dialect, count).await;
-            sqlx::query(&format!("select release_lock('{MYSQL_LOCK_ID}')"))
-                .execute(&mut *connection)
+            let result = run(&tx, db.dialect, count).await;
+            tx.execute_unprepared(&format!("select release_lock('{MYSQL_LOCK_ID}')"))
                 .await?;
             result?
         }
-        Dialect::Sqlite => migrate_in_transaction(&mut connection, db.dialect, count).await?,
+        Dialect::Sqlite => run(&tx, db.dialect, count).await?,
     };
+    tx.commit().await?;
     tracing::info!("database migrated");
     Ok(migrated)
 }
 
-async fn migrate_in_transaction(
-    connection: &mut AnyConnection,
-    dialect: Dialect,
-    count: usize,
-) -> Result<bool> {
-    let mut transaction = connection.begin().await?;
-    let migrated = run(&mut transaction, dialect, count).await?;
-    transaction.commit().await?;
-    Ok(migrated)
+/// The first column of every row `sql` returns.
+async fn strings(tx: &impl ConnectionTrait, sql: String) -> Result<Vec<String>> {
+    let backend = tx.get_database_backend();
+    tx.query_all_raw(Statement::from_string(backend, sql))
+        .await?
+        .iter()
+        .map(|row| Ok(row.try_get_by_index(0)?))
+        .collect()
 }
 
-async fn run(connection: &mut AnyConnection, dialect: Dialect, count: usize) -> Result<bool> {
+async fn run(tx: &DatabaseTransaction, dialect: Dialect, count: usize) -> Result<bool> {
     let d = Ddl(dialect);
     let q = |ident| d.q(ident);
-    sqlx::query(&format!(
+    tx.execute_unprepared(&format!(
         "create table if not exists {} ({} varchar(255) not null primary key, {} varchar(255) \
          not null)",
         q("kysely_migration"),
         q("name"),
         q("timestamp"),
     ))
-    .execute(&mut *connection)
     .await?;
-    sqlx::query(&format!(
+    tx.execute_unprepared(&format!(
         "create table if not exists {} ({} varchar(255) not null primary key, {} integer default \
          0 not null)",
         q("kysely_migration_lock"),
         q("id"),
         q("is_locked"),
     ))
-    .execute(&mut *connection)
     .await?;
-    let lock_row = sqlx::query(&format!(
-        "select {} from {} where {} = 'migration_lock'",
-        q("id"),
-        q("kysely_migration_lock"),
-        q("id"),
-    ))
-    .fetch_optional(&mut *connection)
+    let lock_row = strings(
+        tx,
+        format!(
+            "select {} from {} where {} = 'migration_lock'",
+            q("id"),
+            q("kysely_migration_lock"),
+            q("id"),
+        ),
+    )
     .await?;
-    if lock_row.is_none() {
-        sqlx::query(&format!(
+    if lock_row.is_empty() {
+        tx.execute_unprepared(&format!(
             "insert into {} ({}, {}) values ('migration_lock', 0)",
             q("kysely_migration_lock"),
             q("id"),
             q("is_locked"),
         ))
-        .execute(&mut *connection)
         .await?;
     }
 
-    let executed: Vec<String> = sqlx::query_scalar(&format!(
-        "select {} from {} order by {}",
-        q("name"),
-        q("kysely_migration"),
-        q("name"),
-    ))
-    .fetch_all(&mut *connection)
+    let executed = strings(
+        tx,
+        format!(
+            "select {} from {} order by {}",
+            q("name"),
+            q("kysely_migration"),
+            q("name"),
+        ),
+    )
     .await?;
 
     for (index, name) in executed.iter().enumerate() {
@@ -450,12 +432,12 @@ async fn run(connection: &mut AnyConnection, dialect: Dialect, count: usize) -> 
     for migration in MIGRATIONS.iter().take(count).skip(executed.len()) {
         tracing::info!(migration = migration.name, "applying migration");
         for statement in (migration.statements)(&d) {
-            sqlx::query(&statement).execute(&mut *connection).await?;
+            tx.execute_unprepared(&statement).await?;
         }
         if let Some(after) = migration.after {
-            after(connection, &d).await?;
+            after(tx, &d).await?;
         }
-        sqlx::query(&format!(
+        tx.execute_unprepared(&format!(
             "insert into {} ({}, {}) values ('{}', '{}')",
             q("kysely_migration"),
             q("name"),
@@ -463,7 +445,6 @@ async fn run(connection: &mut AnyConnection, dialect: Dialect, count: usize) -> 
             migration.name,
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         ))
-        .execute(&mut *connection)
         .await?;
         requires_storage_clear |= migration.clears_storage;
     }

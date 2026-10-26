@@ -3,13 +3,14 @@
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
-use sea_query::{Expr, Query};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{EntityTrait as _, QueryFilter as _};
 
 use super::harness::{
     TestServer, entry, eventually, find_location, insert_entry, insert_location, merged_location,
     put, query, read_all, save_parts, storage_driver, unmerged_location,
 };
-use crate::db::{MergeLeases, StorageLocation, StorageReaderLeases, now_ms};
+use crate::db::{StorageLocation, merge_leases, now_ms, storage_reader_leases};
 
 const PART: usize = 64 * 1024;
 
@@ -262,25 +263,14 @@ async fn a_download_fails_once_its_reader_lease_is_lost() {
     let server = TestServer::start().await;
     let (_, location_id) = seed(&server, "lost-lease", Some(b"data")).await;
     // Another worker holds the merge, so this download only reads Parts.
-    let mut lease = Query::insert();
-    lease
-        .into_table(MergeLeases::Table)
-        .columns([
-            MergeLeases::StorageLocationId,
-            MergeLeases::Token,
-            MergeLeases::ExpiresAt,
-        ])
-        .values([
-            location_id.as_str().into(),
-            "other".into(),
-            (now_ms() + 60_000).into(),
-        ])
-        .unwrap();
-    server
-        .db()
-        .execute(&server.db().pool, &lease)
-        .await
-        .unwrap();
+    merge_leases::Entity::insert(merge_leases::ActiveModel {
+        storage_location_id: Set(location_id.clone()),
+        token: Set("other".to_owned()),
+        expires_at: Set(now_ms() + 60_000),
+    })
+    .exec_without_returning(&server.db().pool)
+    .await
+    .unwrap();
 
     let mut download = server
         .storage()
@@ -288,16 +278,13 @@ async fn a_download_fails_once_its_reader_lease_is_lost() {
         .await
         .unwrap()
         .unwrap();
-    server
-        .db()
-        .execute(
-            &server.db().pool,
-            Query::delete()
-                .from_table(StorageReaderLeases::Table)
-                .and_where(
-                    Expr::col(StorageReaderLeases::StorageLocationId).eq(location_id.as_str()),
-                ),
+    storage_reader_leases::Entity::delete_many()
+        .filter(
+            storage_reader_leases::COLUMN
+                .storage_location_id
+                .eq(location_id.as_str()),
         )
+        .exec(&server.db().pool)
         .await
         .unwrap();
     // A renewal attempt notices the lease is gone.
@@ -307,12 +294,6 @@ async fn a_download_fails_once_its_reader_lease_is_lost() {
         item.is_err(),
         "the stream fails instead of serving unprotected data"
     );
-}
-
-#[derive(Debug, sqlx::FromRow)]
-#[sqlx(rename_all = "camelCase")]
-struct Lease {
-    expires_at: i64,
 }
 
 #[tokio::test]
@@ -346,18 +327,15 @@ async fn a_direct_download_lease_covers_the_signed_url_lifetime() {
         .find(|(name, _)| name == "X-Amz-Expires")
         .map(|(_, value)| value.parse().unwrap())
         .unwrap();
-    let lease: Lease = server
-        .db()
-        .one(
-            &server.db().pool,
-            Query::select()
-                .column(StorageReaderLeases::ExpiresAt)
-                .from(StorageReaderLeases::Table)
-                .and_where(
-                    Expr::col(StorageReaderLeases::StorageLocationId).eq(location.id.as_str()),
-                ),
+    let lease = storage_reader_leases::Entity::find()
+        .filter(
+            storage_reader_leases::COLUMN
+                .storage_location_id
+                .eq(location.id.as_str()),
         )
+        .one(&server.db().pool)
         .await
+        .unwrap()
         .unwrap();
     assert!(lifetime_seconds > 0, "signed url expires");
     assert!(
@@ -400,17 +378,13 @@ async fn closes_a_download_whose_client_stopped_reading() {
     let response = get(&server, &location.id, None).await;
     assert_eq!(response.status(), 200);
     let lease = || async {
-        server
-            .db()
-            .optional::<Lease>(
-                &server.db().pool,
-                Query::select()
-                    .column(StorageReaderLeases::ExpiresAt)
-                    .from(StorageReaderLeases::Table)
-                    .and_where(
-                        Expr::col(StorageReaderLeases::StorageLocationId).eq(location.id.as_str()),
-                    ),
+        storage_reader_leases::Entity::find()
+            .filter(
+                storage_reader_leases::COLUMN
+                    .storage_location_id
+                    .eq(location.id.as_str()),
             )
+            .one(&server.db().pool)
             .await
             .unwrap()
     };

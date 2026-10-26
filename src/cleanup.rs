@@ -8,12 +8,17 @@ use chrono::{
     DateTime, DurationRound as _, Local, LocalResult, NaiveDateTime, TimeDelta, TimeZone,
 };
 use futures_util::{StreamExt as _, stream};
-use sea_query::{Cond, Expr, JoinType, Query, SelectStatement};
+use sea_orm::ActiveValue::Set;
+use sea_orm::sea_query::{Expr, ExprTrait as _};
+use sea_orm::{
+    ColumnTrait as _, Condition, EntityTrait as _, QueryFilter as _, QuerySelect as _,
+    QueryTrait as _, Select, TransactionTrait as _,
+};
 
 use crate::config::Config;
 use crate::db::{
-    CacheEntries, FolderRow, MergeLeases, ReaderLeaseScope, StorageLocations, StorageReaderLeases,
-    UploadFolder, Uploads, Utf8Text, now_ms,
+    ReaderLeaseScope, cache_entries, merge_leases, now_ms, storage_locations,
+    storage_reader_leases, uploads,
 };
 use crate::error::{Failure, Result};
 use crate::storage::{
@@ -257,44 +262,28 @@ impl Cleanup {
         let db = &self.storage.db;
         let cutoff = now_ms().saturating_sub(MINUTE_MS);
         loop {
-            let uploads: Vec<UploadFolder> = db
-                .all(
-                    &db.pool,
-                    Query::select()
-                        .columns([Uploads::Id, Uploads::FolderName])
-                        .from(Uploads::Table)
-                        .cond_where(
-                            Cond::all()
-                                .add(
-                                    Cond::any()
-                                        .add(Expr::col(Uploads::LastPartUploadedAt).is_null())
-                                        .add(Expr::col(Uploads::LastPartUploadedAt).lt(cutoff)),
-                                )
-                                .add(Expr::col(Uploads::CreatedAt).lt(cutoff)),
-                        )
-                        .limit(PAGE_SIZE.into()),
+            let stalled: Vec<(i64, String)> = uploads::Entity::find()
+                .select_only()
+                .columns([uploads::Column::Id, uploads::Column::FolderName])
+                .filter(
+                    Condition::any()
+                        .add(uploads::COLUMN.last_part_uploaded_at.is_null())
+                        .add(uploads::COLUMN.last_part_uploaded_at.lt(cutoff)),
                 )
+                .filter(uploads::COLUMN.created_at.lt(cutoff))
+                .limit(u64::from(PAGE_SIZE))
+                .into_tuple()
+                .all(&db.pool)
                 .await?;
-            for upload in &uploads {
-                db.execute(
-                    &db.pool,
-                    Query::delete()
-                        .from_table(Uploads::Table)
-                        .and_where(Expr::col(Uploads::Id).eq(upload.id)),
-                )
-                .await?;
+            for (id, folder_name) in &stalled {
+                uploads::Entity::delete_by_id(*id).exec(&db.pool).await?;
                 summary.deleted_uploads = summary.deleted_uploads.saturating_add(1);
-                match self
-                    .storage
-                    .adapter
-                    .delete_folder(&upload.folder_name)
-                    .await
-                {
+                match self.storage.adapter.delete_folder(folder_name).await {
                     Ok(deleted) => summary.reclaimed(deleted.objects, deleted.bytes),
                     Err(failure) => summary.failed(failures, failure),
                 }
             }
-            if uploads.len() < PAGE_SIZE.into() {
+            if stalled.len() < PAGE_SIZE.into() {
                 return Ok(());
             }
         }
@@ -303,27 +292,23 @@ impl Cleanup {
     /// Deletes locations returned page by page, each re-checked for readers in a transaction.
     async fn delete_locations(
         &self,
-        query: &SelectStatement,
+        query: Select<storage_locations::Entity>,
         summary: &mut CleanupSummary,
         failures: &mut Vec<Failure>,
     ) -> Result<()> {
         let db = &self.storage.db;
+        let query = query.filter(no_active_reader_lease(None));
         loop {
-            let locations: Vec<FolderRow> = db.all(&db.pool, query).await?;
-            for location in &locations {
-                let mut tx = db.pool.begin().await?;
-                let deletion = delete_storage_location_if_unread(db, &mut tx, &location.id).await?;
+            let locations = folders(query.clone()).all(&db.pool).await?;
+            for (id, folder_name) in &locations {
+                let tx = db.pool.begin().await?;
+                let deletion = delete_storage_location_if_unread(&tx, id).await?;
                 tx.commit().await?;
                 if deletion != LocationDeletion::Deleted {
                     continue;
                 }
                 summary.deleted_locations = summary.deleted_locations.saturating_add(1);
-                match self
-                    .storage
-                    .adapter
-                    .delete_folder(&location.folder_name)
-                    .await
-                {
+                match self.storage.adapter.delete_folder(folder_name).await {
                     Ok(reclaimed) => summary.reclaimed(reclaimed.objects, reclaimed.bytes),
                     Err(failure) => summary.failed(failures, failure),
                 }
@@ -345,31 +330,16 @@ impl Cleanup {
         };
         let retention_ms = i64::try_from(retention.as_millis()).unwrap_or(i64::MAX);
         let cutoff = now_ms().saturating_sub(retention_ms);
-        let last_downloaded =
-            || Expr::col((StorageLocations::Table, StorageLocations::LastDownloadedAt));
-        let updated = || Expr::col((CacheEntries::Table, CacheEntries::UpdatedAt));
-        let query = Query::select()
-            .columns([
-                (StorageLocations::Table, StorageLocations::Id),
-                (StorageLocations::Table, StorageLocations::FolderName),
-            ])
-            .from(StorageLocations::Table)
-            .join(
-                JoinType::InnerJoin,
-                CacheEntries::Table,
-                Expr::col((CacheEntries::Table, CacheEntries::LocationId))
-                    .equals((StorageLocations::Table, StorageLocations::Id)),
-            )
-            .and_where(updated().lt(cutoff))
-            .cond_where(
-                Cond::any()
-                    .add(last_downloaded().is_null())
-                    .add(last_downloaded().lt(cutoff)),
-            )
-            .and_where(no_active_reader_lease(None))
-            .limit(PAGE_SIZE.into())
-            .to_owned();
-        self.delete_locations(&query, summary, failures).await
+        let last_downloaded = storage_locations::COLUMN.last_downloaded_at;
+        let query = storage_locations::Entity::find()
+            .inner_join(cache_entries::Entity)
+            .filter(cache_entries::COLUMN.updated_at.lt(cutoff))
+            .filter(
+                Condition::any()
+                    .add(last_downloaded.is_null())
+                    .add(last_downloaded.lt(cutoff)),
+            );
+        self.delete_locations(query, summary, failures).await
     }
 
     async fn storage_locations(
@@ -377,49 +347,24 @@ impl Cleanup {
         summary: &mut CleanupSummary,
         failures: &mut Vec<Failure>,
     ) -> Result<()> {
-        let mut referenced = Query::select();
-        referenced
-            .column((CacheEntries::Table, CacheEntries::Id))
-            .from(CacheEntries::Table)
-            .and_where(
-                Expr::col((CacheEntries::Table, CacheEntries::LocationId))
-                    .equals((StorageLocations::Table, StorageLocations::Id)),
-            );
-        let query = Query::select()
-            .columns([
-                (StorageLocations::Table, StorageLocations::Id),
-                (StorageLocations::Table, StorageLocations::FolderName),
-            ])
-            .from(StorageLocations::Table)
-            .and_where(Expr::exists(referenced).not())
-            .and_where(no_active_reader_lease(None))
-            .limit(PAGE_SIZE.into())
-            .to_owned();
-        self.delete_locations(&query, summary, failures).await
+        let query = storage_locations::Entity::find()
+            .left_join(cache_entries::Entity)
+            .filter(cache_entries::COLUMN.id.is_null());
+        self.delete_locations(query, summary, failures).await
     }
 
     async fn parts(&self, summary: &mut CleanupSummary, failures: &mut Vec<Failure>) -> Result<()> {
         let db = &self.storage.db;
+        let query = storage_locations::Entity::find()
+            .filter(storage_locations::COLUMN.merged_at.is_not_null())
+            .filter(storage_locations::COLUMN.parts_deleted_at.is_null())
+            .filter(no_active_reader_lease(Some(ReaderLeaseScope::Parts)));
         loop {
-            let locations: Vec<FolderRow> = db
-                .all(
-                    &db.pool,
-                    Query::select()
-                        .columns([
-                            (StorageLocations::Table, StorageLocations::Id),
-                            (StorageLocations::Table, StorageLocations::FolderName),
-                        ])
-                        .from(StorageLocations::Table)
-                        .and_where(Expr::col(StorageLocations::MergedAt).is_not_null())
-                        .and_where(Expr::col(StorageLocations::PartsDeletedAt).is_null())
-                        .and_where(no_active_reader_lease(Some(ReaderLeaseScope::Parts)))
-                        .limit(PAGE_SIZE.into()),
-                )
-                .await?;
+            let locations = folders(query.clone()).all(&db.pool).await?;
             let failures_before = failures.len();
-            for location in &locations {
-                let mut tx = db.pool.begin().await?;
-                let claimed = claim_parts_deletion_if_unread(db, &mut tx, &location.id).await?;
+            for (id, folder_name) in &locations {
+                let tx = db.pool.begin().await?;
+                let claimed = claim_parts_deletion_if_unread(&tx, id).await?;
                 tx.commit().await?;
                 if !claimed {
                     continue;
@@ -427,7 +372,7 @@ impl Cleanup {
                 match self
                     .storage
                     .adapter
-                    .delete_folder(&parts_folder(&location.folder_name))
+                    .delete_folder(&parts_folder(folder_name))
                     .await
                 {
                     Ok(deleted) => {
@@ -436,16 +381,14 @@ impl Cleanup {
                         summary.deleted_bytes = summary.deleted_bytes.saturating_add(deleted.bytes);
                     }
                     Err(failure) => {
-                        db.execute(
-                            &db.pool,
-                            Query::update()
-                                .table(StorageLocations::Table)
-                                .value(StorageLocations::PartsDeletedAt, Option::<i64>::None)
-                                .and_where(
-                                    Expr::col(StorageLocations::Id).eq(location.id.as_str()),
-                                ),
-                        )
-                        .await?;
+                        storage_locations::Entity::update_many()
+                            .set(storage_locations::ActiveModel {
+                                parts_deleted_at: Set(None),
+                                ..Default::default()
+                            })
+                            .filter(storage_locations::COLUMN.id.eq(id))
+                            .exec(&db.pool)
+                            .await?;
                         summary.failed(failures, failure);
                     }
                 }
@@ -461,57 +404,58 @@ impl Cleanup {
     async fn merges(&self, summary: &mut CleanupSummary) -> Result<()> {
         let db = &self.storage.db;
         let now = now_ms();
-        let mut live_lease = Query::select();
-        live_lease
-            .column((MergeLeases::Table, MergeLeases::StorageLocationId))
-            .from(MergeLeases::Table)
-            .and_where(
-                Expr::col((MergeLeases::Table, MergeLeases::StorageLocationId))
-                    .equals((StorageLocations::Table, StorageLocations::Id)),
+        let live_lease = merge_leases::Entity::find()
+            .select_only()
+            .column(merge_leases::Column::StorageLocationId)
+            .filter(
+                merge_leases::Column::StorageLocationId
+                    .into_expr()
+                    .equals((storage_locations::Entity, storage_locations::Column::Id)),
             )
-            .and_where(Expr::col((MergeLeases::Table, MergeLeases::ExpiresAt)).gt(now));
-        summary.updated = db
-            .execute(
-                &db.pool,
-                Query::update()
-                    .table(StorageLocations::Table)
-                    .values([
-                        (StorageLocations::MergeStartedAt, Option::<i64>::None.into()),
-                        (StorageLocations::MergedAt, Option::<i64>::None.into()),
-                    ])
-                    .and_where(
-                        Expr::col(StorageLocations::MergeStartedAt)
-                            .lt(now.saturating_sub(15 * MINUTE_MS)),
-                    )
-                    .and_where(Expr::col(StorageLocations::MergedAt).is_null())
-                    .and_where(Expr::exists(live_lease).not()),
+            .filter(merge_leases::COLUMN.expires_at.gt(now))
+            .into_query();
+        summary.updated = storage_locations::Entity::update_many()
+            .set(storage_locations::ActiveModel {
+                merge_started_at: Set(None),
+                merged_at: Set(None),
+                ..Default::default()
+            })
+            .filter(
+                storage_locations::COLUMN
+                    .merge_started_at
+                    .lt(now.saturating_sub(15 * MINUTE_MS)),
             )
+            .filter(storage_locations::COLUMN.merged_at.is_null())
+            .filter(Expr::exists(live_lease).not())
+            .exec(&db.pool)
+            .await?
+            .rows_affected;
+        merge_leases::Entity::delete_many()
+            .filter(merge_leases::COLUMN.expires_at.lte(now))
+            .exec(&db.pool)
             .await?;
-        db.execute(
-            &db.pool,
-            Query::delete()
-                .from_table(MergeLeases::Table)
-                .and_where(Expr::col(MergeLeases::ExpiresAt).lte(now)),
-        )
-        .await?;
         // Expired Storage Reader Leases are otherwise only removed by stream teardown or location
         // cascade; direct-download leases rely on this purge.
-        db.execute(
-            &db.pool,
-            Query::delete()
-                .from_table(StorageReaderLeases::Table)
-                .and_where(Expr::col(StorageReaderLeases::ExpiresAt).lte(now)),
-        )
-        .await?;
+        storage_reader_leases::Entity::delete_many()
+            .filter(storage_reader_leases::COLUMN.expires_at.lte(now))
+            .exec(&db.pool)
+            .await?;
         Ok(())
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
-#[sqlx(rename_all = "camelCase")]
-struct FolderNameRow {
-    #[sqlx(try_from = "Utf8Text")]
-    folder_name: String,
+/// A page of the ids and folder names of the locations `query` selects.
+fn folders(
+    query: Select<storage_locations::Entity>,
+) -> sea_orm::Selector<sea_orm::SelectGetableTuple<(String, String)>> {
+    query
+        .select_only()
+        .columns([
+            storage_locations::Column::Id,
+            storage_locations::Column::FolderName,
+        ])
+        .limit(u64::from(PAGE_SIZE))
+        .into_tuple()
 }
 
 /// Deletes stored folders that no database record authorizes once they are older than the grace
@@ -527,27 +471,19 @@ pub(crate) async fn reconcile_orphaned_storage(
     // Inventory must complete before any deletion. A partial listing must never be mistaken for
     // evidence that an object is orphaned.
     let stored = adapter.list_storage_folders().await?;
-    let locations: Vec<FolderNameRow> = db
-        .all(
-            &db.pool,
-            Query::select()
-                .column(StorageLocations::FolderName)
-                .from(StorageLocations::Table),
-        )
+    let locations: Vec<String> = storage_locations::Entity::find()
+        .select_only()
+        .column(storage_locations::Column::FolderName)
+        .into_tuple()
+        .all(&db.pool)
         .await?;
-    let uploads: Vec<FolderNameRow> = db
-        .all(
-            &db.pool,
-            Query::select()
-                .column(Uploads::FolderName)
-                .from(Uploads::Table),
-        )
+    let uploads: Vec<String> = uploads::Entity::find()
+        .select_only()
+        .column(uploads::Column::FolderName)
+        .into_tuple()
+        .all(&db.pool)
         .await?;
-    let authorized: HashSet<String> = locations
-        .into_iter()
-        .chain(uploads)
-        .map(|row| row.folder_name)
-        .collect();
+    let authorized: HashSet<String> = locations.into_iter().chain(uploads).collect();
     let cutoff = now.saturating_sub(i64::try_from(grace_period.as_millis()).unwrap_or(i64::MAX));
 
     let mut orphaned = Vec::new();

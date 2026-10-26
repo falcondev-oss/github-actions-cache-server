@@ -4,11 +4,11 @@
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Failure {
     #[error("database: {0}")]
-    Db(#[from] sqlx::Error),
+    Db(#[from] sea_orm::DbErr),
+    #[error("database connection: {0}")]
+    Connect(#[from] sqlx::Error),
     #[error("storage: {0}")]
     ObjectStore(#[from] object_store::Error),
-    #[error("query: {0}")]
-    Query(#[from] sea_query::error::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("http: {0}")]

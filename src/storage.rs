@@ -15,8 +15,11 @@ use std::time::Duration;
 use axum::body::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
-use sea_query::{
-    Alias, CaseStatement, Cond, Expr, Func, JoinType, LockType, Order, Query, SelectStatement,
+use sea_orm::ActiveValue::Set;
+use sea_orm::sea_query::{CaseStatement, Expr, ExprTrait as _, Func};
+use sea_orm::{
+    ColumnTrait as _, Condition, ConnectionTrait, EntityTrait as _, IntoActiveModel as _,
+    QueryFilter as _, QueryOrder as _, QuerySelect as _, QueryTrait as _, TransactionTrait as _,
 };
 use serde::Serialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -40,9 +43,8 @@ pub(crate) use self::lifecycle::{
 use crate::config::Config;
 pub(crate) use crate::db::EntryIdentity;
 use crate::db::{
-    CacheEntries, CacheEntry, Db, FolderRow, IdRow, MergeLeases, ReaderLeaseScope, StorageLocation,
-    StorageLocations, TotalRow, Upload, UploadFolder, Uploads, insert_entry, insert_location,
-    is_unique_violation, now_ms, retry_on_lock_conflict, select_entries, select_locations,
+    CacheEntry, Db, ReaderLeaseScope, StorageLocation, Upload, cache_entries, is_unique_violation,
+    merge_leases, now_ms, retry_on_lock_conflict, storage_locations, uploads,
 };
 use crate::error::{Failure, Result};
 
@@ -139,12 +141,12 @@ fn whole_object(location: &StorageLocation) -> Option<(String, ReaderLeaseScope)
     })
 }
 
-fn entry_identity(identity: &EntryIdentity) -> Cond {
-    Cond::all()
-        .add(Expr::col((CacheEntries::Table, CacheEntries::Key)).eq(identity.key.as_str()))
-        .add(Expr::col((CacheEntries::Table, CacheEntries::Version)).eq(identity.version.as_str()))
-        .add(Expr::col((CacheEntries::Table, CacheEntries::Scope)).eq(identity.scope.as_str()))
-        .add(Expr::col((CacheEntries::Table, CacheEntries::RepoId)).eq(identity.repo_id.as_str()))
+fn entry_identity(identity: &EntryIdentity) -> Condition {
+    Condition::all()
+        .add(cache_entries::COLUMN.key.eq(identity.key.as_str()))
+        .add(cache_entries::COLUMN.version.eq(identity.version.as_str()))
+        .add(cache_entries::COLUMN.scope.eq(identity.scope.as_str()))
+        .add(cache_entries::COLUMN.repo_id.eq(identity.repo_id.as_str()))
 }
 
 /// Concatenates a location's Parts as they are read.
@@ -295,14 +297,8 @@ impl Storage {
 
     /// Discards an upload that cannot become a cache entry; returns the failure to report.
     async fn abandon_upload(&self, upload: &Upload, reason: String) -> Failure {
-        let deleted = self
-            .db
-            .execute(
-                &self.db.pool,
-                Query::delete()
-                    .from_table(Uploads::Table)
-                    .and_where(Expr::col(Uploads::Id).eq(upload.id)),
-            )
+        let deleted = uploads::Entity::delete_by_id(upload.id)
+            .exec(&self.db.pool)
             .await;
         if let Err(error) = deleted {
             return Failure::msg(format!(
@@ -346,7 +342,7 @@ impl Storage {
     async fn ensure_parts_exist(&self, location: &StorageLocation) -> Result<(), ReadError> {
         let folder = parts_folder(&location.folder_name);
         let parts = self.adapter.list_folder(&folder).await?;
-        if i64::try_from(parts.len()).unwrap_or(i64::MAX) < location.part_count {
+        if parts.len() < usize::try_from(location.part_count).unwrap_or(0) {
             return Err(ReadError::NotFound(folder));
         }
         Ok(())
@@ -390,18 +386,13 @@ impl Storage {
     }
 
     async fn purge_dangling_cache_entry(&self, entry_id: &str, location_id: &str) -> Result<()> {
-        let mut tx = self.db.pool.begin().await?;
-        self.db
-            .execute(
-                &mut *tx,
-                Query::delete()
-                    .from_table(CacheEntries::Table)
-                    .and_where(Expr::col(CacheEntries::Id).eq(entry_id)),
-            )
+        let tx = self.db.pool.begin().await?;
+        cache_entries::Entity::delete_by_id(entry_id)
+            .exec(&tx)
             .await?;
         // Reap the now-childless Storage Location too: an Orphaned Storage sweep scans physical
         // storage and can never see a row whose data is already gone. Respects reader leases.
-        delete_storage_location_if_unread(&self.db, &mut tx, location_id).await?;
+        delete_storage_location_if_unread(&tx, location_id).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -409,15 +400,15 @@ impl Storage {
     /// Storage Reconciliation: one full listing at startup records the sizes of rows predating
     /// size tracking, then a no-op once every row has a size.
     async fn reconcile_storage_location_sizes(&self) -> Result<()> {
-        let missing: Vec<FolderRow> = self
-            .db
-            .all(
-                &self.db.pool,
-                Query::select()
-                    .columns([StorageLocations::Id, StorageLocations::FolderName])
-                    .from(StorageLocations::Table)
-                    .and_where(Expr::col(StorageLocations::SizeBytes).is_null()),
-            )
+        let missing: Vec<(String, String)> = storage_locations::Entity::find()
+            .select_only()
+            .columns([
+                storage_locations::Column::Id,
+                storage_locations::Column::FolderName,
+            ])
+            .filter(storage_locations::COLUMN.size_bytes.is_null())
+            .into_tuple()
+            .all(&self.db.pool)
             .await?;
         if missing.is_empty() {
             return Ok(());
@@ -429,20 +420,16 @@ impl Storage {
             .into_iter()
             .map(|folder| (folder.folder_name, folder.bytes))
             .collect();
-        for location in missing {
-            let size = sizes.get(&location.folder_name).copied().unwrap_or(0);
-            self.db
-                .execute(
-                    &self.db.pool,
-                    Query::update()
-                        .table(StorageLocations::Table)
-                        .value(
-                            StorageLocations::SizeBytes,
-                            i64::try_from(size).unwrap_or(i64::MAX),
-                        )
-                        .and_where(Expr::col(StorageLocations::Id).eq(location.id))
-                        .and_where(Expr::col(StorageLocations::SizeBytes).is_null()),
-                )
+        for (id, folder_name) in missing {
+            let size = sizes.get(&folder_name).copied().unwrap_or(0);
+            storage_locations::Entity::update_many()
+                .set(storage_locations::ActiveModel {
+                    size_bytes: Set(Some(i64::try_from(size).unwrap_or(i64::MAX))),
+                    ..Default::default()
+                })
+                .filter(storage_locations::COLUMN.id.eq(id))
+                .filter(storage_locations::COLUMN.size_bytes.is_null())
+                .exec(&self.db.pool)
                 .await?;
         }
         Ok(())
@@ -527,109 +514,77 @@ impl Storage {
         stream: ByteStream,
         length: Option<u64>,
     ) -> Result<bool> {
-        let upload: Option<UploadFolder> = self
-            .db
-            .optional(
-                &self.db.reads,
-                Query::select()
-                    .columns([Uploads::Id, Uploads::FolderName])
-                    .from(Uploads::Table)
-                    .and_where(Expr::col(Uploads::Id).eq(upload_id)),
-            )
+        let folder_name: Option<String> = uploads::Entity::find_by_id(upload_id)
+            .select_only()
+            .column(uploads::Column::FolderName)
+            .into_tuple()
+            .one(&self.db.reads)
             .await?;
-        let Some(upload) = upload else {
+        let Some(folder_name) = folder_name else {
             return Ok(false);
         };
-        self.db
-            .execute(
-                &self.db.pool,
-                Query::update()
-                    .table(Uploads::Table)
-                    .value(
-                        Uploads::StartedPartUploadCount,
-                        Expr::col(Uploads::StartedPartUploadCount).add(1),
-                    )
-                    .and_where(Expr::col(Uploads::Id).eq(upload_id)),
+        uploads::Entity::update_many()
+            .col_expr(
+                uploads::Column::StartedPartUploadCount,
+                uploads::Column::StartedPartUploadCount.into_expr().add(1),
             )
+            .filter(uploads::COLUMN.id.eq(upload_id))
+            .exec(&self.db.pool)
             .await?;
         self.adapter
             .upload_stream(
-                &part_object(&upload.folder_name, part_index),
+                &part_object(&folder_name, part_index),
                 stream,
                 UploadKind::Part { length },
             )
             .await?;
-        let recorded = self
-            .db
-            .execute(
-                &self.db.pool,
-                Query::update()
-                    .table(Uploads::Table)
-                    .values([
-                        (Uploads::LastPartUploadedAt, now_ms().into()),
-                        (
-                            Uploads::FinishedPartUploadCount,
-                            Expr::col(Uploads::FinishedPartUploadCount).add(1),
-                        ),
-                    ])
-                    .and_where(Expr::col(Uploads::Id).eq(upload_id)),
+        let recorded = uploads::Entity::update_many()
+            .set(uploads::ActiveModel {
+                last_part_uploaded_at: Set(Some(now_ms())),
+                ..Default::default()
+            })
+            .col_expr(
+                uploads::Column::FinishedPartUploadCount,
+                uploads::Column::FinishedPartUploadCount.into_expr().add(1),
             )
+            .filter(uploads::COLUMN.id.eq(upload_id))
+            .exec(&self.db.pool)
             .await?;
-        Ok(recorded > 0)
+        Ok(recorded.rows_affected > 0)
     }
 
     /// Reserves `identity` for a new upload; a concurrent reservation of the same identity loses
     /// on the unique reservation hash.
     pub(crate) async fn create_upload(&self, identity: &EntryIdentity) -> Result<CreatedUpload> {
         let id = random_upload_id();
-        let mut insert = Query::insert();
-        insert
-            .into_table(Uploads::Table)
-            .columns([
-                Uploads::Id,
-                Uploads::FolderName,
-                Uploads::CreatedAt,
-                Uploads::Key,
-                Uploads::Version,
-                Uploads::Scope,
-                Uploads::RepoId,
-                Uploads::ReservationHash,
-            ])
-            .values([
-                id.into(),
-                id.to_string().into(),
-                now_ms().into(),
-                identity.key.as_str().into(),
-                identity.version.as_str().into(),
-                identity.scope.as_str().into(),
-                identity.repo_id.as_str().into(),
-                identity.reservation_hash().into(),
-            ])?;
-        match self.db.execute(&self.db.pool, &insert).await {
+        let inserted = uploads::Entity::insert(uploads::ActiveModel {
+            id: Set(id),
+            folder_name: Set(id.to_string()),
+            created_at: Set(now_ms()),
+            key: Set(identity.key.clone()),
+            version: Set(identity.version.clone()),
+            scope: Set(identity.scope.clone()),
+            repo_id: Set(identity.repo_id.clone()),
+            reservation_hash: Set(Some(identity.reservation_hash())),
+            ..Default::default()
+        })
+        .exec_without_returning(&self.db.pool)
+        .await;
+        match inserted {
             Ok(_) => Ok(CreatedUpload::Created { id }),
-            Err(failure) if is_unique_violation(&failure) => Ok(CreatedUpload::AlreadyExists),
-            Err(failure) => Err(failure),
+            Err(error) if is_unique_violation(&error) => Ok(CreatedUpload::AlreadyExists),
+            Err(error) => Err(error.into()),
         }
     }
 
     pub(crate) async fn complete_upload(&self, identity: &EntryIdentity) -> Result<Option<Upload>> {
-        let upload: Option<Upload> = self
-            .db
-            .optional(
-                &self.db.reads,
-                // Not `*`: `sqlx::Any` cannot decode Postgres' `char(64)` reservation hash.
-                Query::select()
-                    .columns([
-                        Uploads::Id,
-                        Uploads::Key,
-                        Uploads::Version,
-                        Uploads::StartedPartUploadCount,
-                        Uploads::FinishedPartUploadCount,
-                        Uploads::FolderName,
-                    ])
-                    .from(Uploads::Table)
-                    .and_where(Expr::col(Uploads::ReservationHash).eq(identity.reservation_hash())),
+        let upload = uploads::Entity::find()
+            .filter(
+                uploads::COLUMN
+                    .reservation_hash
+                    .eq(identity.reservation_hash()),
             )
+            .one(&self.db.reads)
             .await?;
         let Some(upload) = upload else {
             return Ok(None);
@@ -650,7 +605,7 @@ impl Storage {
             .adapter
             .list_folder(&parts_folder(&upload.folder_name))
             .await?;
-        let part_count = i64::try_from(parts.len()).unwrap_or(i64::MAX);
+        let part_count = i32::try_from(parts.len()).unwrap_or(i32::MAX);
         if part_count != upload.finished_part_upload_count {
             let reason = format!(
                 "Uploaded part count does not match actual part count in storage (expected {} but \
@@ -698,58 +653,42 @@ impl Storage {
         upload: &Upload,
         location: &StorageLocation,
     ) -> Result<()> {
-        let mut tx = self.db.pool.begin().await?;
-        insert_location(&self.db, &mut *tx, location).await?;
-        let existing: Option<IdRow> = self
-            .db
-            .optional(
-                &mut *tx,
-                Query::select()
-                    .column((CacheEntries::Table, CacheEntries::Id))
-                    .from(CacheEntries::Table)
-                    .join(
-                        JoinType::InnerJoin,
-                        StorageLocations::Table,
-                        Expr::col((StorageLocations::Table, StorageLocations::Id))
-                            .equals((CacheEntries::Table, CacheEntries::LocationId)),
-                    )
-                    .cond_where(entry_identity(identity))
-                    .limit(1),
-            )
+        let tx = self.db.pool.begin().await?;
+        storage_locations::Entity::insert(location.clone().into_active_model())
+            .exec_without_returning(&tx)
             .await?;
-        if let Some(existing) = existing {
-            self.db
-                .execute(
-                    &mut *tx,
-                    Query::update()
-                        .table(CacheEntries::Table)
-                        .values([
-                            (CacheEntries::UpdatedAt, now_ms().into()),
-                            (CacheEntries::LocationId, location.id.as_str().into()),
-                        ])
-                        .and_where(Expr::col(CacheEntries::Id).eq(existing.id)),
-                )
+        let existing: Option<String> = cache_entries::Entity::find()
+            .select_only()
+            .column(cache_entries::Column::Id)
+            .inner_join(storage_locations::Entity)
+            .filter(entry_identity(identity))
+            .into_tuple()
+            .one(&tx)
+            .await?;
+        let entry = cache_entries::ActiveModel {
+            updated_at: Set(now_ms()),
+            location_id: Set(location.id.clone()),
+            ..Default::default()
+        };
+        if let Some(id) = existing {
+            cache_entries::Entity::update_many()
+                .set(entry)
+                .filter(cache_entries::COLUMN.id.eq(id))
+                .exec(&tx)
                 .await?;
         } else {
-            let entry = CacheEntry {
-                id: uuid::Uuid::new_v4().to_string(),
-                key: upload.key.clone(),
-                version: upload.version.clone(),
-                scope: identity.scope.clone(),
-                repo_id: identity.repo_id.clone(),
-                updated_at: now_ms(),
-                location_id: location.id.clone(),
-            };
-            insert_entry(&self.db, &mut *tx, &entry).await?;
-        }
-        self.db
-            .execute(
-                &mut *tx,
-                Query::delete()
-                    .from_table(Uploads::Table)
-                    .and_where(Expr::col(Uploads::Id).eq(upload.id)),
-            )
+            cache_entries::Entity::insert(cache_entries::ActiveModel {
+                id: Set(uuid::Uuid::new_v4().to_string()),
+                key: Set(upload.key.clone()),
+                version: Set(upload.version.clone()),
+                scope: Set(identity.scope.clone()),
+                repo_id: Set(identity.repo_id.clone()),
+                ..entry
+            })
+            .exec_without_returning(&tx)
             .await?;
+        }
+        uploads::Entity::delete_by_id(upload.id).exec(&tx).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -773,75 +712,45 @@ impl Storage {
         let mut usage = if let Some(usage) = filesystem_usage {
             usage.used_bytes
         } else {
-            let total: TotalRow = self
-                .db
-                .one(
-                    &self.db.pool,
-                    Query::select()
-                        .expr_as(
-                            self.db.dialect.sum_bigint(&StorageLocations::SizeBytes),
-                            Alias::new("total"),
-                        )
-                        .from(StorageLocations::Table),
-                )
-                .await?;
-            u64::try_from(total.total).unwrap_or(0)
+            u64::try_from(self.db.stored_bytes().await?).unwrap_or(0)
         };
         if budget == 0 || usage <= budget {
             return Ok(());
         }
 
-        let candidates: Vec<EvictionCandidate> = self
-            .db
-            .all(
-                &self.db.pool,
-                Query::select()
-                    .columns([
-                        (StorageLocations::Table, StorageLocations::Id),
-                        (StorageLocations::Table, StorageLocations::FolderName),
-                        (StorageLocations::Table, StorageLocations::SizeBytes),
-                    ])
-                    .from(StorageLocations::Table)
-                    .join(
-                        JoinType::LeftJoin,
-                        CacheEntries::Table,
-                        Expr::col((CacheEntries::Table, CacheEntries::LocationId))
-                            .equals((StorageLocations::Table, StorageLocations::Id)),
-                    )
-                    .and_where(no_active_reader_lease(None))
-                    .order_by_expr(
-                        Func::coalesce([
-                            Expr::col((
-                                StorageLocations::Table,
-                                StorageLocations::LastDownloadedAt,
-                            ))
-                            .into(),
-                            Expr::col((CacheEntries::Table, CacheEntries::UpdatedAt)).into(),
-                            Expr::val(0).into(),
-                        ])
-                        .into(),
-                        Order::Asc,
-                    ),
-            )
+        let candidates: Vec<(String, String, Option<i64>)> = storage_locations::Entity::find()
+            .select_only()
+            .columns([
+                storage_locations::Column::Id,
+                storage_locations::Column::FolderName,
+                storage_locations::Column::SizeBytes,
+            ])
+            .left_join(cache_entries::Entity)
+            .filter(no_active_reader_lease(None))
+            .order_by_asc(Func::coalesce([
+                storage_locations::Column::LastDownloadedAt.into_expr(),
+                cache_entries::Column::UpdatedAt.into_expr(),
+                Expr::val(0),
+            ]))
+            .into_tuple()
+            .all(&self.db.pool)
             .await?;
 
-        for candidate in candidates {
+        for (id, folder_name, size_bytes) in candidates {
             if usage <= target {
                 break;
             }
-            let mut tx = self.db.pool.begin().await?;
-            let deletion =
-                delete_storage_location_if_unread(&self.db, &mut tx, &candidate.id).await?;
+            let tx = self.db.pool.begin().await?;
+            let deletion = delete_storage_location_if_unread(&tx, &id).await?;
             tx.commit().await?;
             if deletion != LocationDeletion::Deleted {
                 continue;
             }
-            self.adapter.delete_folder(&candidate.folder_name).await?;
+            self.adapter.delete_folder(&folder_name).await?;
             usage = match filesystem_usage.and_then(|_| self.adapter.filesystem_usage()) {
                 Some(current) => current?.used_bytes,
                 None => usage.saturating_sub(
-                    candidate
-                        .size_bytes
+                    size_bytes
                         .and_then(|size| u64::try_from(size).ok())
                         .unwrap_or(0),
                 ),
@@ -857,51 +766,24 @@ impl Storage {
         location_id: &str,
         range: Option<RangeRequest>,
     ) -> Result<Option<DownloadStream>, DownloadError> {
-        let mut tx = self.db.pool.begin().await.map_err(Failure::from)?;
-        let location: Option<StorageLocation> = self
-            .db
-            .optional(
-                &mut *tx,
-                select_locations()
-                    .join(
-                        JoinType::InnerJoin,
-                        CacheEntries::Table,
-                        Expr::col((CacheEntries::Table, CacheEntries::LocationId))
-                            .equals((StorageLocations::Table, StorageLocations::Id)),
-                    )
-                    .and_where(
-                        Expr::col((StorageLocations::Table, StorageLocations::Id)).eq(location_id),
-                    )
-                    .limit(1)
-                    .lock(LockType::Update),
-            )
-            .await?;
+        let tx = self.db.pool.begin().await.map_err(Failure::from)?;
+        let location = storage_locations::Entity::find_by_id(location_id)
+            .inner_join(cache_entries::Entity)
+            .lock_exclusive()
+            .one(&tx)
+            .await
+            .map_err(Failure::from)?;
         let Some(location) = location else {
             return Ok(None);
         };
         let scope = whole_object(&location).map_or(ReaderLeaseScope::Parts, |(_, scope)| scope);
-        let lease_id = create_reader_lease(
-            &self.db,
-            &mut *tx,
-            &location.id,
-            scope,
-            deadline(LEASE_DURATION),
-        )
-        .await?;
+        let lease_id =
+            create_reader_lease(&tx, &location.id, scope, deadline(LEASE_DURATION)).await?;
         tx.commit().await.map_err(Failure::from)?;
 
         let (db, id) = (self.db.clone(), location.id.clone());
         drop(tokio::spawn(async move {
-            let touched = db
-                .execute(
-                    &db.pool,
-                    Query::update()
-                        .table(StorageLocations::Table)
-                        .value(StorageLocations::LastDownloadedAt, now_ms())
-                        .and_where(Expr::col(StorageLocations::Id).eq(id)),
-                )
-                .await;
-            if let Err(error) = touched {
+            if let Err(error) = record_download(&db.pool, &id).await {
                 tracing::warn!(%error, "failed to record Cache Access");
             }
         }));
@@ -996,30 +878,24 @@ impl Storage {
                 })
             })
         };
-        let prefix = |key: &str| self.db.dialect.starts_with(CacheEntries::Key, key);
-        let of_query = |select: &mut SelectStatement| {
-            select
-                .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
-                .and_where(Expr::col(CacheEntries::RepoId).eq(query.repo_id.as_str()))
-                .and_where(
-                    Expr::col(CacheEntries::Scope).is_in(query.scopes.iter().map(String::as_str)),
-                )
-                .to_owned()
+        let prefix = |key: &str| self.db.dialect.starts_with(cache_entries::Column::Key, key);
+        let of_query = || {
+            cache_entries::Entity::find()
+                .filter(cache_entries::COLUMN.version.eq(query.version.as_str()))
+                .filter(cache_entries::COLUMN.repo_id.eq(query.repo_id.as_str()))
         };
 
         let Some(first_scope) = query.scopes.first() else {
             return Ok(None);
         };
         // The common hit, the primary key in the first scope, straight from the key index.
-        let primary = select_entries()
-            .and_where(Expr::col(CacheEntries::Key).eq(query.primary_key.as_str()))
-            .and_where(Expr::col(CacheEntries::Version).eq(query.version.as_str()))
-            .and_where(Expr::col(CacheEntries::Scope).eq(first_scope.as_str()))
-            .and_where(Expr::col(CacheEntries::RepoId).eq(query.repo_id.as_str()))
-            .order_by(CacheEntries::UpdatedAt, Order::Desc)
-            .limit(1)
-            .to_owned();
-        if let Some(entry) = self.db.optional(&self.db.reads, &primary).await? {
+        let primary = of_query()
+            .filter(cache_entries::COLUMN.key.eq(query.primary_key.as_str()))
+            .filter(cache_entries::COLUMN.scope.eq(first_scope.as_str()))
+            .order_by_desc(cache_entries::COLUMN.updated_at)
+            .one(&self.db.reads)
+            .await?;
+        if let Some(entry) = primary {
             return Ok(Some(CacheEntryMatch {
                 entry,
                 match_type: MatchType::ExactPrimary,
@@ -1030,28 +906,32 @@ impl Storage {
         let rank = candidates().enumerate().fold(
             CaseStatement::new(),
             |rank, (position, (scope, _, key, exact))| {
-                let condition = Cond::all()
-                    .add(Expr::col(CacheEntries::Scope).eq(scope.as_str()))
+                let condition = Condition::all()
+                    .add(cache_entries::COLUMN.scope.eq(scope.as_str()))
                     .add(if exact {
-                        Expr::col(CacheEntries::Key).eq(key)
+                        cache_entries::COLUMN.key.eq(key)
                     } else {
                         prefix(key)
                     });
                 rank.case(condition, i64::try_from(position).unwrap_or(i64::MAX))
             },
         );
-        let ranked = of_query(
-            select_entries()
-                .expr_as(rank.finally(i64::MAX), Alias::new("matchRank"))
-                .cond_where(
-                    keys.iter()
-                        .fold(Cond::any(), |any, key| any.add(prefix(key))),
-                )
-                .order_by(Alias::new("matchRank"), Order::Asc)
-                .order_by(CacheEntries::UpdatedAt, Order::Desc)
-                .limit(1),
-        );
-        let best: Option<RankedEntry> = self.db.optional(&self.db.reads, &ranked).await?;
+        let best = of_query()
+            .filter(
+                cache_entries::COLUMN
+                    .scope
+                    .is_in(query.scopes.iter().map(String::as_str)),
+            )
+            .filter(
+                keys.iter()
+                    .fold(Condition::any(), |any, key| any.add(prefix(key))),
+            )
+            .expr_as(rank.finally(i64::MAX), "matchRank")
+            .order_by_asc(Expr::col("matchRank"))
+            .order_by_desc(cache_entries::COLUMN.updated_at)
+            .into_model::<RankedEntry>()
+            .one(&self.db.reads)
+            .await?;
         let Some((best, (_, index, _, exact))) = best.and_then(|best| {
             let candidate = usize::try_from(best.match_rank)
                 .ok()
@@ -1087,15 +967,8 @@ impl Storage {
                 return Ok(None);
             };
             let entry = matched.entry;
-            let location: Option<StorageLocation> = self
-                .db
-                .optional(
-                    &self.db.reads,
-                    select_locations().and_where(
-                        Expr::col((StorageLocations::Table, StorageLocations::Id))
-                            .eq(entry.location_id.as_str()),
-                    ),
-                )
+            let location = storage_locations::Entity::find_by_id(entry.location_id.as_str())
+                .one(&self.db.reads)
                 .await?;
             let location = match location {
                 Some(location) if self.storage_has_data(&location).await? => location,
@@ -1130,32 +1003,16 @@ impl Storage {
             // the signed URL lifetime, then sign. One deadline bounds both, so the URL never
             // outlives the lease.
             let expires_at = deadline(DIRECT_DOWNLOAD_LEASE_DURATION);
-            let mut tx = self.db.pool.begin().await?;
-            let current: Option<StorageLocation> = self
-                .db
-                .optional(
-                    &mut *tx,
-                    select_locations()
-                        .and_where(
-                            Expr::col((StorageLocations::Table, StorageLocations::Id))
-                                .eq(location.id.as_str()),
-                        )
-                        .lock(LockType::Update),
-                )
-                .await?;
-            let current = current.ok_or_else(|| Failure::msg("Storage location not found"))?;
+            let tx = self.db.pool.begin().await?;
+            let current = storage_locations::Entity::find_by_id(location.id.as_str())
+                .lock_exclusive()
+                .one(&tx)
+                .await?
+                .ok_or_else(|| Failure::msg("Storage location not found"))?;
             let whole = whole_object(&current);
             if let Some((_, scope)) = &whole {
-                create_reader_lease(&self.db, &mut *tx, &current.id, *scope, expires_at).await?;
-                self.db
-                    .execute(
-                        &mut *tx,
-                        Query::update()
-                            .table(StorageLocations::Table)
-                            .value(StorageLocations::LastDownloadedAt, now_ms())
-                            .and_where(Expr::col(StorageLocations::Id).eq(current.id.as_str())),
-                    )
-                    .await?;
+                create_reader_lease(&tx, &current.id, *scope, expires_at).await?;
+                record_download(&tx, &current.id).await?;
             }
             tx.commit().await?;
 
@@ -1185,19 +1042,14 @@ impl Storage {
     /// Deletes a storage location row, then its data (ADR-0001), unless a reader holds it
     /// (ADR-0002). Data that can't be deleted is left as Orphaned Storage.
     pub(crate) async fn delete_storage_location(&self, id: &str) -> Result<LocationDeletion> {
-        let location: Option<StorageLocation> = self
-            .db
-            .optional(
-                &self.db.pool,
-                select_locations()
-                    .and_where(Expr::col((StorageLocations::Table, StorageLocations::Id)).eq(id)),
-            )
+        let location = storage_locations::Entity::find_by_id(id)
+            .one(&self.db.pool)
             .await?;
         let Some(location) = location else {
             return Ok(LocationDeletion::Missing);
         };
-        let mut tx = self.db.pool.begin().await?;
-        let deletion = delete_storage_location_if_unread(&self.db, &mut tx, id).await?;
+        let tx = self.db.pool.begin().await?;
+        let deletion = delete_storage_location_if_unread(&tx, id).await?;
         tx.commit().await?;
         if deletion != LocationDeletion::Deleted {
             return Ok(deletion);
@@ -1217,22 +1069,25 @@ fn random_upload_id() -> i64 {
 }
 
 /// A cache entry with the position of the first match candidate it satisfies.
-#[derive(Debug, sqlx::FromRow)]
-#[sqlx(rename_all = "camelCase")]
+#[derive(Debug, sea_orm::FromQueryResult)]
 struct RankedEntry {
-    #[sqlx(flatten)]
+    #[sea_orm(nested)]
     entry: CacheEntry,
+    #[sea_orm(alias = "matchRank")]
     match_rank: i64,
 }
 
-/// A location Capacity-based Eviction may delete.
-#[derive(Debug, sqlx::FromRow)]
-#[sqlx(rename_all = "camelCase")]
-struct EvictionCandidate {
-    id: String,
-    #[sqlx(try_from = "crate::db::Utf8Text")]
-    folder_name: String,
-    size_bytes: Option<i64>,
+/// Records Cache Access (ADR-0008).
+async fn record_download(db: &impl ConnectionTrait, id: &str) -> Result<()> {
+    storage_locations::Entity::update_many()
+        .set(storage_locations::ActiveModel {
+            last_downloaded_at: Set(Some(now_ms())),
+            ..Default::default()
+        })
+        .filter(storage_locations::COLUMN.id.eq(id))
+        .exec(db)
+        .await?;
+    Ok(())
 }
 
 /// Takes the Merge Lease and records the Merge as started; `None` while another worker holds it.
@@ -1242,21 +1097,20 @@ async fn claim_merge(db: &Db, id: &str) -> Result<Option<String>> {
     let Some(token) = acquire_merge_lease(db, id).await? else {
         return Ok(None);
     };
-    let started = db
-        .execute(
-            &db.pool,
-            Query::update()
-                .table(StorageLocations::Table)
-                .value(StorageLocations::MergeStartedAt, now_ms())
-                .and_where(Expr::col(StorageLocations::Id).eq(id))
-                .and_where(Expr::col(StorageLocations::MergedAt).is_null()),
-        )
+    let started = storage_locations::Entity::update_many()
+        .set(storage_locations::ActiveModel {
+            merge_started_at: Set(Some(now_ms())),
+            ..Default::default()
+        })
+        .filter(storage_locations::COLUMN.id.eq(id))
+        .filter(storage_locations::COLUMN.merged_at.is_null())
+        .exec(&db.pool)
         .await;
-    if matches!(started, Ok(1)) {
+    if matches!(&started, Ok(update) if update.rows_affected == 1) {
         return Ok(Some(token));
     }
     release_merge_lease(db, id, &token).await?;
-    started.map(|_| None)
+    Ok(started.map(|_| None)?)
 }
 
 /// Writes the merged object under the lease `token`, then marks the Merge complete. Holds `_slot`
@@ -1302,60 +1156,40 @@ async fn run_merge(
 }
 
 async fn complete_merge(db: &Db, id: &str, token: &str) -> Result<()> {
-    #[derive(Debug, sqlx::FromRow)]
-    #[sqlx(rename_all = "camelCase")]
-    struct Lease {
-        token: String,
-        expires_at: i64,
-    }
-    let mut tx = db.pool.begin().await?;
-    let lease: Option<Lease> = db
-        .optional(
-            &mut *tx,
-            Query::select()
-                .columns([MergeLeases::Token, MergeLeases::ExpiresAt])
-                .from(MergeLeases::Table)
-                .and_where(Expr::col(MergeLeases::StorageLocationId).eq(id))
-                .lock(LockType::Update),
-        )
+    let tx = db.pool.begin().await?;
+    let lease = merge_leases::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&tx)
         .await?;
     if !lease.is_some_and(|lease| lease.token == token && lease.expires_at > now_ms()) {
         return Err(Failure::msg("Merge lease was lost before completion"));
     }
-    db.execute(
-        &mut *tx,
-        Query::update()
-            .table(StorageLocations::Table)
-            .value(StorageLocations::MergedAt, now_ms())
-            .and_where(Expr::col(StorageLocations::Id).eq(id)),
-    )
-    .await?;
+    storage_locations::Entity::update_many()
+        .set(storage_locations::ActiveModel {
+            merged_at: Set(Some(now_ms())),
+            ..Default::default()
+        })
+        .filter(storage_locations::COLUMN.id.eq(id))
+        .exec(&tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }
 
 async fn roll_back_merge(db: &Db, id: &str, token: &str) -> Result<()> {
-    let mut holds_lease = Query::select();
-    holds_lease
-        .column(MergeLeases::StorageLocationId)
-        .from(MergeLeases::Table)
-        .and_where(
-            Expr::col((MergeLeases::Table, MergeLeases::StorageLocationId))
-                .equals((StorageLocations::Table, StorageLocations::Id)),
-        )
-        .and_where(Expr::col((MergeLeases::Table, MergeLeases::Token)).eq(token));
-    db.execute(
-        &db.pool,
-        Query::update()
-            .table(StorageLocations::Table)
-            .values([
-                (StorageLocations::MergedAt, Option::<i64>::None.into()),
-                (StorageLocations::MergeStartedAt, Option::<i64>::None.into()),
-            ])
-            .and_where(Expr::col(StorageLocations::Id).eq(id))
-            .and_where(Expr::exists(holds_lease)),
-    )
-    .await?;
+    let holds_lease = merge_leases::Entity::find_by_id(id)
+        .filter(merge_leases::COLUMN.token.eq(token))
+        .into_query();
+    storage_locations::Entity::update_many()
+        .set(storage_locations::ActiveModel {
+            merged_at: Set(None),
+            merge_started_at: Set(None),
+            ..Default::default()
+        })
+        .filter(storage_locations::COLUMN.id.eq(id))
+        .filter(Expr::exists(holds_lease))
+        .exec(&db.pool)
+        .await?;
     Ok(())
 }
 
