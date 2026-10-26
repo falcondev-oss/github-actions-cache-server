@@ -1,10 +1,11 @@
 # 🚀 GitHub Actions Cache Server
 
-This is a drop-in replacement for the official GitHub hosted cache server. It is compatible with the official `actions/cache` action, so there is no need to change your workflow files and it even works with packages that internally use `actions/cache`.
+This is a fast, lightweight, self-hosted drop-in replacement for the official GitHub hosted cache server, written in Rust. It is compatible with the official `actions/cache` action, so there is no need to change your workflow files and it even works with packages that internally use `actions/cache`.
 
 ## Features
 
 - 🔥 **Compatible with official `actions/cache` action**
+- ⚡ Very fast and memory efficient: a single Rust binary in a tiny image that starts in under a second and idles at a few MiB of memory.
 - 📦 Supports multiple storage solutions and is easily extendable.
 - 🔒 Secure and self-hosted, giving you full control over your cache data.
 - 😎 Easy setup
@@ -27,15 +28,6 @@ services:
 volumes:
   cache-data:
 ```
-
-## Resource limits
-
-All optional.
-
-| Variable                   | Default  | Effect                                                                                                            |
-| -------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `MAX_CONCURRENT_MERGES`    | `16`     | Merges one process runs at once, eager or lazy. Beyond it, restores stream the parts and a later download merges. |
-| `DOWNLOAD_IDLE_TIMEOUT_MS` | `300000` | Closes a connection whose client has not read a response for this long; `0` disables.                             |
 
 ## Documentation
 
