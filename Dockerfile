@@ -13,7 +13,7 @@ COPY src ./src
 
 ARG BUILD_HASH
 ENV BUILD_HASH=${BUILD_HASH}
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=registry-${TARGETARCH} \
     --mount=type=cache,target=/app/target,id=target-${TARGETARCH} \
     case "$TARGETARCH" in \
       amd64) target=x86_64-unknown-linux-musl ;; \
