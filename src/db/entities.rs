@@ -1,4 +1,4 @@
-//! Tables. Column names are camelCase: the schema was created by the original TypeScript server.
+//! Tables. Column names are camelCase, as v9 created them.
 #![expect(
     clippy::same_name_method,
     clippy::unused_async_trait_impl,

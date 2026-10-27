@@ -4,10 +4,10 @@
     reason = "utoipa's path macro qualifies `params(...)` types"
 )]
 
-use std::collections::HashMap;
-use std::str::FromStr;
+use std::num::NonZeroU32;
 
-use axum::extract::{Path, RawQuery, Request, State};
+use axum::extract::{FromRequestParts, Path, Request, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderName, StatusCode};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Response};
@@ -16,7 +16,9 @@ use axum::{Json, Router};
 use sea_orm::{
     Condition, EntityTrait as _, PaginatorTrait as _, QueryFilter as _, QuerySelect as _,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_qs::DuplicateKeyBehavior;
 use tower_http::cors::CorsLayer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::openapi::{InfoBuilder, SecurityRequirement, ServerBuilder};
@@ -100,60 +102,26 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Query parameters; repeated (`a=1&a=2`) and bracketed (`a[]=1`, `a[0]=1`) keys collect.
-struct Params(HashMap<String, Vec<String>>);
+/// Query parameters; repeated (`a=1&a=2`) and bracketed (`a[]=1`, `a[0]=1`) keys collect into
+/// lists, and a repeated single value is rejected.
+struct Query<T>(T);
 
-impl Params {
-    fn parse(raw: Option<&str>) -> Self {
-        let mut params: HashMap<String, Vec<String>> = HashMap::new();
-        for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
-            let key = match key.split_once('[') {
-                Some((name, rest)) if rest.ends_with(']') => name.to_owned(),
-                Some(_) | None => key.into_owned(),
-            };
-            params.entry(key).or_default().push(value.into_owned());
-        }
-        Self(params)
-    }
+impl<T: DeserializeOwned + Send, S: Send + Sync> FromRequestParts<S> for Query<T> {
+    type Rejection = ApiError;
 
-    fn list(&self, key: &str) -> Vec<String> {
-        self.0.get(key).cloned().unwrap_or_default()
-    }
-
-    fn optional(&self, key: &str) -> Result<Option<String>, ApiError> {
-        match self.0.get(key).map(Vec::as_slice) {
-            None | Some([]) => Ok(None),
-            Some([value]) => Ok(Some(value.clone())),
-            Some(_) => Err(ApiError::bad_request(format!(
-                "Input validation failed: {key} must be a single value"
-            ))),
-        }
-    }
-
-    fn required(&self, key: &str) -> Result<String, ApiError> {
-        self.optional(key)?.ok_or_else(|| {
-            ApiError::bad_request(format!("Input validation failed: {key} is required"))
-        })
-    }
-
-    fn integer<T: FromStr + PartialOrd>(
-        &self,
-        key: &str,
-        default: T,
-        range: std::ops::RangeInclusive<T>,
-    ) -> Result<T, ApiError> {
-        let invalid = || {
-            ApiError::bad_request(format!(
-                "Input validation failed: {key} must be an integer in range"
-            ))
-        };
-        self.optional(key)?.map_or(Ok(default), |value| {
-            value
-                .parse()
-                .ok()
-                .filter(|parsed| range.contains(parsed))
-                .ok_or_else(invalid)
-        })
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, ApiError>> + Send {
+        std::future::ready(
+            serde_qs::Config::new()
+                .duplicate_key_behavior(DuplicateKeyBehavior::Error)
+                .deserialize_str(parts.uri.query().unwrap_or_default())
+                .map(Self)
+                .map_err(|error| {
+                    ApiError::bad_request(format!("Input validation failed: {error}"))
+                }),
+        )
     }
 }
 
@@ -177,22 +145,11 @@ struct EntryFilter {
     #[serde(default, deserialize_with = "present")]
     scope: Option<String>,
     /// Filter by exact repository id
-    #[param(rename = "repoId")]
-    #[schema(rename = "repoId")]
     #[serde(default, deserialize_with = "present")]
     repo_id: Option<String>,
 }
 
 impl EntryFilter {
-    fn parse(params: &Params) -> Result<Self, ApiError> {
-        Ok(Self {
-            key: params.optional("key")?,
-            version: params.optional("version")?,
-            scope: params.optional("scope")?,
-            repo_id: params.optional("repoId")?,
-        })
-    }
-
     /// Every given filter must match; an empty filter matches everything.
     fn condition(&self) -> Condition {
         [
@@ -214,37 +171,58 @@ impl EntryFilter {
     }
 }
 
-#[derive(Debug, IntoParams)]
-#[into_params(parameter_in = Query)]
-#[expect(
-    dead_code,
-    reason = "documents the query string, which is parsed by `Params`"
-)]
-struct Pagination {
-    /// Number of items per page (1-100, default 20)
-    #[param(rename = "itemsPerPage")]
-    items_per_page: Option<u32>,
-    /// Page number (default 1)
-    page: Option<u32>,
+/// Between 1 and 100.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(try_from = "u8")]
+struct ItemsPerPage(u8);
+
+impl TryFrom<u8> for ItemsPerPage {
+    type Error = &'static str;
+
+    fn try_from(items: u8) -> Result<Self, Self::Error> {
+        (1..=100)
+            .contains(&items)
+            .then_some(Self(items))
+            .ok_or("itemsPerPage must be between 1 and 100")
+    }
 }
 
-#[derive(Debug, IntoParams)]
+impl Default for ItemsPerPage {
+    fn default() -> Self {
+        Self(20)
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
-#[expect(
-    dead_code,
-    reason = "documents the query string, which is parsed by `Params`"
-)]
+struct Pagination {
+    /// Number of items per page (1-100, default 20)
+    #[param(value_type = Option<u8>, minimum = 1, maximum = 100)]
+    #[serde(default)]
+    items_per_page: ItemsPerPage,
+    /// Page number (default 1)
+    #[param(value_type = Option<u32>, minimum = 1)]
+    #[serde(default = "first_page")]
+    page: NonZeroU32,
+}
+
+const fn first_page() -> NonZeroU32 {
+    NonZeroU32::MIN
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
 struct MatchQuery {
     /// The primary cache key to match against
-    #[param(rename = "primaryKey")]
     primary_key: String,
     /// Optional fallback keys to try if the primary key does not match
-    #[param(rename = "restoreKeys")]
-    restore_keys: Option<Vec<String>>,
-    /// Scopes to search within, checked in order
+    #[serde(default)]
+    restore_keys: Vec<String>,
+    /// Scopes to search within, checked in order; at least one
     scopes: Vec<String>,
     /// Repository id to match the cache entry against
-    #[param(rename = "repoId")]
     repo_id: String,
     /// Cache version identifier
     version: String,
@@ -294,15 +272,14 @@ async fn get_cache_entry(
 )]
 async fn match_cache_entry(
     State(state): State<AppState>,
-    RawQuery(raw): RawQuery,
+    Query(query): Query<MatchQuery>,
 ) -> Result<Json<Option<CacheEntryMatch>>, ApiError> {
-    let params = Params::parse(raw.as_deref());
     let query = CacheQuery {
-        primary_key: params.required("primaryKey")?,
-        restore_keys: params.list("restoreKeys"),
-        version: params.required("version")?,
-        scopes: params.list("scopes"),
-        repo_id: params.required("repoId")?,
+        primary_key: query.primary_key,
+        restore_keys: query.restore_keys,
+        version: query.version,
+        scopes: query.scopes,
+        repo_id: query.repo_id,
     };
     if query.scopes.is_empty() {
         return Err(ApiError::bad_request(
@@ -325,12 +302,11 @@ async fn match_cache_entry(
 )]
 async fn list_cache_entries(
     State(state): State<AppState>,
-    RawQuery(raw): RawQuery,
+    Query(filter): Query<EntryFilter>,
+    Query(pagination): Query<Pagination>,
 ) -> Result<Json<CacheEntryPage>, ApiError> {
-    let params = Params::parse(raw.as_deref());
-    let filter = EntryFilter::parse(&params)?;
-    let items_per_page: u64 = params.integer("itemsPerPage", 20, 1..=100)?;
-    let page: u64 = params.integer("page", 1, 1..=u64::from(u32::MAX))?;
+    let items_per_page = u64::from(pagination.items_per_page.0);
+    let page = u64::from(pagination.page.get());
     let db = &state.storage.db.pool;
     let entries = cache_entries::Entity::find().filter(filter.condition());
     let items = entries
@@ -377,12 +353,12 @@ async fn delete_cache_entry(
 )]
 async fn delete_cache_entries(
     State(state): State<AppState>,
-    RawQuery(raw): RawQuery,
+    Query(query): Query<EntryFilter>,
     body: axum::body::Bytes,
 ) -> Result<(), ApiError> {
-    // Read whatever the Content-Type, like the original server.
+    // Read whatever the Content-Type.
     let filter = if body.is_empty() {
-        EntryFilter::parse(&Params::parse(raw.as_deref()))?
+        query
     } else {
         serde_json::from_slice(&body)
             .map_err(|error| ApiError::bad_request(format!("Input validation failed: {error}")))?

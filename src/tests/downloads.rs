@@ -85,6 +85,7 @@ async fn serves_ranges_of_merged_entries() {
             total - 10,
             total - 1,
         ),
+        ("bytes=-100".to_owned(), total - 100, total - 1),
     ];
     for (range, start, end) in cases {
         let response = get(&server, &location.id, Some(&range)).await;

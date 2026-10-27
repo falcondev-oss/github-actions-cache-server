@@ -81,6 +81,22 @@ async fn dangling_entries_are_misses_after_storage_is_wiped() {
     );
 }
 
+#[tokio::test]
+async fn rejects_oversized_requests_before_reading_them() {
+    let server = TestServer::start().await;
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry",
+            server.url
+        ))
+        .header("content-type", "application/json")
+        .body(vec![b' '; 3 * 1024 * 1024])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 413, "body limit");
+}
+
 #[derive(Clone, PartialEq, Eq, prost::Message)]
 struct Metadata {
     #[prost(int64, tag = "1")]

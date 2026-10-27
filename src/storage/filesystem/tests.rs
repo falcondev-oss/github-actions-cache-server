@@ -1,6 +1,7 @@
 use futures_util::stream;
 
 use super::*;
+use crate::storage::adapter::{EndPosition, StartPosition};
 
 async fn adapter() -> (tempfile::TempDir, FilesystemAdapter) {
     let dir = tempfile::tempdir().unwrap();
@@ -45,8 +46,8 @@ async fn uploads_atomically_and_serves_ranges() {
     assert_eq!(read_all(whole.stream).await, b"hello world", "whole object");
 
     let range = RangeRequest {
-        start: 6,
-        end: Some(100),
+        start: StartPosition::Index(6),
+        end: EndPosition::Index(100),
     };
     let ranged = adapter
         .download_stream("f/parts/0", Some(range))
@@ -55,8 +56,8 @@ async fn uploads_atomically_and_serves_ranges() {
     assert_eq!(read_all(ranged.stream).await, b"world", "clamped range");
 
     let past = RangeRequest {
-        start: 11,
-        end: None,
+        start: StartPosition::Index(11),
+        end: EndPosition::LastByte,
     };
     assert!(
         matches!(

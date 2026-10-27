@@ -136,3 +136,25 @@ fn zero_retention_disables_age_cleanup() {
         "negative retention"
     );
 }
+
+#[test]
+fn ignores_variables_of_other_drivers() {
+    assert!(
+        config(&[
+            ("DB_MYSQL_PORT", "tcp://10.0.0.1:3306"),
+            ("DB_POSTGRES_URL", "postgres://localhost/db"),
+            ("DB_POSTGRES_HOST", "localhost"),
+            ("AWS_ENDPOINT_URL", "not a url"),
+        ])
+        .is_ok(),
+        "sqlite and filesystem don't read them"
+    );
+    assert!(
+        config(&[
+            ("DB_DRIVER", "mysql"),
+            ("DB_MYSQL_PORT", "tcp://10.0.0.1:3306")
+        ])
+        .is_err(),
+        "the selected driver does"
+    );
+}

@@ -8,7 +8,8 @@ mod transfer;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{any, post, put};
+use axum::routing::{any, put};
+use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::cleanup::Cleanup;
 use crate::config::Config;
@@ -28,7 +29,8 @@ pub(crate) struct AppState {
     pub(crate) http: reqwest::Client,
 }
 
-const CACHE_SERVICE: &str = "/twirp/github.actions.results.api.v1.CacheService";
+/// axum's default body limit, which the handlers had before twirp-rs.
+const TWIRP_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 pub(crate) fn router(state: AppState) -> Router {
     let debug = state.config.debug;
@@ -37,18 +39,6 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/health", any(|| async { "healthy" }))
         .route("/metrics", any(cache::metrics))
         .route(
-            &format!("{CACHE_SERVICE}/CreateCacheEntry"),
-            post(cache::create_cache_entry),
-        )
-        .route(
-            &format!("{CACHE_SERVICE}/FinalizeCacheEntryUpload"),
-            any(cache::finalize_cache_entry_upload),
-        )
-        .route(
-            &format!("{CACHE_SERVICE}/GetCacheEntryDownloadURL"),
-            post(cache::get_cache_entry_download_url),
-        )
-        .route(
             "/devstoreaccount1/upload/{upload_id}",
             put(transfer::upload),
         )
@@ -56,7 +46,12 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/download/{location_id}", any(transfer::download))
         .nest("/management-api", management::router(&state.config))
         .fallback(passthrough::forward)
-        .with_state(state);
+        .with_state(state.clone())
+        // twirp-rs buffers the whole body before a handler checks the token.
+        .nest(
+            "/twirp",
+            crate::twirp::router(state).layer(RequestBodyLimitLayer::new(TWIRP_BODY_LIMIT)),
+        );
     if debug {
         router.layer(axum::middleware::from_fn(log_requests))
     } else {

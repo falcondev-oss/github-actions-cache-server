@@ -4,9 +4,6 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use chrono::{
-    DateTime, DurationRound as _, Local, LocalResult, NaiveDateTime, TimeDelta, TimeZone,
-};
 use futures_util::{StreamExt as _, stream};
 use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::{Expr, ExprTrait as _};
@@ -14,6 +11,7 @@ use sea_orm::{
     ColumnTrait as _, Condition, EntityTrait as _, QueryFilter as _, QuerySelect as _,
     QueryTrait as _, Select, TransactionTrait as _,
 };
+use tokio::time::MissedTickBehavior;
 
 use crate::config::Config;
 use crate::db::{
@@ -59,43 +57,19 @@ impl Task {
     }
 }
 
-/// Schedules aligned to local wall-clock time like the original cron expressions, in minutes that
-/// divide a day, and the tasks each runs in order.
-const SCHEDULES: [(u32, &[Task]); 4] = [
-    (5, &[Task::Uploads]),
-    (10, &[Task::Parts, Task::StorageLocations]),
-    (60, &[Task::Merges]),
-    (24 * 60, &[Task::CacheEntries, Task::OrphanedStorage]),
+/// How often each schedule runs, and the tasks it runs in order.
+const SCHEDULES: [(Duration, &[Task]); 4] = [
+    (Duration::from_mins(5), &[Task::Uploads]),
+    (
+        Duration::from_mins(10),
+        &[Task::Parts, Task::StorageLocations],
+    ),
+    (Duration::from_hours(1), &[Task::Merges]),
+    (
+        Duration::from_hours(24),
+        &[Task::CacheEntries, Task::OrphanedStorage],
+    ),
 ];
-
-/// The next local time after `now` whose minute of the day is a multiple of `period_minutes`.
-fn next_run<Tz: TimeZone>(now: &DateTime<Tz>, period_minutes: u32) -> DateTime<Tz> {
-    let period = TimeDelta::minutes(period_minutes.into());
-    let zone = now.timezone();
-    // Like cron across DST changes: a repeated time runs at its first occurrence still ahead,
-    // and a skipped one when the clock resumes.
-    let resolve = |boundary: NaiveDateTime| match zone.from_local_datetime(&boundary) {
-        LocalResult::Single(time) => Some(time),
-        // `Local` lists the two occurrences latest first.
-        LocalResult::Ambiguous(first, second) => {
-            [first, second].into_iter().filter(|time| time > now).min()
-        }
-        LocalResult::None => std::iter::successors(Some(boundary), |minute| {
-            minute.checked_add_signed(TimeDelta::minutes(1))
-        })
-        .take(24 * 60)
-        .find_map(|minute| zone.from_local_datetime(&minute).earliest()),
-    };
-    // Periods divide a day, so truncating the naive local time aligns them to local midnight.
-    now.naive_local()
-        .duration_trunc(period)
-        .ok()
-        .and_then(|boundary| boundary.checked_add_signed(period))
-        .and_then(resolve)
-        .filter(|time| time > now)
-        .or_else(|| now.clone().checked_add_signed(period))
-        .unwrap_or_else(|| now.clone())
-}
 
 /// What a cleanup run did; counters a task does not touch stay zero.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -230,16 +204,17 @@ impl Cleanup {
 
     /// Runs every schedule until the process ends.
     pub(crate) fn spawn_schedules(self: &Arc<Self>) {
-        for (period_minutes, tasks) in SCHEDULES {
+        for (period, tasks) in SCHEDULES {
             let cleanup = Arc::clone(self);
             drop(tokio::spawn(async move {
+                let mut ticks = tokio::time::interval(period);
+                // A run that outlasts its period skips the ticks it missed instead of bunching
+                // them.
+                ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // The first tick is immediate, so a process restarted more often than a period
+                // still runs every task.
                 loop {
-                    let now = Local::now();
-                    let wait = next_run(&now, period_minutes)
-                        .signed_duration_since(now)
-                        .to_std()
-                        .unwrap_or_default();
-                    tokio::time::sleep(wait).await;
+                    ticks.tick().await;
                     for &task in tasks {
                         // Its own task, so a panic fails one run instead of ending the schedule.
                         let cleanup = Arc::clone(&cleanup);
@@ -514,6 +489,3 @@ pub(crate) async fn reconcile_orphaned_storage(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

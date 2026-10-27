@@ -12,11 +12,12 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use base64::engine::{DecodePaddingMode, general_purpose};
 use futures_util::{StreamExt as _, TryStreamExt as _};
+use http_range_header::parse_range_header;
 use serde::Deserialize;
 
 use super::AppState;
 use crate::http::HttpError;
-use crate::storage::{DownloadError, Extent, RangeRequest};
+use crate::storage::{DownloadError, EndPosition, Extent, RangeRequest, StartPosition};
 
 /// Clients without a request id intermittently fail with EOF (tonistiigi/go-actions-cache).
 const REQUEST_ID: HeaderName = HeaderName::from_static("x-ms-request-id");
@@ -104,33 +105,24 @@ pub(super) async fn upload(
     Ok(created())
 }
 
-/// Largest bound the original server accepted (`Number.MAX_SAFE_INTEGER`); larger ones are served
-/// whole.
-const MAX_RANGE_BOUND: u64 = (1 << 53) - 1;
-
-/// Single ranges only; multi-range and suffix ranges (`bytes=-500`) are served whole.
+/// A single range; multi-range requests and invalid headers, which includes inverted ranges, are
+/// served whole.
 fn parse_range(headers: &HeaderMap) -> Option<RangeRequest> {
     let value = headers.get(RANGE)?.to_str().ok()?.trim();
-    let unit = value.get(..6)?;
-    if !unit.eq_ignore_ascii_case("bytes=") {
+    // The unit is case-insensitive (RFC 9110 §14.1); the parser only knows `bytes=`.
+    let ranges = value
+        .get(..6)?
+        .eq_ignore_ascii_case("bytes=")
+        .then(|| value.get(6..))??;
+    let parsed = parse_range_header(&format!("bytes={ranges}")).ok()?;
+    let &[range] = parsed.ranges.as_slice() else {
         return None;
-    }
-    let (start, end) = value.get(6..)?.split_once('-')?;
-    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    if !digits(start) || !(end.is_empty() || digits(end)) {
-        return None;
-    }
-    let bound = |part: &str| part.parse().ok().filter(|bound| *bound <= MAX_RANGE_BOUND);
-    let start = bound(start)?;
-    let end = if end.is_empty() {
-        None
-    } else {
-        Some(bound(end)?)
     };
-    if end.is_some_and(|end| end < start) {
-        return None;
-    }
-    Some(RangeRequest { start, end })
+    let inverted = matches!(
+        (range.start, range.end),
+        (StartPosition::Index(start), EndPosition::Index(end)) if end < start
+    );
+    (!inverted).then_some(range)
 }
 
 pub(super) async fn download(
