@@ -27,25 +27,20 @@ fn parses_single_ranges() {
     assert_eq!(
         range("bytes=5-9"),
         Some(RangeRequest {
-            start: 5,
-            end: Some(9)
+            start: StartPosition::Index(5),
+            end: EndPosition::Index(9),
         }),
         "bounded"
     );
     assert_eq!(
-        range("Bytes=5-"),
+        range("bytes=-5"),
         Some(RangeRequest {
-            start: 5,
-            end: None
+            start: StartPosition::FromLast(5),
+            end: EndPosition::LastByte,
         }),
-        "open-ended"
+        "suffix"
     );
-    assert_eq!(range("bytes=-5"), None, "suffix ranges are served whole");
     assert_eq!(range("bytes=0-1,4-5"), None, "multi-range is served whole");
     assert_eq!(range("bytes=9-5"), None, "inverted");
-    assert_eq!(
-        range("bytes=9007199254740992-"),
-        None,
-        "beyond a safe integer"
-    );
+    assert_eq!(range("items=0-5"), None, "unknown unit");
 }

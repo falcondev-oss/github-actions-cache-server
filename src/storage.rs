@@ -29,7 +29,8 @@ use utoipa::ToSchema;
 
 use self::adapter::ReadError;
 pub(crate) use self::adapter::{
-    Adapter, ByteStream, DownloadStream, Extent, RangeRequest, UploadKind,
+    Adapter, ByteStream, DownloadStream, EndPosition, Extent, RangeRequest, StartPosition,
+    UploadKind,
 };
 use self::leases::{
     DIRECT_DOWNLOAD_LEASE_DURATION, LEASE_DURATION, LEASE_RENEWAL, acquire_merge_lease,

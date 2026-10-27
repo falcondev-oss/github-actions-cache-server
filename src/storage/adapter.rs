@@ -32,12 +32,10 @@ impl UploadKind {
     }
 }
 
-/// A requested byte range; an open end means "to the end of the object".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RangeRequest {
-    pub(crate) start: u64,
-    pub(crate) end: Option<u64>,
-}
+pub(crate) use http_range_header::{EndPosition, StartPosition};
+
+/// A requested byte range, resolved against the object length when it is read.
+pub(crate) type RangeRequest = http_range_header::SyntacticallyCorrectRange;
 
 /// An inclusive byte range that was actually served.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,13 +50,19 @@ impl ByteRange {
     }
 }
 
-/// Resolves a range against an object length; `None` when it starts past the end.
+/// Resolves a range against an object length; `None` when it starts past the end. A suffix longer
+/// than the object covers all of it (RFC 9110 §14.1.2).
 pub(crate) fn clamp_range(range: RangeRequest, size: u64) -> Option<ByteRange> {
     let last = size.checked_sub(1)?;
-    (range.start <= last).then(|| ByteRange {
-        start: range.start,
-        end: range.end.map_or(last, |end| end.min(last)),
-    })
+    let start = match range.start {
+        StartPosition::Index(start) => start,
+        StartPosition::FromLast(suffix) => size.saturating_sub(suffix),
+    };
+    let end = match range.end {
+        EndPosition::Index(end) => end.min(last),
+        EndPosition::LastByte => last,
+    };
+    (start <= end).then_some(ByteRange { start, end })
 }
 
 /// How much of an object a [`DownloadStream`] serves.
