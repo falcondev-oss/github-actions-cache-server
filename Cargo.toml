@@ -53,7 +53,6 @@ protox = "0.10"
 twirp-build = "0.10"
 
 [dev-dependencies]
-chrono-tz = { version = "0.10", default-features = false }
 tokio = { version = "1", features = ["process"] }
 reqwest = { version = "0.13", default-features = false, features = ["query"] }
 tempfile = "3"
