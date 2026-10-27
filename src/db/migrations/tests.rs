@@ -102,6 +102,24 @@ async fn v9_database(applied: &[&str]) -> (tempfile::TempDir, Db) {
     (dir, db)
 }
 
+#[tokio::test]
+async fn recreates_a_half_applied_baseline_on_every_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vars = harness::db_vars(dir.path()).await;
+    vars.push(("API_BASE_URL".to_owned(), "http://localhost".to_owned()));
+    let db = Db::open(&Config::from_vars(vars).unwrap().db)
+        .await
+        .unwrap();
+    Migrator::install(&db.pool).await.unwrap();
+    db.pool
+        .execute_unprepared("create table storage_locations (id varchar(36) primary key)")
+        .await
+        .unwrap();
+
+    assert!(!migrate(&db).await.unwrap(), "nothing to clear");
+    assert_eq!(entry_count(&db).await, 0, "the schema is complete");
+}
+
 async fn entry_count(db: &Db) -> usize {
     cache_entries::Entity::find()
         .all(&db.pool)

@@ -50,7 +50,8 @@ const DATA_TABLES: [&str; 5] = [
     "uploads",
     "storage_locations",
 ];
-const KYSELY_TABLES: [&str; 2] = ["kysely_migration", "kysely_migration_lock"];
+/// The lock table first: `kysely_migration` marks a database as v9's until it is gone.
+const KYSELY_TABLES: [&str; 2] = ["kysely_migration_lock", "kysely_migration"];
 
 /// Migrates to the latest schema; true when storage must be cleared.
 pub(super) async fn migrate(db: &Db) -> Result<bool> {
@@ -91,16 +92,20 @@ pub(super) async fn migrate(db: &Db) -> Result<bool> {
 /// was dropped.
 async fn take_over_v9(tx: &DatabaseTransaction) -> Result<bool> {
     let manager = SchemaManager::new(tx);
+    let migrated = !Migrator::get_applied_migrations_read_only(tx)
+        .await?
+        .is_empty();
     if !manager.has_table("kysely_migration").await? {
+        // Tables without a record are a baseline MySQL committed only halfway; they hold nothing.
+        if !migrated {
+            drop_tables(&manager, &DATA_TABLES).await?;
+        }
         return Ok(false);
     }
     // A v9 replica started against a database this version already took over recreates its
-    // bookkeeping before failing; only that is removed. An empty migration table is an adoption
-    // MySQL committed only halfway.
-    if !Migrator::get_applied_migrations_read_only(tx)
-        .await?
-        .is_empty()
-    {
+    // bookkeeping before failing; only that is removed. No record at all is an adoption MySQL
+    // committed only halfway, which starts over.
+    if migrated {
         drop_tables(&manager, &KYSELY_TABLES).await?;
         return Ok(false);
     }
