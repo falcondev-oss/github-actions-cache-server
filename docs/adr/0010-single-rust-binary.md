@@ -1,5 +1,7 @@
 # The server is a single Rust binary
 
+> Superseded in part by ADR-0011: the database is migrated by `sea-orm-migration` and no longer shared with v9.
+
 The server was rewritten from Nitro/Node.js to one statically linked Rust binary (axum on tokio). The wire protocols, environment variables, database schema and storage layout are unchanged, so an existing deployment upgrades by swapping the image.
 
 The schema and its Kysely bookkeeping tables (`kysely_migration`, `kysely_migration_lock`) are kept as they are, migrations take the same Postgres advisory lock and MySQL named lock Kysely used, and fresh databases record the same migration names. A database written by either implementation stays readable by the other.
