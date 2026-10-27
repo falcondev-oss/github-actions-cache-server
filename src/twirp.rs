@@ -22,3 +22,31 @@ include!(concat!(
     env!("OUT_DIR"),
     "/github.actions.results.api.v1.serde.rs"
 ));
+
+/// Hand-written because pbjson rejects `"restore_keys": null`, which proto3 JSON reads as empty and
+/// Go clients send for an empty list.
+impl<'de> serde::Deserialize<'de> for GetCacheEntryDownloadUrlRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Default, serde::Deserialize)]
+        #[serde(default)]
+        struct Json {
+            key: String,
+            #[serde(alias = "restoreKeys")]
+            restore_keys: Option<Vec<String>>,
+            version: String,
+        }
+        let Json {
+            key,
+            restore_keys,
+            version,
+        } = Json::deserialize(deserializer)?;
+        Ok(Self {
+            key,
+            restore_keys: restore_keys.unwrap_or_default(),
+            version,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests;

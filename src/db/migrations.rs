@@ -24,9 +24,10 @@ impl MigratorTrait for Migrator {
     }
 }
 
-/// Serializes migrations of replicas starting at once.
+/// Serializes migrations of replicas starting at once. Kysely's locks, so a v9 replica starting
+/// during a rollout waits for this version's migration.
 const POSTGRES_LOCK_ID: i64 = 3_853_314_791_062_309_107;
-const MYSQL_LOCK_NAME: &str = "github-actions-cache-server-migrations";
+const MYSQL_LOCK_NAME: &str = "ea586330-2c93-47c8-908d-981d9d270f9d";
 
 /// Every migration v9.10 recorded, in order.
 const V9_MIGRATIONS: [&str; 9] = [
@@ -93,6 +94,15 @@ async fn take_over_v9(tx: &DatabaseTransaction) -> Result<bool> {
     if !manager.has_table("kysely_migration").await? {
         return Ok(false);
     }
+    // A v9 replica started against a database this version already took over recreates its
+    // bookkeeping before failing; only that is removed.
+    if manager
+        .has_table(Migrator::migration_table_name().to_string())
+        .await?
+    {
+        drop_tables(&manager, &KYSELY_TABLES).await?;
+        return Ok(false);
+    }
     let applied: Vec<String> = tx
         .query_all(
             Query::select()
@@ -122,12 +132,18 @@ async fn take_over_v9(tx: &DatabaseTransaction) -> Result<bool> {
         );
         &DATA_TABLES
     };
-    for &table in dropped.iter().chain(&KYSELY_TABLES) {
+    drop_tables(&manager, dropped).await?;
+    drop_tables(&manager, &KYSELY_TABLES).await?;
+    Ok(!adopt)
+}
+
+async fn drop_tables(manager: &SchemaManager<'_>, tables: &[&'static str]) -> Result<()> {
+    for &table in tables {
         manager
             .drop_table(Table::drop().table(table).if_exists().take())
             .await?;
     }
-    Ok(!adopt)
+    Ok(())
 }
 
 #[cfg(test)]

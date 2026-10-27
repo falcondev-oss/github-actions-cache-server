@@ -281,12 +281,13 @@ struct Vars {
     storage_filesystem_path: PathBuf,
     #[arg(long, env)]
     storage_s3_bucket: Option<String>,
-    #[arg(long, env, default_value = "10000", value_parser = integer::<u64>)]
-    storage_s3_socket_timeout_ms: u64,
+    /// [default: 10000]
+    #[arg(long, env)]
+    storage_s3_socket_timeout_ms: Option<String>,
     #[arg(long, env, default_value = "us-east-1")]
     aws_region: String,
     #[arg(long, env)]
-    aws_endpoint_url: Option<Url>,
+    aws_endpoint_url: Option<String>,
     #[arg(long, env)]
     aws_access_key_id: Option<String>,
     #[arg(long, env)]
@@ -296,31 +297,28 @@ struct Vars {
     #[arg(long, env)]
     storage_gcs_service_account_key: Option<PathBuf>,
     #[arg(long, env)]
-    storage_gcs_endpoint: Option<Url>,
+    storage_gcs_endpoint: Option<String>,
     #[arg(long, env)]
     storage_azblob_container: Option<String>,
-    #[arg(long, env, conflicts_with_all = ["storage_azblob_account", "storage_azblob_endpoint"])]
+    #[arg(long, env)]
     storage_azblob_connection_string: Option<String>,
     #[arg(long, env)]
     storage_azblob_account: Option<String>,
     #[arg(long, env)]
-    storage_azblob_endpoint: Option<Url>,
+    storage_azblob_endpoint: Option<String>,
 
     #[arg(long, env, value_enum, default_value_t = DbDriver::Sqlite)]
     db_driver: DbDriver,
     #[arg(long, env, default_value = ".data/sqlite.db")]
     db_sqlite_path: PathBuf,
-    #[arg(long, env, conflicts_with_all = [
-        "db_postgres_database", "db_postgres_host", "db_postgres_port", "db_postgres_user",
-        "db_postgres_password",
-    ])]
+    #[arg(long, env)]
     db_postgres_url: Option<String>,
     #[arg(long, env)]
     db_postgres_database: Option<String>,
     #[arg(long, env)]
     db_postgres_host: Option<String>,
-    #[arg(long, env, value_parser = port)]
-    db_postgres_port: Option<NonZeroU16>,
+    #[arg(long, env)]
+    db_postgres_port: Option<String>,
     #[arg(long, env)]
     db_postgres_user: Option<String>,
     #[arg(long, env)]
@@ -329,8 +327,8 @@ struct Vars {
     db_mysql_database: Option<String>,
     #[arg(long, env)]
     db_mysql_host: Option<String>,
-    #[arg(long, env, value_parser = port)]
-    db_mysql_port: Option<NonZeroU16>,
+    #[arg(long, env)]
+    db_mysql_port: Option<String>,
     #[arg(long, env)]
     db_mysql_user: Option<String>,
     #[arg(long, env)]
@@ -341,16 +339,38 @@ fn required<T>(value: Option<T>, name: &str) -> Result<T, ConfigError> {
     value.ok_or_else(|| ConfigError::Invalid(format!("{name} is required")))
 }
 
+/// Driver-specific variables are only read for the selected driver, so stray ones (e.g.
+/// Kubernetes service links) don't stop startup.
+fn parsed<T, E: std::fmt::Display>(
+    raw: Option<String>,
+    name: &str,
+    parse: impl FnOnce(&str) -> Result<T, E>,
+) -> Result<Option<T>, ConfigError> {
+    raw.map(|raw| parse(&raw).map_err(|error| ConfigError::Invalid(format!("{name}: {error}"))))
+        .transpose()
+}
+
+fn absent<T>(values: &[(&Option<T>, &str)], reason: &str) -> Result<(), ConfigError> {
+    values
+        .iter()
+        .find(|(value, _)| value.is_some())
+        .map_or(Ok(()), |(_, name)| {
+            Err(ConfigError::Invalid(format!(
+                "{name} must not be set {reason}"
+            )))
+        })
+}
+
 fn server_connection(
     prefix: &str,
     [database, host, user, password]: [Option<String>; 4],
-    port: Option<NonZeroU16>,
+    port: Option<String>,
 ) -> Result<ServerConnection, ConfigError> {
     let name = |field: &str| format!("DB_{prefix}_{field}");
     Ok(ServerConnection {
         database: required(database, &name("DATABASE"))?,
         host: required(host, &name("HOST"))?,
-        port: required(port, &name("PORT"))?,
+        port: required(parsed(port, &name("PORT"), self::port)?, &name("PORT"))?,
         user: required(user, &name("USER"))?,
         password: password.unwrap_or_default(),
     })
@@ -364,16 +384,27 @@ impl Vars {
             },
             StorageDriver::S3 => StorageConfig::S3 {
                 bucket: required(self.storage_s3_bucket.take(), "STORAGE_S3_BUCKET")?,
-                socket_timeout: Duration::from_millis(self.storage_s3_socket_timeout_ms),
+                socket_timeout: Duration::from_millis(
+                    parsed(
+                        self.storage_s3_socket_timeout_ms.take(),
+                        "STORAGE_S3_SOCKET_TIMEOUT_MS",
+                        integer::<u64>,
+                    )?
+                    .unwrap_or(10_000),
+                ),
                 region: std::mem::take(&mut self.aws_region),
-                endpoint_url: self.aws_endpoint_url.take(),
+                endpoint_url: parsed(self.aws_endpoint_url.take(), "AWS_ENDPOINT_URL", Url::parse)?,
                 access_key_id: self.aws_access_key_id.take(),
                 secret_access_key: self.aws_secret_access_key.take(),
             },
             StorageDriver::Gcs => StorageConfig::Gcs {
                 bucket: required(self.storage_gcs_bucket.take(), "STORAGE_GCS_BUCKET")?,
                 service_account_key: self.storage_gcs_service_account_key.take(),
-                endpoint: self.storage_gcs_endpoint.take(),
+                endpoint: parsed(
+                    self.storage_gcs_endpoint.take(),
+                    "STORAGE_GCS_ENDPOINT",
+                    Url::parse,
+                )?,
             },
             StorageDriver::Azblob => StorageConfig::AzBlob {
                 container: required(
@@ -381,13 +412,26 @@ impl Vars {
                     "STORAGE_AZBLOB_CONTAINER",
                 )?,
                 auth: match self.storage_azblob_connection_string.take() {
-                    Some(connection_string) => AzBlobAuth::ConnectionString(connection_string),
+                    Some(connection_string) => {
+                        absent(
+                            &[
+                                (&self.storage_azblob_account, "STORAGE_AZBLOB_ACCOUNT"),
+                                (&self.storage_azblob_endpoint, "STORAGE_AZBLOB_ENDPOINT"),
+                            ],
+                            "together with STORAGE_AZBLOB_CONNECTION_STRING",
+                        )?;
+                        AzBlobAuth::ConnectionString(connection_string)
+                    }
                     None => AzBlobAuth::Account {
                         account: required(
                             self.storage_azblob_account.take(),
                             "STORAGE_AZBLOB_CONNECTION_STRING or STORAGE_AZBLOB_ACCOUNT",
                         )?,
-                        endpoint: self.storage_azblob_endpoint.take(),
+                        endpoint: parsed(
+                            self.storage_azblob_endpoint.take(),
+                            "STORAGE_AZBLOB_ENDPOINT",
+                            Url::parse,
+                        )?,
                     },
                 },
             },
@@ -400,7 +444,19 @@ impl Vars {
                 path: std::mem::take(&mut self.db_sqlite_path),
             },
             DbDriver::Postgres => DbConfig::Postgres(match self.db_postgres_url.take() {
-                Some(url) => PostgresConnection::Url(url),
+                Some(url) => {
+                    absent(
+                        &[
+                            (&self.db_postgres_database, "DB_POSTGRES_DATABASE"),
+                            (&self.db_postgres_host, "DB_POSTGRES_HOST"),
+                            (&self.db_postgres_port, "DB_POSTGRES_PORT"),
+                            (&self.db_postgres_user, "DB_POSTGRES_USER"),
+                            (&self.db_postgres_password, "DB_POSTGRES_PASSWORD"),
+                        ],
+                        "together with DB_POSTGRES_URL",
+                    )?;
+                    PostgresConnection::Url(url)
+                }
                 None => PostgresConnection::Params(server_connection(
                     "POSTGRES",
                     [
@@ -409,7 +465,7 @@ impl Vars {
                         self.db_postgres_user.take(),
                         self.db_postgres_password.take(),
                     ],
-                    self.db_postgres_port,
+                    self.db_postgres_port.take(),
                 )?),
             }),
             DbDriver::Mysql => DbConfig::Mysql(server_connection(
@@ -420,7 +476,7 @@ impl Vars {
                     self.db_mysql_user.take(),
                     self.db_mysql_password.take(),
                 ],
-                self.db_mysql_port,
+                self.db_mysql_port.take(),
             )?),
         })
     }

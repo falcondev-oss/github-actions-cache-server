@@ -44,6 +44,20 @@ async fn adopts_a_v9_10_database_with_its_data() {
 }
 
 #[tokio::test]
+async fn keeps_a_migrated_database_beside_recreated_v9_bookkeeping() {
+    let (_dir, db) = sqlite(include_str!("../testdata/kysely-v9.sql")).await;
+    migrate(&db).await.unwrap();
+    db.pool
+        .execute_unprepared("create table kysely_migration (name varchar(255) primary key)")
+        .await
+        .unwrap();
+
+    assert!(!migrate(&db).await.unwrap(), "storage is kept");
+    assert_eq!(entry_count(&db).await, 2, "cache entries are kept");
+    assert!(!has_kysely_table(&db).await, "Kysely's bookkeeping is gone");
+}
+
+#[tokio::test]
 async fn drops_a_database_older_than_v9_10() {
     let (_dir, db) = sqlite(include_str!("../testdata/kysely-v6.sql")).await;
 

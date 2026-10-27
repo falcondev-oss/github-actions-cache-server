@@ -17,6 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .preserve_proto_field_names()
         .emit_fields()
         .ignore_unknown_fields()
+        .exclude([".github.actions.results.api.v1.GetCacheEntryDownloadURLRequest"])
         .build(&[".github.actions.results.api.v1"])?;
     Ok(())
 }

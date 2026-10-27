@@ -15,10 +15,6 @@ impl MigrationName for Migration {
     }
 }
 
-fn id(column: &'static str) -> ColumnDef {
-    string_len(column, 36)
-}
-
 fn references_location(table: &'static str, column: &'static str) -> ForeignKeyCreateStatement {
     ForeignKey::create()
         .from(table, column)
@@ -40,6 +36,40 @@ fn index(
     index.take()
 }
 
+fn indexes() -> [IndexCreateStatement; 9] {
+    [
+        index(
+            "idx_cache_entries_key_version",
+            "cache_entries",
+            &["key", "version"],
+        ),
+        index("idx_cache_entries_scope", "cache_entries", &["scope"]),
+        index("idx_cache_entries_repoId", "cache_entries", &["repoId"]),
+        index(
+            "idx_cache_entries_locationId",
+            "cache_entries",
+            &["locationId"],
+        ),
+        index("idx_uploads_key_version", "uploads", &["key", "version"]),
+        index("idx_uploads_scope", "uploads", &["scope"]),
+        index("idx_uploads_repoId", "uploads", &["repoId"]),
+        // A unique index over the whole identity exceeds MySQL's 3072-byte key limit, so it
+        // covers a fixed-width hash of it.
+        index(
+            "idx_uploads_reservationHash",
+            "uploads",
+            &["reservationHash"],
+        )
+        .unique()
+        .take(),
+        index(
+            "idx_storage_reader_leases_location_expiry",
+            "storage_reader_leases",
+            &["storageLocationId", "expiresAt"],
+        ),
+    ]
+}
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     #[expect(
@@ -48,6 +78,15 @@ impl MigrationTrait for Migration {
     )]
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let backend = manager.get_database_backend();
+        // `text` like v9; MySQL can't index or key it without a length.
+        let string = |column, length| {
+            if backend == DbBackend::MySql {
+                string_len(column, length)
+            } else {
+                text(column)
+            }
+        };
+        let id = |column| string(column, 36);
         let tables = [
             Table::create()
                 .table("storage_locations")
@@ -63,10 +102,10 @@ impl MigrationTrait for Migration {
             Table::create()
                 .table("cache_entries")
                 .col(id("id").primary_key())
-                .col(string_len("key", 512))
-                .col(string_len("version", 255))
-                .col(string_len("scope", 255))
-                .col(string_len("repoId", 255))
+                .col(string("key", 512))
+                .col(string("version", 255))
+                .col(string("scope", 255))
+                .col(string("repoId", 255))
                 .col(big_integer("updatedAt"))
                 .col(id("locationId"))
                 .foreign_key(&mut references_location("cache_entries", "locationId"))
@@ -74,10 +113,10 @@ impl MigrationTrait for Migration {
             Table::create()
                 .table("uploads")
                 .col(big_integer("id").primary_key())
-                .col(string_len("key", 512))
-                .col(string_len("version", 255))
-                .col(string_len("scope", 255))
-                .col(string_len("repoId", 255))
+                .col(string("key", 512))
+                .col(string("version", 255))
+                .col(string("scope", 255))
+                .col(string("repoId", 255))
                 .col(big_integer("createdAt"))
                 .col(big_integer_null("lastPartUploadedAt"))
                 .col(integer("startedPartUploadCount").default(0))
@@ -99,7 +138,7 @@ impl MigrationTrait for Migration {
                 .table("storage_reader_leases")
                 .col(id("id").primary_key())
                 .col(id("storageLocationId"))
-                .col(string_len("scope", 16))
+                .col(string("scope", 16))
                 .col(big_integer("expiresAt"))
                 .foreign_key(&mut references_location(
                     "storage_reader_leases",
@@ -116,38 +155,7 @@ impl MigrationTrait for Migration {
             manager.create_table(table).await?;
         }
 
-        let indexes = [
-            index(
-                "idx_cache_entries_key_version",
-                "cache_entries",
-                &["key", "version"],
-            ),
-            index("idx_cache_entries_scope", "cache_entries", &["scope"]),
-            index("idx_cache_entries_repoId", "cache_entries", &["repoId"]),
-            index(
-                "idx_cache_entries_locationId",
-                "cache_entries",
-                &["locationId"],
-            ),
-            index("idx_uploads_key_version", "uploads", &["key", "version"]),
-            index("idx_uploads_scope", "uploads", &["scope"]),
-            index("idx_uploads_repoId", "uploads", &["repoId"]),
-            // A unique index over the whole identity exceeds MySQL's 3072-byte key limit, so it
-            // covers a fixed-width hash of it.
-            index(
-                "idx_uploads_reservationHash",
-                "uploads",
-                &["reservationHash"],
-            )
-            .unique()
-            .take(),
-            index(
-                "idx_storage_reader_leases_location_expiry",
-                "storage_reader_leases",
-                &["storageLocationId", "expiresAt"],
-            ),
-        ];
-        for index in indexes {
+        for index in indexes() {
             manager.create_index(index).await?;
         }
         Ok(())
