@@ -40,6 +40,14 @@ fn parses_single_ranges() {
         }),
         "suffix"
     );
+    assert_eq!(
+        range(" Bytes=5-"),
+        Some(RangeRequest {
+            start: StartPosition::Index(5),
+            end: EndPosition::LastByte,
+        }),
+        "case-insensitive unit"
+    );
     assert_eq!(range("bytes=0-1,4-5"), None, "multi-range is served whole");
     assert_eq!(range("bytes=9-5"), None, "inverted");
     assert_eq!(range("items=0-5"), None, "unknown unit");

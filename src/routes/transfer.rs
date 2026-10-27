@@ -108,7 +108,13 @@ pub(super) async fn upload(
 /// A single range; multi-range requests and invalid headers, which includes inverted ranges, are
 /// served whole.
 fn parse_range(headers: &HeaderMap) -> Option<RangeRequest> {
-    let parsed = parse_range_header(headers.get(RANGE)?.to_str().ok()?).ok()?;
+    let value = headers.get(RANGE)?.to_str().ok()?.trim();
+    // The unit is case-insensitive (RFC 9110 §14.1); the parser only knows `bytes=`.
+    let ranges = value
+        .get(..6)?
+        .eq_ignore_ascii_case("bytes=")
+        .then(|| value.get(6..))??;
+    let parsed = parse_range_header(&format!("bytes={ranges}")).ok()?;
     let &[range] = parsed.ranges.as_slice() else {
         return None;
     };

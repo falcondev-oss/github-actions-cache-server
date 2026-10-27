@@ -211,7 +211,8 @@ impl Cleanup {
                 // A run that outlasts its period skips the ticks it missed instead of bunching
                 // them.
                 ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                ticks.tick().await;
+                // The first tick is immediate, so a process restarted more often than a period
+                // still runs every task.
                 loop {
                     ticks.tick().await;
                     for &task in tasks {
