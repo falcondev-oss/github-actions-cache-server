@@ -8,7 +8,8 @@ COPY rust-toolchain.toml ./
 RUN rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
 COPY .cargo ./.cargo
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY proto ./proto
 COPY src ./src
 
 ARG BUILD_HASH
