@@ -21,6 +21,7 @@ prost = { version = "0.14", default-features = false, features = ["derive", "std
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "http2"] }
 rustix = { version = "1", default-features = false, features = ["fs", "std"] }
 sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "runtime-tokio", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["runtime-tokio", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
