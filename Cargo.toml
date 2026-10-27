@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "query", "tokio", "matched-path"] }
 base64 = "0.22"
+clap = { version = "4", default-features = false, features = ["derive", "env", "error-context", "help", "std", "usage"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 mimalloc = { version = "0.1", default-features = false }

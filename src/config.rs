@@ -1,16 +1,24 @@
-//! Typed configuration parsed from environment variables.
+//! Typed configuration parsed from environment variables (or the matching flags).
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::num::{NonZeroU16, NonZeroU64};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use clap::builder::Resettable;
+use clap::{ArgAction, CommandFactory as _, FromArgMatches as _, Parser, ValueEnum};
 use tokio::sync::Semaphore;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
-#[error("invalid configuration: {0}")]
-pub(crate) struct ConfigError(String);
+pub(crate) enum ConfigError {
+    /// Also `--help` and `--version`; clap prints these itself.
+    #[error(transparent)]
+    Args(#[from] clap::Error),
+    #[error("invalid configuration: {0}")]
+    Invalid(String),
+}
 
 /// Fully validated server configuration.
 #[derive(Debug, Clone)]
@@ -122,23 +130,23 @@ pub(crate) struct ServerConnection {
     pub(crate) password: String,
 }
 
-const DEFAULTS: [(&str, &str); 4] = [
-    ("STORAGE_DRIVER", "filesystem"),
-    ("STORAGE_FILESYSTEM_PATH", ".data/storage/filesystem"),
-    ("DB_DRIVER", "sqlite"),
-    ("DB_SQLITE_PATH", ".data/sqlite.db"),
-];
-
-#[expect(
-    clippy::float_arithmetic,
-    reason = "retention is configured in possibly fractional days"
-)]
-fn days_to_seconds(days: f64) -> f64 {
-    days * 24.0 * 60.0 * 60.0
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum StorageDriver {
+    S3,
+    Filesystem,
+    Gcs,
+    Azblob,
 }
 
-/// The integer a finite, whole, non-negative float denotes. Helm renders large numbers as
-/// `1.073741824e+11`, which the original server accepted as the integer it is.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DbDriver {
+    Postgres,
+    Mysql,
+    Sqlite,
+}
+
+/// The integer `raw` denotes, also in float notation: Helm renders large numbers as
+/// `1.073741824e+11`.
 #[expect(
     clippy::as_conversions,
     clippy::cast_possible_truncation,
@@ -146,297 +154,350 @@ fn days_to_seconds(days: f64) -> f64 {
     clippy::float_cmp,
     reason = "converts only floats that are exactly representable integers"
 )]
-fn exact_integer(value: f64) -> Option<u64> {
+fn integer<T: TryFrom<u64>>(raw: &str) -> Result<T, String> {
     const MAX_EXACT: f64 = 9_007_199_254_740_991.0;
-    ((0.0..=MAX_EXACT).contains(&value) && value.trunc() == value).then_some(value as u64)
+    raw.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| (0.0..=MAX_EXACT).contains(value) && value.trunc() == *value)
+        .and_then(|value| T::try_from(value as u64).ok())
+        .ok_or_else(|| format!("{raw:?} is not an integer in range"))
 }
 
-struct Vars(HashMap<String, String>);
+fn port(raw: &str) -> Result<NonZeroU16, String> {
+    NonZeroU16::new(integer(raw)?).ok_or_else(|| "0 is not a port".to_owned())
+}
+
+fn number(raw: &str) -> Result<f64, String> {
+    raw.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| format!("{raw:?} is not a number"))
+}
+
+fn percent(raw: &str) -> Result<Percent, String> {
+    Some(number(raw)?)
+        .filter(|percent| *percent > 0.0 && *percent <= 100.0)
+        .map(Percent)
+        .ok_or_else(|| format!("{raw} is not greater than 0 and at most 100"))
+}
+
+/// Validates a URL but keeps its original spelling, which is concatenated with paths verbatim.
+fn url_string(raw: &str) -> Result<String, url::ParseError> {
+    Url::parse(raw)?;
+    Ok(raw.to_owned())
+}
+
+#[expect(
+    clippy::float_arithmetic,
+    reason = "retention is configured in possibly fractional days"
+)]
+fn days(days: f64) -> Result<Option<Duration>, ConfigError> {
+    if days == 0.0 {
+        return Ok(None);
+    }
+    Duration::try_from_secs_f64(days * 24.0 * 60.0 * 60.0)
+        .map(Some)
+        .map_err(|_negative| {
+            ConfigError::Invalid(format!(
+                "CACHE_CLEANUP_OLDER_THAN_DAYS must be a non-negative number, got {days}"
+            ))
+        })
+}
+
+/// Every variable as given. An empty variable counts as unset.
+#[derive(Debug, Parser)]
+#[command(
+    version,
+    about,
+    args_override_self = true,
+    after_help = "Each option can also be set by the environment variable its value is named \
+                  after, e.g. API_BASE_URL. An empty variable counts as unset."
+)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent flags, one per environment variable"
+)]
+struct Vars {
+    /// Public base URL of this server, as runners reach it
+    #[arg(long, env, value_parser = url_string)]
+    api_base_url: String,
+    /// Interface to listen on [default: all]
+    #[arg(long, env)]
+    host: Option<String>,
+    #[arg(long, env, default_value = "3000", value_parser = port)]
+    port: NonZeroU16,
+    /// Origin of requests this server does not handle itself
+    #[arg(
+        long,
+        env,
+        default_value = "https://results-receiver.actions.githubusercontent.com",
+        value_parser = url_string
+    )]
+    default_actions_results_url: String,
+    #[arg(
+        long,
+        env,
+        default_value = "https://token.actions.githubusercontent.com",
+        value_parser = url_string
+    )]
+    actions_token_issuer: String,
+    /// [default: discovered from the issuer]
+    #[arg(long, env)]
+    actions_token_jwks_url: Option<Url>,
+    #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
+    skip_token_validation: bool,
+    /// Days an unused entry is kept; 0 keeps it forever
+    #[arg(long, env, default_value = "90", value_parser = number)]
+    cache_cleanup_older_than_days: f64,
+    #[arg(long, env, value_parser = integer::<NonZeroU64>)]
+    cache_max_size_bytes: Option<NonZeroU64>,
+    #[arg(long, env, default_value = "90", value_parser = percent)]
+    cache_filesystem_max_usage_percent: Percent,
+    #[arg(long, env, default_value = "24", value_parser = integer::<NonZeroU64>)]
+    orphaned_storage_grace_period_hours: NonZeroU64,
+    #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
+    disable_cleanup_jobs: bool,
+    /// Any value enables debug logging
+    #[arg(long, env)]
+    debug: Option<String>,
+    #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
+    enable_direct_downloads: bool,
+    #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
+    eager_merge: bool,
+    #[arg(long, env, default_value = "16", value_parser = integer::<NonZeroU64>)]
+    max_concurrent_merges: NonZeroU64,
+    /// Milliseconds a download waits for its client to read; 0 waits forever
+    #[arg(long, env, default_value = "300000", value_parser = integer::<i32>)]
+    download_idle_timeout_ms: i32,
+    /// Enables the management API
+    #[arg(long, env)]
+    management_api_key: Option<String>,
+
+    #[arg(long, env, value_enum, default_value_t = StorageDriver::Filesystem)]
+    storage_driver: StorageDriver,
+    #[arg(long, env, default_value = ".data/storage/filesystem")]
+    storage_filesystem_path: PathBuf,
+    #[arg(long, env)]
+    storage_s3_bucket: Option<String>,
+    #[arg(long, env, default_value = "10000", value_parser = integer::<u64>)]
+    storage_s3_socket_timeout_ms: u64,
+    #[arg(long, env, default_value = "us-east-1")]
+    aws_region: String,
+    #[arg(long, env)]
+    aws_endpoint_url: Option<Url>,
+    #[arg(long, env)]
+    aws_access_key_id: Option<String>,
+    #[arg(long, env)]
+    aws_secret_access_key: Option<String>,
+    #[arg(long, env)]
+    storage_gcs_bucket: Option<String>,
+    #[arg(long, env)]
+    storage_gcs_service_account_key: Option<PathBuf>,
+    #[arg(long, env)]
+    storage_gcs_endpoint: Option<Url>,
+    #[arg(long, env)]
+    storage_azblob_container: Option<String>,
+    #[arg(long, env, conflicts_with_all = ["storage_azblob_account", "storage_azblob_endpoint"])]
+    storage_azblob_connection_string: Option<String>,
+    #[arg(long, env)]
+    storage_azblob_account: Option<String>,
+    #[arg(long, env)]
+    storage_azblob_endpoint: Option<Url>,
+
+    #[arg(long, env, value_enum, default_value_t = DbDriver::Sqlite)]
+    db_driver: DbDriver,
+    #[arg(long, env, default_value = ".data/sqlite.db")]
+    db_sqlite_path: PathBuf,
+    #[arg(long, env, conflicts_with_all = [
+        "db_postgres_database", "db_postgres_host", "db_postgres_port", "db_postgres_user",
+        "db_postgres_password",
+    ])]
+    db_postgres_url: Option<String>,
+    #[arg(long, env)]
+    db_postgres_database: Option<String>,
+    #[arg(long, env)]
+    db_postgres_host: Option<String>,
+    #[arg(long, env, value_parser = port)]
+    db_postgres_port: Option<NonZeroU16>,
+    #[arg(long, env)]
+    db_postgres_user: Option<String>,
+    #[arg(long, env)]
+    db_postgres_password: Option<String>,
+    #[arg(long, env)]
+    db_mysql_database: Option<String>,
+    #[arg(long, env)]
+    db_mysql_host: Option<String>,
+    #[arg(long, env, value_parser = port)]
+    db_mysql_port: Option<NonZeroU16>,
+    #[arg(long, env)]
+    db_mysql_user: Option<String>,
+    #[arg(long, env)]
+    db_mysql_password: Option<String>,
+}
+
+fn required<T>(value: Option<T>, name: &str) -> Result<T, ConfigError> {
+    value.ok_or_else(|| ConfigError::Invalid(format!("{name} is required")))
+}
+
+fn server_connection(
+    prefix: &str,
+    [database, host, user, password]: [Option<String>; 4],
+    port: Option<NonZeroU16>,
+) -> Result<ServerConnection, ConfigError> {
+    let name = |field: &str| format!("DB_{prefix}_{field}");
+    Ok(ServerConnection {
+        database: required(database, &name("DATABASE"))?,
+        host: required(host, &name("HOST"))?,
+        port: required(port, &name("PORT"))?,
+        user: required(user, &name("USER"))?,
+        password: password.unwrap_or_default(),
+    })
+}
 
 impl Vars {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).map(String::as_str)
-    }
-
-    /// Like [`Self::get`], but an empty value counts as unset.
-    fn non_empty(&self, key: &str) -> Option<&str> {
-        self.get(key).filter(|value| !value.is_empty())
-    }
-
-    fn required(&self, key: &str) -> Result<String, ConfigError> {
-        self.get(key)
-            .map(str::to_owned)
-            .ok_or_else(|| ConfigError(format!("{key} is required")))
-    }
-
-    fn absent(&self, key: &str, reason: &str) -> Result<(), ConfigError> {
-        match self.get(key) {
-            Some(_) => Err(ConfigError(format!("{key} must not be set {reason}"))),
-            None => Ok(()),
-        }
-    }
-
-    fn number(&self, key: &str) -> Result<Option<f64>, ConfigError> {
-        self.get(key)
-            .map(|raw| {
-                raw.trim()
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|number| number.is_finite())
-                    .ok_or_else(|| ConfigError(format!("{key} must be a number, got {raw:?}")))
-            })
-            .transpose()
-    }
-
-    /// An integer that converts into `T`, e.g. a non-zero or narrower type.
-    fn integer<T: TryFrom<u64>>(
-        &self,
-        key: &str,
-        expected: &str,
-    ) -> Result<Option<T>, ConfigError> {
-        self.get(key)
-            .map(|raw| {
-                raw.trim()
-                    .parse::<f64>()
-                    .ok()
-                    .and_then(exact_integer)
-                    .and_then(|integer| T::try_from(integer).ok())
-                    .ok_or_else(|| ConfigError(format!("{key} must be {expected}, got {raw:?}")))
-            })
-            .transpose()
-    }
-
-    fn port(&self, key: &str) -> Result<Option<NonZeroU16>, ConfigError> {
-        let port: Option<u16> = self.integer(key, "a port between 1 and 65535")?;
-        port.map(|port| {
-            NonZeroU16::new(port)
-                .ok_or_else(|| ConfigError(format!("{key} must be a port between 1 and 65535")))
-        })
-        .transpose()
-    }
-
-    fn url(&self, key: &str) -> Result<Option<Url>, ConfigError> {
-        self.get(key)
-            .map(|raw| {
-                raw.parse().map_err(|_parse_error| {
-                    ConfigError(format!("{key} must be a URL, got {raw:?}"))
-                })
-            })
-            .transpose()
-    }
-
-    /// Validates a URL but keeps its original spelling, which is concatenated with paths verbatim.
-    fn raw_url(&self, key: &str) -> Result<Option<&str>, ConfigError> {
-        self.url(key)?;
-        Ok(self.get(key))
-    }
-
-    fn boolean(&self, key: &str) -> Result<bool, ConfigError> {
-        match self.get(key) {
-            None | Some("false") => Ok(false),
-            Some("true") => Ok(true),
-            Some(other) => Err(ConfigError(format!(
-                "{key} must be true or false, got {other:?}"
-            ))),
-        }
-    }
-
-    fn server_connection(&self, prefix: &str) -> Result<ServerConnection, ConfigError> {
-        let key = |name: &str| format!("DB_{prefix}_{name}");
-        Ok(ServerConnection {
-            database: self.required(&key("DATABASE"))?,
-            host: self.required(&key("HOST"))?,
-            port: self
-                .port(&key("PORT"))?
-                .ok_or_else(|| ConfigError(format!("{} is required", key("PORT"))))?,
-            user: self.required(&key("USER"))?,
-            password: self.required(&key("PASSWORD"))?,
-        })
-    }
-
-    fn storage(&self) -> Result<StorageConfig, ConfigError> {
-        match self.required("STORAGE_DRIVER")?.as_str() {
-            "s3" => Ok(StorageConfig::S3 {
-                bucket: self.required("STORAGE_S3_BUCKET")?,
-                socket_timeout: Duration::from_millis(
-                    self.integer("STORAGE_S3_SOCKET_TIMEOUT_MS", "a non-negative integer")?
-                        .unwrap_or(10_000),
-                ),
-                region: self.get("AWS_REGION").unwrap_or("us-east-1").to_owned(),
-                endpoint_url: self.url("AWS_ENDPOINT_URL")?,
-                access_key_id: self.get("AWS_ACCESS_KEY_ID").map(str::to_owned),
-                secret_access_key: self.get("AWS_SECRET_ACCESS_KEY").map(str::to_owned),
-            }),
-            "filesystem" => Ok(StorageConfig::Filesystem {
-                path: self.required("STORAGE_FILESYSTEM_PATH")?.into(),
-            }),
-            "gcs" => Ok(StorageConfig::Gcs {
-                bucket: self.required("STORAGE_GCS_BUCKET")?,
-                service_account_key: self
-                    .get("STORAGE_GCS_SERVICE_ACCOUNT_KEY")
-                    .map(PathBuf::from),
-                endpoint: self.url("STORAGE_GCS_ENDPOINT")?,
-            }),
-            "azblob" => {
-                let container = self.required("STORAGE_AZBLOB_CONTAINER")?;
-                let auth =
-                    if let Some(connection_string) = self.get("STORAGE_AZBLOB_CONNECTION_STRING") {
-                        let reason = "together with STORAGE_AZBLOB_CONNECTION_STRING";
-                        self.absent("STORAGE_AZBLOB_ACCOUNT", reason)?;
-                        self.absent("STORAGE_AZBLOB_ENDPOINT", reason)?;
-                        AzBlobAuth::ConnectionString(connection_string.to_owned())
-                    } else {
-                        AzBlobAuth::Account {
-                            account: self
-                                .get("STORAGE_AZBLOB_ACCOUNT")
-                                .map(str::to_owned)
-                                .ok_or_else(|| {
-                                    ConfigError(
-                                    "STORAGE_AZBLOB_CONNECTION_STRING or STORAGE_AZBLOB_ACCOUNT \
-                                     is required"
-                                        .to_owned(),
-                                )
-                                })?,
-                            endpoint: self.url("STORAGE_AZBLOB_ENDPOINT")?,
-                        }
-                    };
-                Ok(StorageConfig::AzBlob { container, auth })
-            }
-            other => Err(ConfigError(format!(
-                "STORAGE_DRIVER must be one of s3, filesystem, gcs, azblob, got {other:?}"
-            ))),
-        }
-    }
-
-    fn db(&self) -> Result<DbConfig, ConfigError> {
-        match self.required("DB_DRIVER")?.as_str() {
-            "postgres" => match self.get("DB_POSTGRES_URL") {
-                Some(url) => {
-                    for name in ["DATABASE", "HOST", "PORT", "USER", "PASSWORD"] {
-                        self.absent(
-                            &format!("DB_POSTGRES_{name}"),
-                            "together with DB_POSTGRES_URL",
-                        )?;
-                    }
-                    Ok(DbConfig::Postgres(PostgresConnection::Url(url.to_owned())))
-                }
-                None => Ok(DbConfig::Postgres(PostgresConnection::Params(
-                    self.server_connection("POSTGRES")?,
-                ))),
+    fn storage(&mut self) -> Result<StorageConfig, ConfigError> {
+        Ok(match self.storage_driver {
+            StorageDriver::Filesystem => StorageConfig::Filesystem {
+                path: std::mem::take(&mut self.storage_filesystem_path),
             },
-            "mysql" => Ok(DbConfig::Mysql(self.server_connection("MYSQL")?)),
-            "sqlite" => Ok(DbConfig::Sqlite {
-                path: self.required("DB_SQLITE_PATH")?.into(),
+            StorageDriver::S3 => StorageConfig::S3 {
+                bucket: required(self.storage_s3_bucket.take(), "STORAGE_S3_BUCKET")?,
+                socket_timeout: Duration::from_millis(self.storage_s3_socket_timeout_ms),
+                region: std::mem::take(&mut self.aws_region),
+                endpoint_url: self.aws_endpoint_url.take(),
+                access_key_id: self.aws_access_key_id.take(),
+                secret_access_key: self.aws_secret_access_key.take(),
+            },
+            StorageDriver::Gcs => StorageConfig::Gcs {
+                bucket: required(self.storage_gcs_bucket.take(), "STORAGE_GCS_BUCKET")?,
+                service_account_key: self.storage_gcs_service_account_key.take(),
+                endpoint: self.storage_gcs_endpoint.take(),
+            },
+            StorageDriver::Azblob => StorageConfig::AzBlob {
+                container: required(
+                    self.storage_azblob_container.take(),
+                    "STORAGE_AZBLOB_CONTAINER",
+                )?,
+                auth: match self.storage_azblob_connection_string.take() {
+                    Some(connection_string) => AzBlobAuth::ConnectionString(connection_string),
+                    None => AzBlobAuth::Account {
+                        account: required(
+                            self.storage_azblob_account.take(),
+                            "STORAGE_AZBLOB_CONNECTION_STRING or STORAGE_AZBLOB_ACCOUNT",
+                        )?,
+                        endpoint: self.storage_azblob_endpoint.take(),
+                    },
+                },
+            },
+        })
+    }
+
+    fn db(&mut self) -> Result<DbConfig, ConfigError> {
+        Ok(match self.db_driver {
+            DbDriver::Sqlite => DbConfig::Sqlite {
+                path: std::mem::take(&mut self.db_sqlite_path),
+            },
+            DbDriver::Postgres => DbConfig::Postgres(match self.db_postgres_url.take() {
+                Some(url) => PostgresConnection::Url(url),
+                None => PostgresConnection::Params(server_connection(
+                    "POSTGRES",
+                    [
+                        self.db_postgres_database.take(),
+                        self.db_postgres_host.take(),
+                        self.db_postgres_user.take(),
+                        self.db_postgres_password.take(),
+                    ],
+                    self.db_postgres_port,
+                )?),
             }),
-            other => Err(ConfigError(format!(
-                "DB_DRIVER must be one of postgres, mysql, sqlite, got {other:?}"
-            ))),
-        }
-    }
-
-    fn retention(&self) -> Result<Option<Duration>, ConfigError> {
-        let days = self
-            .number("CACHE_CLEANUP_OLDER_THAN_DAYS")?
-            .unwrap_or(90.0);
-        if days == 0.0 {
-            return Ok(None);
-        }
-        Duration::try_from_secs_f64(days_to_seconds(days))
-            .map(Some)
-            .map_err(|_negative| {
-                ConfigError(format!(
-                    "CACHE_CLEANUP_OLDER_THAN_DAYS must be a non-negative number, got {days}"
-                ))
-            })
-    }
-
-    fn download_idle_timeout(&self) -> Result<Option<Duration>, ConfigError> {
-        // `i32` caps it like the original server, at the largest delay a Node timer accepts.
-        let millis = self
-            .integer::<i32>(
-                "DOWNLOAD_IDLE_TIMEOUT_MS",
-                "an integer between 0 and 2147483647",
-            )?
-            .map_or(300_000, i32::unsigned_abs);
-        Ok((millis != 0).then(|| Duration::from_millis(millis.into())))
-    }
-
-    fn percent(&self, key: &str, default: f64) -> Result<Percent, ConfigError> {
-        let percent = self.number(key)?.unwrap_or(default);
-        if percent > 0.0 && percent <= 100.0 {
-            Ok(Percent(percent))
-        } else {
-            Err(ConfigError(format!(
-                "{key} must be greater than 0 and at most 100"
-            )))
-        }
+            DbDriver::Mysql => DbConfig::Mysql(server_connection(
+                "MYSQL",
+                [
+                    self.db_mysql_database.take(),
+                    self.db_mysql_host.take(),
+                    self.db_mysql_user.take(),
+                    self.db_mysql_password.take(),
+                ],
+                self.db_mysql_port,
+            )?),
+        })
     }
 }
 
 impl Config {
-    /// Reads the process environment.
+    /// Reads the process environment and command line; flags override variables.
     pub(crate) fn from_env() -> Result<Self, ConfigError> {
-        Self::from_vars(std::env::vars())
+        Self::parse(std::env::vars(), std::env::args_os().skip(1))
     }
 
-    /// Parses configuration from explicit variables, on top of the built-in defaults.
+    /// Parses configuration from explicit variables alone.
+    #[cfg(test)]
     pub(crate) fn from_vars(
-        overrides: impl IntoIterator<Item = (String, String)>,
+        vars: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, ConfigError> {
-        let mut map: HashMap<String, String> = DEFAULTS
-            .iter()
-            .map(|&(key, value)| (key.to_owned(), value.to_owned()))
+        Self::parse(vars, [])
+    }
+
+    /// Clap reads the environment when an argument is declared, so variables are handed to it
+    /// as flags instead, which also lets tests pass their own.
+    fn parse(
+        vars: impl IntoIterator<Item = (String, String)>,
+        args: impl IntoIterator<Item = OsString>,
+    ) -> Result<Self, ConfigError> {
+        let set: HashMap<String, String> = vars
+            .into_iter()
+            .filter(|(_, value)| !value.is_empty())
             .collect();
-        map.extend(overrides);
-        let vars = Vars(map);
-
-        let api_base_url = vars
-            .raw_url("API_BASE_URL")?
-            .ok_or_else(|| ConfigError("API_BASE_URL is required".to_owned()))?;
-        let actions_token_issuer = vars
-            .raw_url("ACTIONS_TOKEN_ISSUER")?
-            .unwrap_or("https://token.actions.githubusercontent.com");
-        let orphan_grace_hours: u64 = vars
-            .integer::<NonZeroU64>("ORPHANED_STORAGE_GRACE_PERIOD_HOURS", "an integer >= 1")?
-            .map_or(24, NonZeroU64::get);
-
+        let command = Vars::command();
+        let from_vars: Vec<OsString> = command
+            .get_arguments()
+            .filter_map(|arg| {
+                let value = set.get(arg.get_env()?.to_str()?)?;
+                Some(format!("--{}={value}", arg.get_long()?).into())
+            })
+            .collect();
+        let matches = command
+            .mut_args(|arg| arg.env(Resettable::Reset))
+            .try_get_matches_from(
+                std::iter::once(OsString::from(env!("CARGO_PKG_NAME")))
+                    .chain(from_vars)
+                    .chain(args),
+            )?;
+        let mut given = Vars::from_arg_matches(&matches)?;
+        let storage = given.storage()?;
+        let db = given.db()?;
+        let api_base_url = given.api_base_url.trim_end_matches('/').to_owned();
+        let issuer = &given.actions_token_issuer;
         Ok(Self {
-            host: vars.non_empty("HOST").map(str::to_owned),
-            port: match vars.non_empty("PORT") {
-                Some(_) => vars.port("PORT")?,
-                None => None,
-            }
-            .map_or(3000, NonZeroU16::get),
-            api_base_url: api_base_url.trim_end_matches('/').to_owned(),
-            default_actions_results_url: vars
-                .raw_url("DEFAULT_ACTIONS_RESULTS_URL")?
-                .unwrap_or("https://results-receiver.actions.githubusercontent.com")
-                .to_owned(),
-            actions_token_issuer: actions_token_issuer
-                .strip_suffix('/')
-                .unwrap_or(actions_token_issuer)
-                .to_owned(),
-            actions_token_jwks_url: vars.url("ACTIONS_TOKEN_JWKS_URL")?,
-            cache_retention: vars.retention()?,
-            cache_max_size_bytes: vars.integer("CACHE_MAX_SIZE_BYTES", "a positive integer")?,
-            cache_filesystem_max_usage: vars.percent("CACHE_FILESYSTEM_MAX_USAGE_PERCENT", 90.0)?,
-            orphaned_storage_grace_period: Duration::from_hours(orphan_grace_hours),
-            disable_cleanup_jobs: vars.boolean("DISABLE_CLEANUP_JOBS")?,
-            debug: vars.non_empty("DEBUG").is_some(),
-            enable_direct_downloads: vars.boolean("ENABLE_DIRECT_DOWNLOADS")?,
-            eager_merge: vars.boolean("EAGER_MERGE")?,
-            max_concurrent_merges: vars
-                .integer::<NonZeroU64>("MAX_CONCURRENT_MERGES", "an integer >= 1")?
-                .map_or(16, |merges| {
-                    usize::try_from(merges.get())
-                        .unwrap_or(usize::MAX)
-                        .min(Semaphore::MAX_PERMITS)
-                }),
-            download_idle_timeout: vars.download_idle_timeout()?,
-            skip_token_validation: vars.boolean("SKIP_TOKEN_VALIDATION")?,
-            management_api_key: vars.non_empty("MANAGEMENT_API_KEY").map(str::to_owned),
-            storage: vars.storage()?,
-            db: vars.db()?,
+            host: given.host,
+            port: given.port.get(),
+            actions_token_issuer: issuer.strip_suffix('/').unwrap_or(issuer).to_owned(),
+            api_base_url,
+            default_actions_results_url: given.default_actions_results_url,
+            actions_token_jwks_url: given.actions_token_jwks_url,
+            cache_retention: days(given.cache_cleanup_older_than_days)?,
+            cache_max_size_bytes: given.cache_max_size_bytes,
+            cache_filesystem_max_usage: given.cache_filesystem_max_usage_percent,
+            orphaned_storage_grace_period: Duration::from_hours(
+                given.orphaned_storage_grace_period_hours.get(),
+            ),
+            disable_cleanup_jobs: given.disable_cleanup_jobs,
+            debug: given.debug.is_some(),
+            enable_direct_downloads: given.enable_direct_downloads,
+            eager_merge: given.eager_merge,
+            max_concurrent_merges: usize::try_from(given.max_concurrent_merges.get())
+                .unwrap_or(usize::MAX)
+                .min(Semaphore::MAX_PERMITS),
+            // `i32` caps it like v9, at the largest delay a Node timer accepts.
+            download_idle_timeout: Some(given.download_idle_timeout_ms.unsigned_abs())
+                .filter(|millis| *millis != 0)
+                .map(|millis| Duration::from_millis(millis.into())),
+            skip_token_validation: given.skip_token_validation,
+            management_api_key: given.management_api_key,
+            storage,
+            db,
         })
     }
 }

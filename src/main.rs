@@ -22,7 +22,7 @@ use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 use crate::cleanup::Cleanup;
-use crate::config::Config;
+use crate::config::{Config, ConfigError};
 use crate::db::Db;
 use crate::error::Result;
 use crate::http::StalledClientListener;
@@ -122,6 +122,7 @@ async fn serve(config: Config) -> Result<()> {
 async fn main() -> ExitCode {
     let config = match Config::from_env() {
         Ok(config) => config,
+        Err(ConfigError::Args(error)) => error.exit(),
         Err(error) => {
             tracing_subscriber::fmt().init();
             tracing::error!(%error, "failed to start");
