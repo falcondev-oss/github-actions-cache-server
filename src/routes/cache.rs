@@ -17,10 +17,6 @@ use crate::twirp::{
     GetCacheEntryDownloadUrlResponse,
 };
 
-/// Serves the Twirp `CacheService`.
-#[derive(Debug, Clone)]
-pub(super) struct CacheService(pub(super) AppState);
-
 impl From<Unauthorized> for TwirpErrorResponse {
     fn from(unauthorized: Unauthorized) -> Self {
         twirp::unauthenticated(unauthorized.0)
@@ -58,21 +54,20 @@ fn non_empty(field: String) -> twirp::Result<String> {
 }
 
 #[twirp::async_trait::async_trait]
-impl crate::twirp::CacheService for CacheService {
+impl crate::twirp::CacheService for AppState {
     async fn create_cache_entry(
         &self,
         req: Request<CreateCacheEntryRequest>,
     ) -> twirp::Result<twirp::Response<CreateCacheEntryResponse>> {
-        let Self(state) = self;
-        let scope = state.verifier.cache_scope(req.headers()).await?;
+        let scope = self.verifier.cache_scope(req.headers()).await?;
         let CreateCacheEntryRequest { key, version } = req.into_body();
         let identity = save_identity(&scope, key, version)?;
-        match state.storage.create_upload(&identity).await? {
+        match self.storage.create_upload(&identity).await? {
             CreatedUpload::Created { id } => Ok(twirp::Response::new(CreateCacheEntryResponse {
                 ok: true,
                 signed_upload_url: format!(
                     "{}/devstoreaccount1/upload/{id}",
-                    state.config.api_base_url
+                    self.config.api_base_url
                 ),
                 message: String::new(),
             })),
@@ -87,16 +82,15 @@ impl crate::twirp::CacheService for CacheService {
         &self,
         req: Request<FinalizeCacheEntryUploadRequest>,
     ) -> twirp::Result<twirp::Response<FinalizeCacheEntryUploadResponse>> {
-        let Self(state) = self;
-        let scope = state.verifier.cache_scope(req.headers()).await?;
+        let scope = self.verifier.cache_scope(req.headers()).await?;
         let FinalizeCacheEntryUploadRequest { key, version, .. } = req.into_body();
         let identity = save_identity(&scope, key, version)?;
-        let upload = state
+        let upload = self
             .storage
             .complete_upload(&identity)
             .await?
             .ok_or_else(|| twirp::not_found("Upload not found"))?;
-        state.metrics.record_upload();
+        self.metrics.record_upload();
         Ok(twirp::Response::new(FinalizeCacheEntryUploadResponse {
             ok: true,
             entry_id: upload.id,
@@ -108,8 +102,7 @@ impl crate::twirp::CacheService for CacheService {
         &self,
         req: Request<GetCacheEntryDownloadUrlRequest>,
     ) -> twirp::Result<twirp::Response<GetCacheEntryDownloadUrlResponse>> {
-        let Self(state) = self;
-        let scope = state.verifier.cache_scope(req.headers()).await?;
+        let scope = self.verifier.cache_scope(req.headers()).await?;
         let GetCacheEntryDownloadUrlRequest {
             key,
             restore_keys,
@@ -122,8 +115,8 @@ impl crate::twirp::CacheService for CacheService {
             scopes: scope.read_scopes(),
             repo_id: scope.repo_id.clone(),
         };
-        let matched = state.storage.cache_entry_with_download_url(&query).await?;
-        state.metrics.record_lookup(if matched.is_some() {
+        let matched = self.storage.cache_entry_with_download_url(&query).await?;
+        self.metrics.record_lookup(if matched.is_some() {
             LookupResult::Hit
         } else {
             LookupResult::Miss

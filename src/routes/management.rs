@@ -145,8 +145,6 @@ struct EntryFilter {
     #[serde(default, deserialize_with = "present")]
     scope: Option<String>,
     /// Filter by exact repository id
-    #[param(rename = "repoId")]
-    #[schema(rename = "repoId")]
     #[serde(default, deserialize_with = "present")]
     repo_id: Option<String>,
 }
@@ -200,7 +198,7 @@ impl Default for ItemsPerPage {
 #[into_params(parameter_in = Query)]
 struct Pagination {
     /// Number of items per page (1-100, default 20)
-    #[param(rename = "itemsPerPage", value_type = Option<u8>, minimum = 1, maximum = 100)]
+    #[param(value_type = Option<u8>, minimum = 1, maximum = 100)]
     #[serde(default)]
     items_per_page: ItemsPerPage,
     /// Page number (default 1)
@@ -218,16 +216,13 @@ const fn first_page() -> NonZeroU32 {
 #[into_params(parameter_in = Query)]
 struct MatchQuery {
     /// The primary cache key to match against
-    #[param(rename = "primaryKey")]
     primary_key: String,
     /// Optional fallback keys to try if the primary key does not match
-    #[param(rename = "restoreKeys")]
     #[serde(default)]
     restore_keys: Vec<String>,
     /// Scopes to search within, checked in order; at least one
     scopes: Vec<String>,
     /// Repository id to match the cache entry against
-    #[param(rename = "repoId")]
     repo_id: String,
     /// Cache version identifier
     version: String,

@@ -30,7 +30,6 @@ pub(crate) struct AppState {
 
 pub(crate) fn router(state: AppState) -> Router {
     let debug = state.config.debug;
-    let cache_service = crate::twirp::router(cache::CacheService(state.clone()));
     let router = Router::new()
         .route("/", any(|| async { "OK" }))
         .route("/health", any(|| async { "healthy" }))
@@ -43,8 +42,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/download/{location_id}", any(transfer::download))
         .nest("/management-api", management::router(&state.config))
         .fallback(passthrough::forward)
-        .with_state(state)
-        .merge(Router::new().nest("/twirp", cache_service));
+        .with_state(state.clone())
+        .nest("/twirp", crate::twirp::router(state));
     if debug {
         router.layer(axum::middleware::from_fn(log_requests))
     } else {
