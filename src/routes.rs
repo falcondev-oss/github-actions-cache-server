@@ -8,7 +8,7 @@ mod transfer;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{any, post, put};
+use axum::routing::{any, put};
 
 use crate::cleanup::Cleanup;
 use crate::config::Config;
@@ -28,26 +28,13 @@ pub(crate) struct AppState {
     pub(crate) http: reqwest::Client,
 }
 
-const CACHE_SERVICE: &str = "/twirp/github.actions.results.api.v1.CacheService";
-
 pub(crate) fn router(state: AppState) -> Router {
     let debug = state.config.debug;
+    let cache_service = crate::twirp::router(cache::CacheService(state.clone()));
     let router = Router::new()
         .route("/", any(|| async { "OK" }))
         .route("/health", any(|| async { "healthy" }))
         .route("/metrics", any(cache::metrics))
-        .route(
-            &format!("{CACHE_SERVICE}/CreateCacheEntry"),
-            post(cache::create_cache_entry),
-        )
-        .route(
-            &format!("{CACHE_SERVICE}/FinalizeCacheEntryUpload"),
-            any(cache::finalize_cache_entry_upload),
-        )
-        .route(
-            &format!("{CACHE_SERVICE}/GetCacheEntryDownloadURL"),
-            post(cache::get_cache_entry_download_url),
-        )
         .route(
             "/devstoreaccount1/upload/{upload_id}",
             put(transfer::upload),
@@ -56,7 +43,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/download/{location_id}", any(transfer::download))
         .nest("/management-api", management::router(&state.config))
         .fallback(passthrough::forward)
-        .with_state(state);
+        .with_state(state)
+        .merge(Router::new().nest("/twirp", cache_service));
     if debug {
         router.layer(axum::middleware::from_fn(log_requests))
     } else {

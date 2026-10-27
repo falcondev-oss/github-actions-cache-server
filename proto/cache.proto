@@ -1,0 +1,46 @@
+// The cache service of GitHub's Actions results API, as `@actions/cache` calls it. Field 1 of
+// each request (`metadata`) is set by GitHub's own backend and skipped here.
+syntax = "proto3";
+
+package github.actions.results.api.v1;
+
+service CacheService {
+  rpc CreateCacheEntry(CreateCacheEntryRequest) returns (CreateCacheEntryResponse);
+  rpc FinalizeCacheEntryUpload(FinalizeCacheEntryUploadRequest) returns (FinalizeCacheEntryUploadResponse);
+  rpc GetCacheEntryDownloadURL(GetCacheEntryDownloadURLRequest) returns (GetCacheEntryDownloadURLResponse);
+}
+
+message CreateCacheEntryRequest {
+  string key = 2;
+  string version = 3;
+}
+
+message CreateCacheEntryResponse {
+  bool ok = 1;
+  string signed_upload_url = 2;
+  string message = 3;
+}
+
+message FinalizeCacheEntryUploadRequest {
+  string key = 2;
+  int64 size_bytes = 3;
+  string version = 4;
+}
+
+message FinalizeCacheEntryUploadResponse {
+  bool ok = 1;
+  int64 entry_id = 2;
+  string message = 3;
+}
+
+message GetCacheEntryDownloadURLRequest {
+  string key = 2;
+  repeated string restore_keys = 3;
+  string version = 4;
+}
+
+message GetCacheEntryDownloadURLResponse {
+  bool ok = 1;
+  string signed_download_url = 2;
+  string matched_key = 3;
+}
