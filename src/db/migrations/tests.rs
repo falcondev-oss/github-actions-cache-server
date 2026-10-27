@@ -58,6 +58,15 @@ async fn keeps_a_migrated_database_beside_recreated_v9_bookkeeping() {
 }
 
 #[tokio::test]
+async fn resumes_an_adoption_interrupted_after_installing_the_migration_table() {
+    let (_dir, db) = sqlite(include_str!("../testdata/kysely-v9.sql")).await;
+    Migrator::install(&db.pool).await.unwrap();
+
+    assert!(!migrate(&db).await.unwrap(), "storage is kept");
+    assert_eq!(entry_count(&db).await, 2, "cache entries are kept");
+}
+
+#[tokio::test]
 async fn drops_a_database_older_than_v9_10() {
     let (_dir, db) = sqlite(include_str!("../testdata/kysely-v6.sql")).await;
 

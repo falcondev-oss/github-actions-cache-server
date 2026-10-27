@@ -95,10 +95,11 @@ async fn take_over_v9(tx: &DatabaseTransaction) -> Result<bool> {
         return Ok(false);
     }
     // A v9 replica started against a database this version already took over recreates its
-    // bookkeeping before failing; only that is removed.
-    if manager
-        .has_table(Migrator::migration_table_name().to_string())
+    // bookkeeping before failing; only that is removed. An empty migration table is an adoption
+    // MySQL committed only halfway.
+    if !Migrator::get_applied_migrations_read_only(tx)
         .await?
+        .is_empty()
     {
         drop_tables(&manager, &KYSELY_TABLES).await?;
         return Ok(false);
