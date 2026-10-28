@@ -36,6 +36,8 @@ pub(crate) struct Config {
     /// OIDC issuer without trailing slash.
     pub(crate) actions_token_issuer: String,
     pub(crate) actions_token_jwks_url: Option<Url>,
+    /// `aud` values a token must carry one of; never empty, `None` skips the check.
+    pub(crate) actions_token_audience: Option<Vec<String>>,
     /// How long unused entries are kept; `None` disables age-based cleanup.
     pub(crate) cache_retention: Option<Duration>,
     pub(crate) cache_max_size_bytes: Option<NonZeroU64>,
@@ -44,6 +46,8 @@ pub(crate) struct Config {
     pub(crate) disable_cleanup_jobs: bool,
     pub(crate) debug: bool,
     pub(crate) enable_direct_downloads: bool,
+    /// Lifetime of a signed direct-download URL, 1 second to 1 hour.
+    pub(crate) direct_download_url_ttl: Duration,
     pub(crate) eager_merge: bool,
     /// Merges this process runs at once, eager or lazy; at least 1.
     pub(crate) max_concurrent_merges: usize,
@@ -168,6 +172,13 @@ fn port(raw: &str) -> Result<NonZeroU16, String> {
     NonZeroU16::new(integer(raw)?).ok_or_else(|| "0 is not a port".to_owned())
 }
 
+fn url_ttl(raw: &str) -> Result<Duration, String> {
+    Some(integer::<u64>(raw)?)
+        .filter(|seconds| (1..=3600).contains(seconds))
+        .map(Duration::from_secs)
+        .ok_or_else(|| format!("{raw} is not between 1 and 3600"))
+}
+
 fn number(raw: &str) -> Result<f64, String> {
     raw.trim()
         .parse::<f64>()
@@ -246,8 +257,14 @@ struct Vars {
     /// [default: discovered from the issuer]
     #[arg(long, env)]
     actions_token_jwks_url: Option<Url>,
+    /// Comma-separated `aud` values a token must carry one of [default: not checked]
+    #[arg(long, env)]
+    actions_token_audience: Option<String>,
     #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
     skip_token_validation: bool,
+    /// Allows direct downloads with `SKIP_TOKEN_VALIDATION`; for local testing only
+    #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
+    unsafe_allow_direct_downloads_without_token_validation: bool,
     /// Days an unused entry is kept; 0 keeps it forever
     #[arg(long, env, default_value = "90", value_parser = number)]
     cache_cleanup_older_than_days: f64,
@@ -264,6 +281,9 @@ struct Vars {
     debug: Option<String>,
     #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
     enable_direct_downloads: bool,
+    /// Seconds a signed direct-download URL stays valid, 1 to 3600
+    #[arg(long, env, default_value = "600", value_parser = url_ttl)]
+    direct_download_url_ttl_seconds: Duration,
     #[arg(long, env, action = ArgAction::Set, default_value_t = false)]
     eager_merge: bool,
     #[arg(long, env, default_value = "16", value_parser = integer::<NonZeroU64>)]
@@ -522,6 +542,39 @@ impl Config {
                     .chain(args),
             )?;
         let mut given = Vars::from_arg_matches(&matches)?;
+        // A signed URL is a storage credential; unverified claims must not obtain one (ADR-0013).
+        if given.enable_direct_downloads
+            && given.skip_token_validation
+            && !given.unsafe_allow_direct_downloads_without_token_validation
+        {
+            return Err(ConfigError::Invalid(
+                "ENABLE_DIRECT_DOWNLOADS=true requires token validation, but \
+                 SKIP_TOKEN_VALIDATION=true would hand signed storage URLs to unverified callers. \
+                 Unset SKIP_TOKEN_VALIDATION, or set \
+                 UNSAFE_ALLOW_DIRECT_DOWNLOADS_WITHOUT_TOKEN_VALIDATION=true for local testing only"
+                    .to_owned(),
+            ));
+        }
+        let actions_token_audience = given
+            .actions_token_audience
+            .take()
+            .map(|raw| {
+                let audience: Vec<String> = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                // A typo must not silently switch the check off.
+                if audience.is_empty() {
+                    return Err(ConfigError::Invalid(
+                        "ACTIONS_TOKEN_AUDIENCE lists no audience; unset it to skip the check"
+                            .to_owned(),
+                    ));
+                }
+                Ok(audience)
+            })
+            .transpose()?;
         let storage = given.storage()?;
         let db = given.db()?;
         let api_base_url = given.api_base_url.trim_end_matches('/').to_owned();
@@ -533,6 +586,7 @@ impl Config {
             api_base_url,
             default_actions_results_url: given.default_actions_results_url,
             actions_token_jwks_url: given.actions_token_jwks_url,
+            actions_token_audience,
             cache_retention: days(given.cache_cleanup_older_than_days)?,
             cache_max_size_bytes: given.cache_max_size_bytes,
             cache_filesystem_max_usage: given.cache_filesystem_max_usage_percent,
@@ -542,6 +596,7 @@ impl Config {
             disable_cleanup_jobs: given.disable_cleanup_jobs,
             debug: given.debug.is_some(),
             enable_direct_downloads: given.enable_direct_downloads,
+            direct_download_url_ttl: given.direct_download_url_ttl_seconds,
             eager_merge: given.eager_merge,
             max_concurrent_merges: usize::try_from(given.max_concurrent_merges.get())
                 .unwrap_or(usize::MAX)

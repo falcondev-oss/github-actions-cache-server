@@ -18,8 +18,9 @@ pub(crate) const LEASE_RENEWAL: Duration = if cfg!(test) {
 } else {
     Duration::from_secs(30)
 };
-/// Lifetime of a signed direct-download URL and the reader lease that protects it.
-pub(crate) const DIRECT_DOWNLOAD_LEASE_DURATION: Duration = Duration::from_mins(10);
+/// How long a direct-download reader lease outlives its signed URL: storage authenticates a GET
+/// when it starts, so a transfer begun just before the URL expires keeps reading after it.
+pub(crate) const DIRECT_DOWNLOAD_LEASE_MARGIN: Duration = Duration::from_mins(10);
 
 /// The timestamp column value `duration` from now.
 pub(crate) fn deadline(duration: Duration) -> i64 {

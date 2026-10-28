@@ -298,12 +298,20 @@ async fn a_download_fails_once_its_reader_lease_is_lost() {
 }
 
 #[tokio::test]
-async fn a_direct_download_lease_covers_the_signed_url_lifetime() {
+async fn a_direct_download_lease_outlives_the_signed_url() {
     // Only S3 signs URLs against the emulators used in tests.
     if storage_driver() != "s3" {
         return;
     }
-    let server = TestServer::with(&[("ENABLE_DIRECT_DOWNLOADS", "true")]).await;
+    let server = TestServer::with(&[
+        ("ENABLE_DIRECT_DOWNLOADS", "true"),
+        (
+            "UNSAFE_ALLOW_DIRECT_DOWNLOADS_WITHOUT_TOKEN_VALIDATION",
+            "true",
+        ),
+        ("DIRECT_DOWNLOAD_URL_TTL_SECONDS", "120"),
+    ])
+    .await;
     let folder = uuid::Uuid::new_v4().to_string();
     put(
         server.adapter(),
@@ -338,10 +346,10 @@ async fn a_direct_download_lease_covers_the_signed_url_lifetime() {
         .await
         .unwrap()
         .unwrap();
-    assert!(lifetime_seconds > 0, "signed url expires");
+    assert_eq!(lifetime_seconds, 120, "configured url lifetime");
     assert!(
-        lease.expires_at - started_at >= lifetime_seconds * 1000,
-        "lease outlives the url"
+        lease.expires_at - started_at >= (120 + 10 * 60) * 1000,
+        "lease outlives the url by the margin"
     );
     let accessed = find_location(server.db(), &location.id)
         .await

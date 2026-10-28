@@ -158,3 +158,51 @@ fn ignores_variables_of_other_drivers() {
         "the selected driver does"
     );
 }
+
+#[test]
+fn direct_downloads_require_token_validation() {
+    let unverified = [
+        ("ENABLE_DIRECT_DOWNLOADS", "true"),
+        ("SKIP_TOKEN_VALIDATION", "true"),
+    ];
+    assert!(config(&unverified).is_err(), "refused without the override");
+    let overridden = [
+        unverified.as_slice(),
+        &[(
+            "UNSAFE_ALLOW_DIRECT_DOWNLOADS_WITHOUT_TOKEN_VALIDATION",
+            "true",
+        )],
+    ]
+    .concat();
+    assert!(config(&overridden).is_ok(), "allowed with the override");
+}
+
+#[test]
+fn bounds_the_direct_download_url_lifetime() {
+    assert_eq!(
+        config(&[]).unwrap().direct_download_url_ttl,
+        Duration::from_mins(10),
+        "ten minutes by default"
+    );
+    for ttl in ["0", "3601", "1.5"] {
+        assert!(
+            config(&[("DIRECT_DOWNLOAD_URL_TTL_SECONDS", ttl)]).is_err(),
+            "{ttl} is out of range"
+        );
+    }
+}
+
+#[test]
+fn parses_the_token_audience() {
+    assert_eq!(
+        config(&[("ACTIONS_TOKEN_AUDIENCE", " a, ,b ")])
+            .unwrap()
+            .actions_token_audience,
+        Some(vec!["a".to_owned(), "b".to_owned()]),
+        "trimmed, blanks dropped"
+    );
+    assert!(
+        config(&[("ACTIONS_TOKEN_AUDIENCE", " , ")]).is_err(),
+        "an audience list without audiences is refused"
+    );
+}
