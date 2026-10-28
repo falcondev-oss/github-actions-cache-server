@@ -89,6 +89,9 @@ pub(crate) mod uploads {
         pub(crate) folder_name: String,
         /// Nullable so replicas still on the previous version can insert during a rollout.
         pub(crate) reservation_hash: Option<String>,
+        /// SHA-256 of the capability in the upload's URL; uploads from before it was added have
+        /// none.
+        pub(crate) capability_hash: Option<String>,
     }
 
     impl ActiveModelBehavior for ActiveModel {}

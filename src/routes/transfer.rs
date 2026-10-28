@@ -17,7 +17,9 @@ use serde::Deserialize;
 
 use super::AppState;
 use crate::http::HttpError;
-use crate::storage::{DownloadError, EndPosition, Extent, RangeRequest, StartPosition};
+use crate::storage::{
+    DownloadError, EndPosition, Extent, RangeRequest, StartPosition, UploadAccess,
+};
 
 /// Clients without a request id intermittently fail with EOF (tonistiigi/go-actions-cache).
 const REQUEST_ID: HeaderName = HeaderName::from_static("x-ms-request-id");
@@ -61,11 +63,13 @@ fn chunk_index(block_id: &str) -> Option<u32> {
     }
 }
 
-/// Query of an Azure `Put Block` / `Put Block List` request.
+/// Query of an Azure `Put Blob` / `Put Block` / `Put Block List` request.
 #[derive(Debug, Deserialize)]
 pub(super) struct BlockQuery {
     comp: Option<String>,
     blockid: Option<String>,
+    /// The upload's capability, kept by Azure clients like the `sig` of a SAS URL.
+    sig: Option<String>,
 }
 
 pub(super) async fn upload(
@@ -78,6 +82,20 @@ pub(super) async fn upload(
     let Path(upload_id) = upload_id.map_err(|_rejection| {
         HttpError::bad_request("Invalid path parameters: uploadId must be a number")
     })?;
+    let upload = match state
+        .storage
+        .authorize_upload(upload_id, query.sig.as_deref())
+        .await?
+    {
+        UploadAccess::Granted(upload) => upload,
+        UploadAccess::Forbidden => {
+            return Err(HttpError::new(
+                StatusCode::FORBIDDEN,
+                "Invalid upload signature",
+            ));
+        }
+        UploadAccess::NotFound => return Err(upload_not_found(upload_id)),
+    };
     if query.comp.as_deref() == Some("blocklist") {
         return Ok(created());
     }
@@ -94,15 +112,19 @@ pub(super) async fn upload(
     let stream = body.into_data_stream().map_err(io::Error::other).boxed();
     if !state
         .storage
-        .upload_part(upload_id, index, stream, length)
+        .upload_part(&upload, index, stream, length)
         .await?
     {
-        return Err(HttpError::new(
-            StatusCode::NOT_FOUND,
-            format!("Upload not found: {upload_id}"),
-        ));
+        return Err(upload_not_found(upload_id));
     }
     Ok(created())
+}
+
+fn upload_not_found(upload_id: i64) -> HttpError {
+    HttpError::new(
+        StatusCode::NOT_FOUND,
+        format!("Upload not found: {upload_id}"),
+    )
 }
 
 /// A single range; multi-range requests and invalid headers, which includes inverted ranges, are

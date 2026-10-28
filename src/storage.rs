@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
 use sea_orm::ActiveValue::Set;
@@ -22,6 +24,8 @@ use sea_orm::{
     QueryFilter as _, QueryOrder as _, QuerySelect as _, QueryTrait as _, TransactionTrait as _,
 };
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
+use subtle::ConstantTimeEq as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::task::{AbortOnDropHandle, TaskTracker};
@@ -87,10 +91,28 @@ pub(crate) struct DownloadUrlMatch {
     pub(crate) entry: CacheEntry,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CreatedUpload {
-    Created { id: i64 },
+    /// `capability` is the secret the upload's URL carries; only its hash is stored.
+    Created {
+        upload: AuthorizedUpload,
+        capability: String,
+    },
     AlreadyExists,
+}
+
+/// An upload whose capability was presented; the only way to store its Parts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthorizedUpload {
+    pub(crate) id: i64,
+    folder_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UploadAccess {
+    Granted(AuthorizedUpload),
+    Forbidden,
+    NotFound,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -506,35 +528,58 @@ impl Storage {
         .boxed()
     }
 
-    /// Stores one Part of an upload. False when the upload does not exist, or was deleted while
-    /// the Part was streaming (the written Part is then Orphaned Storage, ADR-0001).
-    pub(crate) async fn upload_part(
+    /// Checks `capability` against the one the upload was created with.
+    pub(crate) async fn authorize_upload(
         &self,
         upload_id: i64,
+        capability: Option<&str>,
+    ) -> Result<UploadAccess> {
+        let upload: Option<(String, Option<String>)> = uploads::Entity::find_by_id(upload_id)
+            .select_only()
+            .columns([uploads::Column::FolderName, uploads::Column::CapabilityHash])
+            .into_tuple()
+            .one(&self.db.reads)
+            .await?;
+        let Some((folder_name, stored)) = upload else {
+            return Ok(UploadAccess::NotFound);
+        };
+        let granted = stored.zip(capability).is_some_and(|(stored, capability)| {
+            bool::from(
+                stored
+                    .as_bytes()
+                    .ct_eq(capability_hash(capability).as_bytes()),
+            )
+        });
+        Ok(if granted {
+            UploadAccess::Granted(AuthorizedUpload {
+                id: upload_id,
+                folder_name,
+            })
+        } else {
+            UploadAccess::Forbidden
+        })
+    }
+
+    /// Stores one Part of an upload. False when the upload was deleted in the meantime (the
+    /// written Part is then Orphaned Storage, ADR-0001).
+    pub(crate) async fn upload_part(
+        &self,
+        upload: &AuthorizedUpload,
         part_index: u32,
         stream: ByteStream,
         length: Option<u64>,
     ) -> Result<bool> {
-        let folder_name: Option<String> = uploads::Entity::find_by_id(upload_id)
-            .select_only()
-            .column(uploads::Column::FolderName)
-            .into_tuple()
-            .one(&self.db.reads)
-            .await?;
-        let Some(folder_name) = folder_name else {
-            return Ok(false);
-        };
         uploads::Entity::update_many()
             .col_expr(
                 uploads::Column::StartedPartUploadCount,
                 uploads::Column::StartedPartUploadCount.into_expr().add(1),
             )
-            .filter(uploads::COLUMN.id.eq(upload_id))
+            .filter(uploads::COLUMN.id.eq(upload.id))
             .exec(&self.db.pool)
             .await?;
         self.adapter
             .upload_stream(
-                &part_object(&folder_name, part_index),
+                &part_object(&upload.folder_name, part_index),
                 stream,
                 UploadKind::Part { length },
             )
@@ -548,7 +593,7 @@ impl Storage {
                 uploads::Column::FinishedPartUploadCount,
                 uploads::Column::FinishedPartUploadCount.into_expr().add(1),
             )
-            .filter(uploads::COLUMN.id.eq(upload_id))
+            .filter(uploads::COLUMN.id.eq(upload.id))
             .exec(&self.db.pool)
             .await?;
         Ok(recorded.rows_affected > 0)
@@ -558,6 +603,7 @@ impl Storage {
     /// on the unique reservation hash.
     pub(crate) async fn create_upload(&self, identity: &EntryIdentity) -> Result<CreatedUpload> {
         let id = random_upload_id();
+        let capability = random_capability()?;
         let inserted = uploads::Entity::insert(uploads::ActiveModel {
             id: Set(id),
             folder_name: Set(id.to_string()),
@@ -567,12 +613,19 @@ impl Storage {
             scope: Set(identity.scope.clone()),
             repo_id: Set(identity.repo_id.clone()),
             reservation_hash: Set(Some(identity.reservation_hash())),
+            capability_hash: Set(Some(capability_hash(&capability))),
             ..Default::default()
         })
         .exec_without_returning(&self.db.pool)
         .await;
         match inserted {
-            Ok(_) => Ok(CreatedUpload::Created { id }),
+            Ok(_) => Ok(CreatedUpload::Created {
+                upload: AuthorizedUpload {
+                    id,
+                    folder_name: id.to_string(),
+                },
+                capability,
+            }),
             Err(error) if is_unique_violation(&error) => Ok(CreatedUpload::AlreadyExists),
             Err(error) => Err(error.into()),
         }
@@ -1067,6 +1120,18 @@ impl Storage {
 fn random_upload_id() -> i64 {
     let (random, _) = uuid::Uuid::new_v4().as_u64_pair();
     random.cast_signed().rem_euclid(10_000_000_000)
+}
+
+/// 256 random bits, base64url encoded like the `sig` of an Azure SAS URL.
+fn random_capability() -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| Failure::msg(format!("generating an upload capability: {error}")))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn capability_hash(capability: &str) -> String {
+    format!("{:x}", Sha256::digest(capability))
 }
 
 /// A cache entry with the position of the first match candidate it satisfies.

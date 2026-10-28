@@ -5,6 +5,7 @@
 //! rebuild, so it is dropped and recreated, and storage is cleared with it.
 
 mod baseline;
+mod upload_capabilities;
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::{Order, Query, Table};
@@ -20,7 +21,10 @@ struct Migrator;
 
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(baseline::Migration)]
+        vec![
+            Box::new(baseline::Migration),
+            Box::new(upload_capabilities::Migration),
+        ]
     }
 }
 

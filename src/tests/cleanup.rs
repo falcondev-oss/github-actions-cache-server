@@ -11,7 +11,7 @@ use super::harness::{
 use crate::cleanup::{CleanupSummary, Task, reconcile_orphaned_storage};
 use crate::db::{StorageLocation, now_ms};
 use crate::error::{Failure, Result};
-use crate::storage::CreatedUpload;
+use crate::storage::{AuthorizedUpload, CreatedUpload};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -116,7 +116,7 @@ async fn finalization_succeeds_when_eviction_fails() {
         ("CACHE_MAX_SIZE_BYTES", "1"),
     ])
     .await;
-    let CreatedUpload::Created { id } = server
+    let CreatedUpload::Created { upload, .. } = server
         .storage()
         .create_upload(&identity("evict"))
         .await
@@ -126,7 +126,12 @@ async fn finalization_succeeds_when_eviction_fails() {
     };
     server
         .storage()
-        .upload_part(id, 0, super::harness::byte_stream(&b"payload"[..]), None)
+        .upload_part(
+            &upload,
+            0,
+            super::harness::byte_stream(&b"payload"[..]),
+            None,
+        )
         .await
         .unwrap();
 
@@ -311,7 +316,10 @@ async fn location_cleanup_waits_for_an_active_merged_download() {
 #[tokio::test]
 async fn failed_finalization_removes_the_upload_folder() {
     let server = TestServer::start().await;
-    let CreatedUpload::Created { id } = server
+    let CreatedUpload::Created {
+        upload: AuthorizedUpload { id, .. },
+        ..
+    } = server
         .storage()
         .create_upload(&identity("partial"))
         .await
@@ -344,7 +352,10 @@ async fn failed_finalization_removes_the_upload_folder() {
 #[tokio::test]
 async fn orphan_reconciliation_deletes_only_unauthorized_expired_folders() {
     let server = TestServer::start().await;
-    let CreatedUpload::Created { id } = server
+    let CreatedUpload::Created {
+        upload: AuthorizedUpload { id, .. },
+        ..
+    } = server
         .storage()
         .create_upload(&identity("authorized"))
         .await

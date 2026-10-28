@@ -34,6 +34,9 @@ _Avoid_: Cache age
 **Upload**:
 Cache data that is being received but has not yet become a Cache Entry.
 
+**Upload Capability**:
+The random secret in an Upload's URL that authorizes storing its Parts. Only its hash is stored.
+
 **Storage Location**:
 The stored data belonging to a Cache Entry.
 

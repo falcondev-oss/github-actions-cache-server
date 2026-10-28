@@ -1,6 +1,8 @@
-//! Upload reservations, block uploads to missing uploads, and exact key matching.
+//! Upload reservations, block upload authorization, and exact key matching.
 
+use base64::Engine as _;
 use futures_util::future::join_all;
+use sea_orm::ActiveValue::Set;
 use sea_orm::EntityTrait as _;
 
 use super::harness::{
@@ -52,7 +54,7 @@ async fn completing_an_upload_leaves_a_reservation_differing_in_case_alone() {
     let server = TestServer::start().await;
     let storage = server.storage();
     let key = format!("Key-{}", uuid::Uuid::new_v4());
-    let CreatedUpload::Created { id: upper } =
+    let CreatedUpload::Created { upload: upper, .. } =
         storage.create_upload(&identity(&key)).await.unwrap()
     else {
         panic!("fresh key");
@@ -61,7 +63,7 @@ async fn completing_an_upload_leaves_a_reservation_differing_in_case_alone() {
 
     assert!(
         storage
-            .upload_part(upper, 0, byte_stream("x"), None)
+            .upload_part(&upper, 0, byte_stream("x"), None)
             .await
             .unwrap(),
         "the upper-case reservation is untouched"
@@ -180,17 +182,93 @@ async fn blocks_for_unknown_uploads_are_rejected_and_not_written() {
 }
 
 #[tokio::test]
+async fn upload_requests_without_the_upload_capability_are_forbidden() {
+    let server = TestServer::start().await;
+    let CreatedUpload::Created { upload, capability } = server
+        .storage()
+        .create_upload(&identity("signed"))
+        .await
+        .unwrap()
+    else {
+        panic!("fresh key");
+    };
+    let url = format!("{}/devstoreaccount1/upload/{}", server.url, upload.id);
+    let http = reqwest::Client::new();
+    let block_id = base64::engine::general_purpose::STANDARD.encode(format!(
+        "{}{:012}",
+        uuid::Uuid::new_v4(),
+        0
+    ));
+    let put = |query: &[(&str, &str)], sig: Option<&str>| {
+        http.put(&url)
+            .query(query)
+            .query(&sig.map(|sig| [("sig", sig)]).unwrap_or_default())
+            .body("payload")
+            .send()
+    };
+    let requests: [&[(&str, &str)]; 3] = [
+        &[],
+        &[("comp", "block"), ("blockid", &block_id)],
+        &[("comp", "blocklist")],
+    ];
+    for query in requests {
+        for sig in [None, Some("wrong")] {
+            let response = put(query, sig).await.unwrap();
+            assert_eq!(response.status(), 403, "{query:?} with sig {sig:?}");
+        }
+    }
+    assert!(
+        server
+            .adapter()
+            .list_storage_folders()
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing was written"
+    );
+    assert_eq!(
+        http.post(format!("{url}?sig={capability}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        405,
+        "only PUT is accepted"
+    );
+    assert_eq!(
+        put(&[], Some(&capability)).await.unwrap().status(),
+        201,
+        "the capability grants the upload"
+    );
+
+    // Uploads created before capabilities existed can't be continued.
+    uploads::Entity::update_many()
+        .set(uploads::ActiveModel {
+            capability_hash: Set(None),
+            ..Default::default()
+        })
+        .exec(&server.db().pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        put(&[], Some(&capability)).await.unwrap().status(),
+        403,
+        "an upload without a capability hash"
+    );
+}
+
+#[tokio::test]
 async fn a_part_whose_upload_is_deleted_mid_stream_is_not_recorded() {
     let server = TestServer::start().await;
     let storage = server.storage();
-    let CreatedUpload::Created { id } = storage
+    let CreatedUpload::Created { upload, .. } = storage
         .create_upload(&identity("deleted-mid-part"))
         .await
         .unwrap()
     else {
         panic!("fresh key");
     };
-    let db = storage.db.clone();
+    let (db, id) = (storage.db.clone(), upload.id);
     // Deletes the upload, the way `cleanup:uploads` would, while the part is streaming.
     let body = futures_util::stream::once(async move {
         uploads::Entity::delete_by_id(id)
@@ -200,7 +278,7 @@ async fn a_part_whose_upload_is_deleted_mid_stream_is_not_recorded() {
         Ok(axum::body::Bytes::from_static(b"payload"))
     });
     let recorded = storage
-        .upload_part(id, 0, futures_util::StreamExt::boxed(body), None)
+        .upload_part(&upload, 0, futures_util::StreamExt::boxed(body), None)
         .await
         .unwrap();
     assert!(!recorded, "the part belongs to no upload any more");

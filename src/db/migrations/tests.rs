@@ -84,7 +84,8 @@ async fn v9_database(applied: &[&str]) -> (tempfile::TempDir, Db) {
     let db = Db::open(&Config::from_vars(vars).unwrap().db)
         .await
         .unwrap();
-    Migrator::up(&db.pool, None).await.unwrap();
+    // The baseline alone is v9.10's schema.
+    Migrator::up(&db.pool, Some(1)).await.unwrap();
     Migrator::uninstall(&db.pool).await.unwrap();
     db.pool
         .execute_unprepared("create table kysely_migration (name varchar(255) primary key)")
