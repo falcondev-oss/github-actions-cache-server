@@ -1,4 +1,4 @@
-//! Prometheus metrics (ADR-0007, ADR-0008).
+//! Prometheus metrics.
 
 use prometheus::{IntCounter, IntCounterVec, IntGauge, Opts, Registry, TextEncoder};
 

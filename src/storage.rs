@@ -53,7 +53,7 @@ use crate::db::{
 use crate::error::{Failure, Result};
 
 /// Bounds the self-heal retry when matching keeps surfacing Dangling Cache Entries for the same
-/// prefix; caps a pathological scan (ADR-0005).
+/// prefix; caps a pathological scan.
 const MAX_DANGLING_PURGE_ATTEMPTS: u32 = 10;
 
 /// What a restore asks for: a primary key plus fallbacks, tried across scopes in order.
@@ -389,7 +389,7 @@ impl Storage {
 
     /// True iff the entry's storage physically exists. A merged entry is confirmed by its merged
     /// object; an unmerged entry by its first Part. Parts deleted without a completed merge means
-    /// the data is gone. See ADR-0005.
+    /// the data is gone.
     async fn storage_has_data(&self, location: &StorageLocation) -> Result<bool> {
         if location.merged_at.is_some() {
             return self
@@ -460,7 +460,7 @@ impl Storage {
     /// Runs a Merge under a Merge Lease in the background. `write` produces `{folder}/merged`; a
     /// lease-fenced transaction then marks the Merge complete. Returns false when another worker
     /// holds the lease or this process already runs `MAX_CONCURRENT_MERGES` Merges; a later
-    /// download retries a skipped Merge. Writing straight to the final object is safe (ADR-0004).
+    /// download retries a skipped Merge. Writing straight to the final object is safe.
     /// Failures are logged and the merge state rolled back.
     async fn start_merge(
         &self,
@@ -560,7 +560,7 @@ impl Storage {
     }
 
     /// Stores one Part of an upload. False when the upload was deleted in the meantime (the
-    /// written Part is then Orphaned Storage, ADR-0001).
+    /// written Part is then Orphaned Storage).
     pub(crate) async fn upload_part(
         &self,
         upload: &AuthorizedUpload,
@@ -687,7 +687,7 @@ impl Storage {
             tracing::warn!(%error, "Capacity-based Eviction failed after upload completion");
         }
         if self.config.eager_merge && whole_object(&location).is_none() {
-            // Eager Merge (ADR-0009): only the lease acquisition is awaited; the Merge itself
+            // Eager Merge: only the lease acquisition is awaited; the Merge itself
             // runs in the background.
             if let Err(error) = self
                 .start_merge(&location, self.merge_parts(&location))
@@ -747,7 +747,7 @@ impl Storage {
     }
 
     /// Capacity-based Eviction: once usage exceeds the Storage Budget, deletes entries by Cache
-    /// Recency until usage is back at 90% of the budget (ADR-0008).
+    /// Recency until usage is back at 90% of the budget.
     pub(crate) async fn enforce_storage_budget(&self) -> Result<()> {
         let filesystem_usage = match self.config.cache_max_size_bytes {
             Some(_) => None,
@@ -1010,7 +1010,7 @@ impl Storage {
     /// Returning a download URL is a promise the data exists: the client commits to downloading
     /// and can't walk a later 404 back to a cache miss (`BuildKit` hard-fails the build). So
     /// storage is validated before handing out a URL: a Dangling Cache Entry is self-healed and
-    /// matching retried, so a valid candidate under another restore key still wins (ADR-0005).
+    /// matching retried, so a valid candidate under another restore key still wins.
     pub(crate) async fn cache_entry_with_download_url(
         &self,
         query: &CacheQuery,
@@ -1053,7 +1053,7 @@ impl Storage {
             };
 
             // An entry in one object with direct downloads enabled: take a reader lease that
-            // outlives the signed URL by a margin, then sign (ADR-0002).
+            // outlives the signed URL by a margin, then sign.
             let url_ttl = self.config.direct_download_url_ttl;
             let expires_at = deadline(url_ttl.saturating_add(DIRECT_DOWNLOAD_LEASE_MARGIN));
             let tx = self.db.pool.begin().await?;
@@ -1083,8 +1083,8 @@ impl Storage {
         Ok(None)
     }
 
-    /// Deletes a storage location row, then its data (ADR-0001), unless a reader holds it
-    /// (ADR-0002). Data that can't be deleted is left as Orphaned Storage.
+    /// Deletes a storage location row, then its data, unless a reader holds it. Data
+    /// that can't be deleted is left as Orphaned Storage.
     pub(crate) async fn delete_storage_location(&self, id: &str) -> Result<LocationDeletion> {
         let location = storage_locations::Entity::find_by_id(id)
             .one(&self.db.pool)
@@ -1133,7 +1133,7 @@ struct RankedEntry {
     match_rank: i64,
 }
 
-/// Records Cache Access (ADR-0008).
+/// Records Cache Access.
 async fn record_download(db: &impl ConnectionTrait, id: &str) -> Result<()> {
     storage_locations::Entity::update_many()
         .set(storage_locations::ActiveModel {

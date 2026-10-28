@@ -145,7 +145,7 @@ pub(crate) struct FilesystemUsage {
 ///
 /// Uploads must be atomically visible: an object never exists partially, and overwriting an
 /// object never disturbs active readers of the previous version. Object stores give this
-/// natively; the filesystem adapter writes to a temp path and renames. See ADR-0004.
+/// natively; the filesystem adapter writes to a temp path and renames.
 #[derive(Debug)]
 pub(crate) enum Adapter {
     Filesystem(FilesystemAdapter),

@@ -542,7 +542,7 @@ impl Config {
                     .chain(args),
             )?;
         let mut given = Vars::from_arg_matches(&matches)?;
-        // A signed URL is a storage credential; unverified claims must not obtain one (ADR-0013).
+        // A signed URL is a storage credential; unverified claims must not obtain one.
         if given.enable_direct_downloads
             && given.skip_token_validation
             && !given.unsafe_allow_direct_downloads_without_token_validation

@@ -1,4 +1,4 @@
-//! Stores the hash of each upload's capability, which its URL must carry (ADR-0012).
+//! Stores the hash of each upload's capability, which its URL must carry.
 
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::schema::char_len_null;

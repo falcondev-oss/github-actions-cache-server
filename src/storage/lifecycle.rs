@@ -1,4 +1,4 @@
-//! Deletion guards shared by cleanup, eviction and self-healing (ADR-0001, ADR-0002).
+//! Deletion guards shared by cleanup, eviction and self-healing.
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::{Expr, ExprTrait as _};
@@ -82,7 +82,7 @@ pub(crate) enum LocationDeletion {
     Deleted,
     /// Already gone, e.g. deleted concurrently.
     Missing,
-    /// A Storage Reader Lease protects it (ADR-0002).
+    /// A Storage Reader Lease protects it.
     InUse,
 }
 
