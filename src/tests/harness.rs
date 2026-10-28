@@ -345,7 +345,7 @@ pub(crate) fn identity(key: &str) -> EntryIdentity {
 
 /// Saves `parts` as one upload through the storage API and returns its storage location.
 pub(crate) async fn save_parts(storage: &Storage, key: &str, parts: &[Vec<u8>]) -> StorageLocation {
-    let crate::storage::CreatedUpload::Created { id } =
+    let crate::storage::CreatedUpload::Created { upload, .. } =
         storage.create_upload(&identity(key)).await.unwrap()
     else {
         panic!("upload for {key} already exists");
@@ -354,7 +354,7 @@ pub(crate) async fn save_parts(storage: &Storage, key: &str, parts: &[Vec<u8>]) 
         let index = u32::try_from(index).unwrap();
         storage
             .upload_part(
-                id,
+                &upload,
                 index,
                 byte_stream(part.clone()),
                 u64::try_from(part.len()).ok(),

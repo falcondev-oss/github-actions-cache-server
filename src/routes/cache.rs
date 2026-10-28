@@ -63,14 +63,17 @@ impl crate::twirp::CacheService for AppState {
         let CreateCacheEntryRequest { key, version } = req.into_body();
         let identity = save_identity(&scope, key, version)?;
         match self.storage.create_upload(&identity).await? {
-            CreatedUpload::Created { id } => Ok(twirp::Response::new(CreateCacheEntryResponse {
-                ok: true,
-                signed_upload_url: format!(
-                    "{}/devstoreaccount1/upload/{id}",
-                    self.config.api_base_url
-                ),
-                message: String::new(),
-            })),
+            CreatedUpload::Created { upload, capability } => {
+                Ok(twirp::Response::new(CreateCacheEntryResponse {
+                    ok: true,
+                    // The capability is base64url, so it needs no escaping.
+                    signed_upload_url: format!(
+                        "{}/devstoreaccount1/upload/{}?sig={capability}",
+                        self.config.api_base_url, upload.id
+                    ),
+                    message: String::new(),
+                }))
+            }
             // GitHub answers a duplicate reservation with 409, not 200 with ok: false.
             CreatedUpload::AlreadyExists => Err(twirp::already_exists(
                 "cache entry with the same key, version, and scope already exists",

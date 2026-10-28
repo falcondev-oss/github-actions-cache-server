@@ -173,8 +173,9 @@ async fn speaks_protobuf_twirp() {
     assert!(
         created
             .signed_upload_url
-            .contains("/devstoreaccount1/upload/"),
-        "upload url"
+            .contains("/devstoreaccount1/upload/")
+            && created.signed_upload_url.contains("?sig="),
+        "upload url with its capability"
     );
 
     // Twirp errors are JSON even when the request was protobuf.
