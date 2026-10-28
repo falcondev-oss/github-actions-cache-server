@@ -305,32 +305,19 @@ fn rejection_reason(error: &Failure) -> String {
     let Failure::Token(error) = error else {
         return error.to_string();
     };
-    match error.kind() {
-        ErrorKind::MissingRequiredClaim(claim) => format!("missing claim `{claim}`"),
-        ErrorKind::InvalidClaimFormat(claim) => format!("invalid claim `{claim}`"),
-        ErrorKind::Json(_) | ErrorKind::Base64(_) | ErrorKind::Utf8(_) => {
-            "malformed token".to_owned()
-        }
-        ErrorKind::InvalidToken
-        | ErrorKind::InvalidSignature
-        | ErrorKind::InvalidEcdsaKey
-        | ErrorKind::InvalidEddsaKey
-        | ErrorKind::InvalidRsaKey(_)
-        | ErrorKind::RsaFailedSigning
-        | ErrorKind::Signing(_)
-        | ErrorKind::InvalidAlgorithmName
-        | ErrorKind::UnsupportedAlgorithm
-        | ErrorKind::InvalidKeyFormat
-        | ErrorKind::ExpiredSignature
-        | ErrorKind::InvalidIssuer
-        | ErrorKind::InvalidAudience
-        | ErrorKind::InvalidSubject
-        | ErrorKind::ImmatureSignature
-        | ErrorKind::InvalidAlgorithm
-        | ErrorKind::MissingAlgorithm
-        | ErrorKind::Provider(_)
-        | _ => error.to_string(),
+    if let ErrorKind::MissingRequiredClaim(claim) = error.kind() {
+        return format!("missing claim `{claim}`");
     }
+    if let ErrorKind::InvalidClaimFormat(claim) = error.kind() {
+        return format!("invalid claim `{claim}`");
+    }
+    if matches!(
+        error.kind(),
+        ErrorKind::Json(_) | ErrorKind::Base64(_) | ErrorKind::Utf8(_)
+    ) {
+        return "malformed token".to_owned();
+    }
+    error.to_string()
 }
 
 #[cfg(test)]

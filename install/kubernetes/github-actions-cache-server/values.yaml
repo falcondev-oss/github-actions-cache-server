@@ -28,6 +28,10 @@ config:
   # The runner must be able to reach the storage provider directly.
   enableDirectDownloads: false
 
+  # -- Seconds a signed direct-download URL stays valid, 1 to 3600. Lower limits
+  # replay of a leaked URL; clients that fetch a URL late (BuildKit) need more.
+  directDownloadUrlTtlSeconds: 600
+
   # -- Merge cache parts right after upload instead of on first download, so
   # the first restore can be a direct download. On object storage the parts
   # stream through the server; on the filesystem the merge is a kernel copy.

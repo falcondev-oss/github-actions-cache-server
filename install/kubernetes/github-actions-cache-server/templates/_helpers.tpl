@@ -125,6 +125,8 @@ Generate environment variables from config values.
   value: {{ default (printf "http://%s.%s.svc.cluster.local:%v" (include "github-actions-cache-server.fullname" .) .Release.Namespace .Values.service.port) .Values.config.apiBaseUrl | quote }}
 - name: ENABLE_DIRECT_DOWNLOADS
   value: {{ .Values.config.enableDirectDownloads | quote }}
+- name: DIRECT_DOWNLOAD_URL_TTL_SECONDS
+  value: {{ .Values.config.directDownloadUrlTtlSeconds | quote }}
 - name: EAGER_MERGE
   value: {{ .Values.config.eagerMerge | quote }}
 - name: MAX_CONCURRENT_MERGES
