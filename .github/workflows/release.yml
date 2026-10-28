@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version-file: package.json
+          node-version: lts/*
 
       - name: ⬆️ Bump version
         if: github.event_name == 'workflow_dispatch'
@@ -63,13 +63,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          npx bumpp ${{ env[inputs.version] }} -y -r --commit "chore(release): v%s" --no-push
-
-          export VERSION=$(node -p "require('./package.json').version")
-          node scripts/release-metadata.mjs bump ${{ inputs.chart_version }}
-          git stage install/kubernetes/github-actions-cache-server/Chart.yaml
-          git commit -n --no-edit --amend
-          git tag -f "v$VERSION"
+          VERSION=$(node scripts/release-metadata.mjs bump ${{ env[inputs.version] }} ${{ inputs.chart_version }})
+          git commit -n -am "chore(release): v$VERSION"
+          git tag "v$VERSION"
 
           echo "RELEASE_REF=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -145,9 +141,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -159,31 +152,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
-      - name: Extract metadata (tags, labels) for Docker (caged)
-        id: meta-caged
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository }}
-          flavor: |
-            latest=false
-          tags: |
-            type=semver,pattern={{version}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
-            type=semver,pattern={{major}}.{{minor}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
-            type=semver,pattern={{major}}-caged,value=${{ needs.release.outputs.RELEASE_TAG }}
-            latest-caged
-            dev-caged
-
-      - name: Build and push (caged)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-caged.outputs.tags }}
-          labels: ${{ steps.meta-caged.outputs.labels }}
-          build-args: |
-            BASE_IMAGE=platformatic/node-caged:26.12.1-alpine
 
   deploy-chart:
     name: 🚀 Build and push Helm chart

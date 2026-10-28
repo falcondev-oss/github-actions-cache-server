@@ -1,0 +1,60 @@
+//! HTTP routes and the state they share.
+
+mod cache;
+mod management;
+mod passthrough;
+mod transfer;
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::routing::{any, put};
+use tower_http::limit::RequestBodyLimitLayer;
+
+use crate::cleanup::Cleanup;
+use crate::config::Config;
+use crate::http::log_requests;
+use crate::metrics::Metrics;
+use crate::scope::TokenVerifier;
+use crate::storage::Storage;
+
+/// Everything a request handler can reach.
+#[derive(Debug, Clone)]
+pub(crate) struct AppState {
+    pub(crate) config: Arc<Config>,
+    pub(crate) storage: Arc<Storage>,
+    pub(crate) verifier: Arc<TokenVerifier>,
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) cleanup: Arc<Cleanup>,
+    pub(crate) http: reqwest::Client,
+}
+
+/// axum's default body limit, which the handlers had before twirp-rs.
+const TWIRP_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+pub(crate) fn router(state: AppState) -> Router {
+    let debug = state.config.debug;
+    let router = Router::new()
+        .route("/", any(|| async { "OK" }))
+        .route("/health", any(|| async { "healthy" }))
+        .route("/metrics", any(cache::metrics))
+        .route(
+            "/devstoreaccount1/upload/{upload_id}",
+            put(transfer::upload),
+        )
+        .route("/upload/{upload_id}", put(transfer::upload))
+        .route("/download/{location_id}", any(transfer::download))
+        .nest("/management-api", management::router(&state.config))
+        .fallback(passthrough::forward)
+        .with_state(state.clone())
+        // twirp-rs buffers the whole body before a handler checks the token.
+        .nest(
+            "/twirp",
+            crate::twirp::router(state).layer(RequestBodyLimitLayer::new(TWIRP_BODY_LIMIT)),
+        );
+    if debug {
+        router.layer(axum::middleware::from_fn(log_requests))
+    } else {
+        router
+    }
+}

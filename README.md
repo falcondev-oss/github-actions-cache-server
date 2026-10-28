@@ -1,13 +1,33 @@
 # 🚀 GitHub Actions Cache Server
 
-This is a drop-in replacement for the official GitHub hosted cache server. It is compatible with the official `actions/cache` action, so there is no need to change your workflow files and it even works with packages that internally use `actions/cache`.
+A self-hosted, drop-in replacement for GitHub's cache service, written in Rust. Point your self-hosted runners at it and every `actions/cache` step, `setup-*` cache and `docker buildx` `type=gha` cache stays on your own hardware. No workflow changes.
+
+|                                 | GitHub Actions Cache Server |
+| ------------------------------- | --------------------------- |
+| Image size                      | 29 MB                       |
+| Startup to healthy              | 0.5 s                       |
+| Idle memory                     | 3 MiB                       |
+| Upload (8 × 128 MiB, parallel)  | 2.3 GiB/s                   |
+| First download                  | 7.9 GiB/s                   |
+| Lookups (64 concurrent)         | 34,000/s, p99 7 ms          |
+| Small save + restore (256 KiB)  | 1,143/s                     |
+
+<sub>SQLite + filesystem on a Ryzen 9 5950X with NVMe. Reproduce with `cargo run --release --example benchmark`.</sub>
 
 ## Features
 
-- 🔥 **Compatible with official `actions/cache` action**
-- 📦 Supports multiple storage solutions and is easily extendable.
-- 🔒 Secure and self-hosted, giving you full control over your cache data.
-- 😎 Easy setup
+- 🔥 **Works with everything that uses the cache**: `actions/cache`, `actions/setup-node` & friends, BuildKit `type=gha`, any tool built on `@actions/cache`
+- 🗄️ **Your storage**: filesystem, S3 (RustFS, MinIO, R2, ...), Google Cloud Storage or Azure Blob Storage
+- 🐘 **Your database**: SQLite, PostgreSQL or MySQL
+- 🔒 **Secure by default**: verifies the runner's OIDC token, scopes every cache to its repository, signs each upload URL
+- ⚡ **Direct downloads**: optionally hand runners a signed storage URL so restores skip the server
+- 🧹 **Runs itself**: age- and size-based eviction, orphan cleanup, self-healing when storage drifts
+- 📊 **Observable**: Prometheus `/metrics`, `/health`, management API with OpenAPI docs
+- ☸️ **Deploy anywhere**: multi-arch image (amd64/arm64), Docker Compose or Helm, GitHub Enterprise Server
+
+## Quick start
+
+**1. Run the server**
 
 ```yaml
 services:
@@ -17,28 +37,24 @@ services:
       - '3000:3000'
     environment:
       API_BASE_URL: http://localhost:3000
-      STORAGE_DRIVER: filesystem
-      STORAGE_FILESYSTEM_PATH: /data/cache
-      DB_DRIVER: sqlite
-      DB_SQLITE_PATH: /data/cache-server.db
     volumes:
-      - cache-data:/data
+      - cache-data:/app/.data
 
 volumes:
   cache-data:
 ```
 
-## Resource limits
+**2. Point your runners at it**
 
-All optional.
+Swap the runner image for our fork and set one variable:
 
-| Variable                              | Default  | Effect                                                                                                                                            |
-| ------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STORAGE_S3_MAX_SOCKETS`              | `50`     | Sockets per S3 data pool, for `http://` and `https://` endpoints alike. Reads (GetObject) and writes (uploads, Merges) each get a pool this size. |
-| `STORAGE_S3_CONTROL_MAX_SOCKETS`      | `16`     | Sockets for HEAD, LIST and DELETE requests (cache lookups, cleanup), kept apart from bulk transfers.                                              |
-| `STORAGE_S3_CONTROL_QUEUE_TIMEOUT_MS` | `5000`   | How long each attempt of a control request waits for a socket and connection; `0` waits forever.                                                  |
-| `MAX_CONCURRENT_MERGES`               | `16`     | Merges one process runs at once, eager or lazy. Beyond it, restores stream the parts and a later download merges.                                 |
-| `DOWNLOAD_IDLE_TIMEOUT_MS`            | `300000` | Closes a download whose storage read has not moved for this long (client stopped reading); `0` disables.                                          |
+```yaml
+image: ghcr.io/falcondev-oss/actions-runner:latest
+env:
+  CUSTOM_ACTIONS_RESULTS_URL: http://cache-server:3000/
+```
+
+**3. There is no step 3.** Your workflows already use it.
 
 ## Documentation
 

@@ -1,23 +1,34 @@
 ## Commit gate
 
-`pnpm lint` and `pnpm type-check` pass clean, and `pnpm test:run` is green for every driver combo your change touches. The pre-push hook in `.githooks/` runs lint and type-check; `pnpm install` wires it up. `pnpm lint:fix` applies ESLint and Prettier fixes. Prettier also checks Markdown, YAML and JSON, so run the gate after docs-only edits too.
+`cargo +nightly fmt --check` and `cargo clippy --all-targets --locked` pass clean, and `cargo test` is green for every driver combo your change touches. The pre-push hook in `.githooks/` runs fmt and clippy; wire it up once per clone with `git config core.hooksPath .githooks`. Release tooling changes also need `node --test scripts/*.test.mjs`.
+
+## Performance
+
+Speed and a small memory footprint are why this server exists, so every change keeps them. Hot paths (block uploads, downloads, lookups) stream payloads and spend no more database round trips than the request needs. A change to a hot path runs the benchmark (see Commands) against an image of the base branch, and the PR reports both results.
 
 ## Tests
 
-`tests/setup.ts` builds the server, serves it on port 3000 and starts the database and storage containers through testcontainers. Pick the combo with `VITEST_DB_DRIVER` (`sqlite` default, `postgres`, `mysql`) and `VITEST_STORAGE_DRIVER` (`filesystem` default, `s3`, `gcs`, `azblob`), and pass test files as arguments:
+Every test starts its own server on a free port. `cargo test` alone runs against SQLite and filesystem storage. For another combo, start its services with `scripts/test-services.sh <db> <storage>` (`sqlite`, `postgres`, `mysql` × `filesystem`, `s3`, `gcs`, `azblob`), then pick it with `TEST_DB_DRIVER` and `TEST_STORAGE_DRIVER`:
 
 ```sh
-pnpm test:run tests/range-download.test.ts
-VITEST_DB_DRIVER=postgres VITEST_STORAGE_DRIVER=s3 pnpm test:run tests/s3-storage.test.ts
+cargo test downloads
+scripts/test-services.sh postgres s3
+TEST_DB_DRIVER=postgres TEST_STORAGE_DRIVER=s3 cargo test
 ```
 
-`pnpm test:matrix` runs all 12 combos in sequence; CI runs them as a parallel matrix.
+CI runs all 12 combos as a parallel matrix.
 
-The server and containers bind fixed host ports: 3000 (server), 5432 (postgres), 3306 (mysql), 9000 (s3, gcs), 10000 (azblob). Run one test run per machine at a time: stop `pnpm dev` and test runs in other worktrees first, and confirm the ports are free with `ss -ltn`. `EADDRINUSE` or a container port-bind error means a collision, so free the port and rerun.
+The service containers are named `gha-test-<service>` and bind fixed host ports: 5432 (postgres), 3306 (mysql), 9000 (s3), 4443 (gcs), 10000 (azblob). The script doesn't remove them; `docker rm -f` a leftover container before rerunning it. When a port is taken by another worktree, override it with `TEST_<SERVICE>_PORT` (e.g. `TEST_POSTGRES_PORT=5433`) for both the script and `cargo test`.
 
 ## External contributions
 
 External contributions are disabled. If you are not working for a maintainer, report findings as GitHub issues instead of implementing changes or opening PRs. Each issue covers exactly one bug or feature; file separate issues for unrelated ones.
+
+## Commands
+
+- `cargo +nightly fmt` formats; the rules in `rustfmt.toml` need nightly rustfmt.
+- `cargo clippy --all-targets` lints; `Cargo.toml` denies a strict lint set, and exceptions are `#[expect(lint, reason = "...")]`, never `#[allow]`.
+- `cargo run --release --example benchmark -- label=image ...` compares server images (startup, memory, CPU, transfer speed, lookup latency); it needs Docker with cgroup v2.
 
 ## Agent skills
 

@@ -1,8 +1,0 @@
-dist/
-.nuxt/
-.output/
-.temp/
-
-pnpm-lock.yaml
-data/
-install/

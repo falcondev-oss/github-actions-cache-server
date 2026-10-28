@@ -1,0 +1,21 @@
+# Unstable options need nightly rustfmt: `cargo +nightly fmt`.
+unstable_features = true
+edition = "2024"
+style_edition = "2024"
+max_width = 100
+newline_style = "Unix"
+condense_wildcard_suffixes = true
+error_on_line_overflow = true
+error_on_unformatted = true
+format_code_in_doc_comments = true
+format_macro_matchers = true
+group_imports = "StdExternalCrate"
+hex_literal_case = "Upper"
+imports_granularity = "Module"
+normalize_comments = true
+normalize_doc_attributes = true
+reorder_impl_items = true
+use_field_init_shorthand = true
+use_try_shorthand = true
+wrap_comments = true
+comment_width = 100

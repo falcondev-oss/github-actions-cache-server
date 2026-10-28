@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fast commit gate: lint (ESLint + Prettier) and type-check. The test matrix runs in CI.
+# Fast commit gate: format check and clippy. The test matrix runs in CI.
 set -e
-pnpm run lint
-pnpm run type-check
+cargo +nightly fmt --check
+cargo clippy --all-targets --locked
