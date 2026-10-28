@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "github-actions-cache-server"
-version = "9.10.0"
+version = "10.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
