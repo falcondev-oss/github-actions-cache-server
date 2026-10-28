@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::body::Bytes;
 use base64::Engine as _;
@@ -37,7 +36,7 @@ pub(crate) use self::adapter::{
     UploadKind,
 };
 use self::leases::{
-    DIRECT_DOWNLOAD_LEASE_DURATION, LEASE_DURATION, LEASE_RENEWAL, acquire_merge_lease,
+    DIRECT_DOWNLOAD_LEASE_MARGIN, LEASE_DURATION, LEASE_RENEWAL, acquire_merge_lease,
     create_reader_lease, deadline, release_merge_lease, release_reader_lease, renew_merge_lease,
     renew_reader_lease,
 };
@@ -1053,10 +1052,10 @@ impl Storage {
                 }));
             };
 
-            // An entry in one object with direct downloads enabled: take a reader lease bounded by
-            // the signed URL lifetime, then sign. One deadline bounds both, so the URL never
-            // outlives the lease.
-            let expires_at = deadline(DIRECT_DOWNLOAD_LEASE_DURATION);
+            // An entry in one object with direct downloads enabled: take a reader lease that
+            // outlives the signed URL by a margin, then sign (ADR-0002).
+            let url_ttl = self.config.direct_download_url_ttl;
+            let expires_at = deadline(url_ttl.saturating_add(DIRECT_DOWNLOAD_LEASE_MARGIN));
             let tx = self.db.pool.begin().await?;
             let current = storage_locations::Entity::find_by_id(location.id.as_str())
                 .lock_exclusive()
@@ -1072,16 +1071,7 @@ impl Storage {
 
             // The merge could have been undone between validation and the lease read.
             let download_url = match whole {
-                Some((object, _)) => {
-                    store
-                        .create_download_url(
-                            &object,
-                            Duration::from_millis(
-                                u64::try_from(expires_at.saturating_sub(now_ms())).unwrap_or(0),
-                            ),
-                        )
-                        .await?
-                }
+                Some((object, _)) => store.create_download_url(&object, url_ttl).await?,
                 None => default_url,
             };
             return Ok(Some(DownloadUrlMatch {

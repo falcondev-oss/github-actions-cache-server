@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
+use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::jwk::{
     AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyOperations, PublicKeyUse,
 };
@@ -15,8 +16,10 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::config::Config;
 use crate::error::{Failure, Result};
 
+/// Permission bit that allows restoring from a scope.
+const READ_PERMISSION: u32 = 1;
 /// Permission bit that allows saving to a scope.
-const WRITE_PERMISSION: i64 = 2;
+const WRITE_PERMISSION: u32 = 2;
 
 /// A cache scope the token grants, with its permission bits.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -24,7 +27,7 @@ pub(crate) struct ScopeGrant {
     #[serde(rename = "Scope")]
     pub(crate) scope: String,
     #[serde(rename = "Permission")]
-    pub(crate) permission: i64,
+    pub(crate) permission: u32,
 }
 
 /// Scopes and repository a request may access.
@@ -39,12 +42,17 @@ impl CacheScope {
     pub(crate) fn write_scope(&self) -> Option<&ScopeGrant> {
         self.scopes
             .iter()
-            .find(|grant| grant.permission >= WRITE_PERMISSION)
+            .find(|grant| grant.permission & WRITE_PERMISSION != 0)
     }
 
-    /// Scope names by descending permission, the order restores search them in.
+    /// Readable scope names by descending permission, the order restores search them in.
     pub(crate) fn read_scopes(&self) -> Vec<String> {
-        let mut grants = self.scopes.clone();
+        let mut grants: Vec<ScopeGrant> = self
+            .scopes
+            .iter()
+            .filter(|grant| grant.permission & READ_PERMISSION != 0)
+            .cloned()
+            .collect();
         grants.sort_by_key(|grant| std::cmp::Reverse(grant.permission));
         grants.into_iter().map(|grant| grant.scope).collect()
     }
@@ -152,6 +160,7 @@ fn selects(jwk: &Jwk, header: &Header) -> bool {
 #[derive(Debug)]
 pub(crate) struct TokenVerifier {
     issuer: String,
+    audience: Option<Vec<String>>,
     skip_validation: bool,
     http: reqwest::Client,
     override_jwks: Option<Arc<RemoteJwks>>,
@@ -173,6 +182,7 @@ impl TokenVerifier {
                 .map(|url| RemoteJwks::new(url.to_string())),
             discovered_jwks: OnceCell::new(),
             skip_validation: config.skip_token_validation,
+            audience: config.actions_token_audience.clone(),
             issuer,
             http: reqwest::Client::builder().timeout(FETCH_TIMEOUT).build()?,
         })
@@ -230,14 +240,19 @@ impl TokenVerifier {
         }
         let header = jsonwebtoken::decode_header(token)?;
         let keys = self.jwks().await.keys(&self.http, &header).await?;
-        // Like the original server's `jose`: the issuer is required, `exp` and `nbf` are checked
-        // when present without leeway, and the audience is not checked.
+        // The issuer and `exp` are required, `nbf` is checked when present, all without leeway.
+        // The audience is checked only when configured, and then required.
         let mut validation = Validation::new(header.alg);
         validation.set_issuer(&[&self.issuer]);
-        validation.set_required_spec_claims(&["iss"]);
         validation.validate_nbf = true;
-        validation.validate_aud = false;
         validation.leeway = 0;
+        if let Some(audience) = &self.audience {
+            validation.set_audience(audience);
+            validation.set_required_spec_claims(&["iss", "exp", "aud"]);
+        } else {
+            validation.validate_aud = false;
+            validation.set_required_spec_claims(&["iss", "exp"]);
+        }
         // Without a `kid`, several keys can match; like `jose`, the first that verifies wins.
         let mut verified = Err(Failure::msg("no matching key in JWKS"));
         for jwk in &keys {
@@ -263,7 +278,7 @@ impl TokenVerifier {
             .and_then(|value| value.strip_prefix("Bearer "))
             .ok_or(Unauthorized("Authorization header missing or malformed"))?;
         let claims = self.claims(token).await.map_err(|error| {
-            tracing::debug!(%error, "invalid token");
+            tracing::debug!(reason = rejection_reason(&error), "invalid token");
             Unauthorized("Invalid token")
         })?;
         let Some(scopes) = claims.ac.filter(|ac| !ac.is_empty()) else {
@@ -274,10 +289,47 @@ impl TokenVerifier {
         if scopes.is_empty() {
             return Err(Unauthorized("Token does not contain any cache scopes"));
         }
+        if scopes.iter().any(|grant| grant.scope.is_empty()) {
+            return Err(Unauthorized("Invalid cache scopes"));
+        }
         let Some(repo_id) = claims.repository_id.filter(|id| !id.is_empty()) else {
             return Err(Unauthorized("Token does not contain repository id"));
         };
         Ok(CacheScope { scopes, repo_id })
+    }
+}
+
+/// Why a token was rejected, without the token or its claims: JSON errors quote the values they
+/// failed on.
+fn rejection_reason(error: &Failure) -> String {
+    let Failure::Token(error) = error else {
+        return error.to_string();
+    };
+    match error.kind() {
+        ErrorKind::MissingRequiredClaim(claim) => format!("missing claim `{claim}`"),
+        ErrorKind::InvalidClaimFormat(claim) => format!("invalid claim `{claim}`"),
+        ErrorKind::Json(_) | ErrorKind::Base64(_) | ErrorKind::Utf8(_) => {
+            "malformed token".to_owned()
+        }
+        ErrorKind::InvalidToken
+        | ErrorKind::InvalidSignature
+        | ErrorKind::InvalidEcdsaKey
+        | ErrorKind::InvalidEddsaKey
+        | ErrorKind::InvalidRsaKey(_)
+        | ErrorKind::RsaFailedSigning
+        | ErrorKind::Signing(_)
+        | ErrorKind::InvalidAlgorithmName
+        | ErrorKind::UnsupportedAlgorithm
+        | ErrorKind::InvalidKeyFormat
+        | ErrorKind::ExpiredSignature
+        | ErrorKind::InvalidIssuer
+        | ErrorKind::InvalidAudience
+        | ErrorKind::InvalidSubject
+        | ErrorKind::ImmatureSignature
+        | ErrorKind::InvalidAlgorithm
+        | ErrorKind::MissingAlgorithm
+        | ErrorKind::Provider(_)
+        | _ => error.to_string(),
     }
 }
 
