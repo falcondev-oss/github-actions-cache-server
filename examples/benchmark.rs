@@ -198,7 +198,8 @@ impl Client {
             let len = remaining.min(BLOCK_BYTES);
             let block_id = BASE64.encode(format!("{}{index:012}", uuid::Uuid::new_v4()));
             self.http
-                .put(format!("{url}?comp=block&blockid={}", urlencode(&block_id)))
+                .put(url)
+                .query(&[("comp", "block"), ("blockid", &block_id)])
                 .body(block.slice(..len as usize))
                 .send()
                 .await?
@@ -207,7 +208,8 @@ impl Client {
             index += 1;
         }
         self.http
-            .put(format!("{url}?comp=blocklist"))
+            .put(url)
+            .query(&[("comp", "blocklist")])
             .body("")
             .send()
             .await?
@@ -252,13 +254,6 @@ impl Client {
             })
             .await?)
     }
-}
-
-fn urlencode(value: &str) -> String {
-    value
-        .replace('+', "%2B")
-        .replace('/', "%2F")
-        .replace('=', "%3D")
 }
 
 fn token() -> Result<String> {
