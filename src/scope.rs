@@ -1,4 +1,4 @@
-//! Authorization from the GitHub Actions runtime token (ADR-0006).
+//! Authorization from the GitHub Actions runtime token.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

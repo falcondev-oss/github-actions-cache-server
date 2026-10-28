@@ -100,7 +100,7 @@ pub(crate) mod uploads {
 pub(crate) mod merge_leases {
     use sea_orm::entity::prelude::*;
 
-    /// Grants one worker the Merge of a storage location (ADR-0002).
+    /// Grants one worker the Merge of a storage location.
     #[sea_orm::model]
     #[derive(Debug, Clone, PartialEq, Eq, DeriveEntityModel)]
     #[sea_orm(table_name = "merge_leases", rename_all = "camelCase")]
@@ -117,7 +117,7 @@ pub(crate) mod merge_leases {
 pub(crate) mod storage_reader_leases {
     use sea_orm::entity::prelude::*;
 
-    /// Protects a storage location from deletion while it is read (ADR-0002).
+    /// Protects a storage location from deletion while it is read.
     #[sea_orm::model]
     #[derive(Debug, Clone, PartialEq, Eq, DeriveEntityModel)]
     #[sea_orm(table_name = "storage_reader_leases", rename_all = "camelCase")]

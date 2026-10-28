@@ -1,4 +1,4 @@
-//! Merge Leases and Storage Reader Leases (ADR-0002).
+//! Merge Leases and Storage Reader Leases.
 
 use std::time::Duration;
 

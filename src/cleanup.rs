@@ -434,7 +434,7 @@ fn folders(
 }
 
 /// Deletes stored folders that no database record authorizes once they are older than the grace
-/// period (ADR-0001), as of `now`.
+/// period, as of `now`.
 pub(crate) async fn reconcile_orphaned_storage(
     storage: &Storage,
     grace_period: Duration,
