@@ -2,6 +2,10 @@
 
 `cargo +nightly fmt --check` and `cargo clippy --all-targets --locked` pass clean, and `cargo test` is green for every driver combo your change touches. The pre-push hook in `.githooks/` runs fmt and clippy; wire it up once per clone with `git config core.hooksPath .githooks`. Release tooling changes also need `node --test scripts/*.test.mjs`.
 
+## Performance
+
+Speed and a small memory footprint are why this server exists, so every change keeps them. Hot paths (block uploads, downloads, lookups) stream payloads and spend no more database round trips than the request needs. A change to a hot path runs the benchmark (see Commands) against an image of the base branch, and the PR reports both results.
+
 ## Tests
 
 Every test starts its own server on a free port. `cargo test` alone runs against SQLite and filesystem storage. For another combo, start its services with `scripts/test-services.sh <db> <storage>` (`sqlite`, `postgres`, `mysql` × `filesystem`, `s3`, `gcs`, `azblob`), then pick it with `TEST_DB_DRIVER` and `TEST_STORAGE_DRIVER`:
