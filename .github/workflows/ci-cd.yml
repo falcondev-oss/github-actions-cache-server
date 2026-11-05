@@ -5,9 +5,13 @@ on:
   push:
     branches:
       - '**'
+    paths-ignore: &docs
+      - website/**
+      - '**.md'
   pull_request:
     branches:
       - dev
+    paths-ignore: *docs
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
