@@ -15,7 +15,7 @@ export default defineConfig({
       description:
         'Self-hosted GitHub Actions cache server written in Rust. Drop-in replacement for the GitHub cache backend: actions/cache, setup-* caches and BuildKit type=gha work unchanged on self-hosted and ephemeral runners.',
       logo: { src: './src/assets/logo.svg' },
-      favicon: '/favicon.svg',
+      favicon: '/logo.svg',
       social: [{ icon: 'github', label: 'GitHub', href: repo }],
       editLink: { baseUrl: `${repo}/edit/dev/website/` },
       lastUpdated: true,

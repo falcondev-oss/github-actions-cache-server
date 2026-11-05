@@ -32,7 +32,7 @@ External contributions are disabled. If you are not working for a maintainer, re
 
 ## Docs
 
-The docs site in `website/` is Astro Starlight, deployed to Cloudflare Workers by `.github/workflows/docs.yml`. Pages are Markdown in `website/src/content/docs/`; the sidebar and `llms.txt` both read `website/src/sidebar.ts`, so a new page goes there too. A change to configuration, drivers or runner setup updates the matching page in the same PR. Check with `pnpm check && pnpm build` in `website/`, and look at layout changes with `pnpm preview`.
+The docs site in `website/` is Astro Starlight on Cloudflare Workers. Cloudflare's Git integration (Workers Builds) runs `pnpm check && pnpm build` and deploys `dev`; every other branch gets a preview URL. Pages are Markdown in `website/src/content/docs/`; the sidebar and `llms.txt` both read `website/src/sidebar.ts`, so a new page goes there too. A change to configuration, drivers or runner setup updates the matching page in the same PR. Check with `pnpm check && pnpm build` in `website/`, and look at layout changes with `pnpm preview`.
 
 ## Agent skills
 
