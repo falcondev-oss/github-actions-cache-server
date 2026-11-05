@@ -1,0 +1,529 @@
+---
+import { Code } from '@astrojs/starlight/components'
+import CopyLine from './CopyLine.astro'
+import Flow from './Flow.astro'
+import PromptButton from './PromptButton.astro'
+import Speed from './Speed.astro'
+
+const repo = 'https://github.com/falcondev-oss/github-actions-cache-server'
+
+// Best effort: the star count is decoration, a failed request just hides it.
+const stars = await fetch('https://api.github.com/repos/falcondev-oss/github-actions-cache-server', {
+  signal: AbortSignal.timeout(3000),
+})
+  .then((response) => (response.ok ? (response.json() as Promise<{ stargazers_count: number }>) : undefined))
+  .then((repository) => repository?.stargazers_count)
+  .catch(() => undefined)
+
+
+const serverYaml = `services:
+  cache-server:
+    image: ghcr.io/falcondev-oss/github-actions-cache-server
+    ports: ['3000:3000']
+    environment:
+      API_BASE_URL: http://cache-server:3000
+    volumes: ['cache-data:/app/.data']
+volumes:
+  cache-data:`
+
+const runnerYaml = `# your runner, ARC scale set or container
+image: ghcr.io/falcondev-oss/actions-runner
+env:
+  CUSTOM_ACTIONS_RESULTS_URL: http://cache-server:3000/`
+
+const workflowYaml = `- uses: actions/setup-node@v6
+  with:
+    cache: npm
+- uses: actions/cache@v4
+  with:
+    path: ~/.cargo
+    key: cargo-\${{ hashFiles('Cargo.lock') }}`
+
+const comparison = [
+  ['Cache stored', 'GitHub cloud', 'one node', 'your server'],
+  ['Workflow changes', 'none', 'every workflow', 'none'],
+  ['actions/cache, setup-*', 'yes', 'no', 'yes'],
+  ['Ephemeral runners', 'yes', 'same node only', 'yes'],
+  ['Restore speed', '~20 MB/s', 'disk', 'LAN line rate'],
+  ['Per-repo isolation', 'yes', 'no', 'yes'],
+] as const
+
+const worksWith = [
+  'actions/cache',
+  'actions/setup-node',
+  'actions/setup-python',
+  'actions/setup-go',
+  'actions/setup-java',
+  'docker buildx type=gha',
+  'Swatinem/rust-cache',
+  'any @actions/cache tool',
+]
+
+const agentPrompt =
+  'Read https://gha-cache-server.falcondev.io/llms.txt and set up the GitHub Actions Cache Server for my self-hosted runners.'
+---
+
+<div class="landing not-content">
+  <section class="hero">
+    <div class="hero-copy">
+      <h1 id="_top">Your GitHub Actions cache,<br /><em>on your own hardware.</em></h1>
+      <div class="hero-side">
+        <p class="lede">
+          A drop-in replacement for GitHub's cache service, written in Rust. <code>actions/cache</code>, <code
+            >setup-*</code
+          > caches and BuildKit <code>type=gha</code> work unchanged on self-hosted and ephemeral runners.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="/getting-started">Get started</a>
+          <PromptButton prompt={agentPrompt} />
+          <a class="button" href={repo}>
+            GitHub{stars !== undefined && <span class="stars">★ {stars.toLocaleString('en-US')}</span>}
+          </a>
+        </div>
+      </div>
+    </div>
+    <Flow />
+    <Speed />
+  </section>
+
+  <section>
+    <h2>Two steps. Your workflows stay as they are.</h2>
+    <ol class="steps">
+      <li>
+        <h3><span>1</span>Run the server</h3>
+        <Code code={serverYaml} lang="yaml" wrap title="docker-compose.yml" />
+      </li>
+      <li>
+        <h3><span>2</span>Point your runners at it</h3>
+        <Code code={runnerYaml} lang="yaml" wrap title="runner" />
+        <p>
+          The forked runner keeps your cache URL and skips self-update. Prefer the stock image? Use the <a
+            href="/getting-started#binary-patch">one-line patch</a
+          >.
+        </p>
+      </li>
+      <li>
+        <h3><span>3</span>There is no step 3</h3>
+        <Code code={workflowYaml} lang="yaml" wrap title=".github/workflows/ci.yml (unchanged)" />
+      </li>
+    </ol>
+  </section>
+
+  <section class="split">
+    <div>
+      <h2>Why not a mounted volume?</h2>
+      <p class="section-lede">
+        A <code>hostPath</code> only helps tools you point at it, on one node, shared by every repository. The cache server speaks
+        GitHub's protocol instead.
+      </p>
+      <a class="text-link" href="/guides/github-actions-cache-options">Full comparison →</a>
+    </div>
+    <table class="compare">
+      <thead>
+        <tr><th></th><th>GitHub cache</th><th>hostPath</th><th>This server</th></tr>
+      </thead>
+      <tbody>
+        {
+          comparison.map(([label, github, volume, server]) => (
+            <tr>
+              <th scope="row">{label}</th>
+              <td>{github}</td>
+              <td>{volume}</td>
+              <td>{server}</td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </section>
+
+  <section class="split">
+    <div>
+      <h2>Works with what you already run.</h2>
+      <p class="section-lede">Anything built on <code>@actions/cache</code> with the v2 cache service.</p>
+    </div>
+    <div class="matrix">
+      <dl>
+        <dt>Actions</dt>
+        <dd>{worksWith.map((name) => <code>{name}</code>)}</dd>
+        <dt>Storage</dt>
+        <dd>
+          <a href="/storage-drivers/file-system">Filesystem</a><a href="/storage-drivers/s3">S3, RustFS, MinIO, R2</a><a
+            href="/storage-drivers/google-cloud-storage">Google Cloud Storage</a
+          ><a href="/storage-drivers/azure-blob-storage">Azure Blob</a>
+        </dd>
+        <dt>Database</dt>
+        <dd>
+          <a href="/database-drivers/sqlite">SQLite</a><a href="/database-drivers/postgres">PostgreSQL</a><a
+            href="/database-drivers/mysql">MySQL</a
+          >
+        </dd>
+        <dt>Runs on</dt>
+        <dd>
+          <a href="/getting-started#docker-compose">Docker</a><a href="/getting-started#kubernetes-with-helm">Helm</a><a
+            href="/guides/actions-runner-controller">ARC</a
+          ><span>amd64, arm64</span><a href="/guides/github-enterprise-server">GHES</a>
+        </dd>
+        <dt>Operations</dt>
+        <dd>
+          <a href="/metrics">Prometheus /metrics</a><span>LRU eviction</span><span>self-healing cleanup</span><span
+            >management API</span
+          >
+        </dd>
+      </dl>
+    </div>
+  </section>
+
+  <section class="split">
+    <div>
+      <h2>Let your agent set it up.</h2>
+      <p class="section-lede">
+        Every page is plain Markdown for agents. Append <code>.md</code> to any URL, or send <code
+          >Accept: text/markdown</code
+        >.
+      </p>
+      <p class="agent-links">
+        <a href="/llms.txt">llms.txt</a><a href="/llms-full.txt">llms-full.txt</a><a href="/getting-started.md"
+          >getting-started.md</a
+        >
+      </p>
+    </div>
+    <CopyLine text={agentPrompt} prompt="›" wrap />
+  </section>
+
+  <section class="closing">
+    <h2>Ship it in two minutes.</h2>
+    <div class="actions">
+      <a class="button primary" href="/getting-started">Get started</a>
+      <a class="button" href="/guides/actions-runner-controller">ARC guide</a>
+      <a class="text-link" href="/guides/ephemeral-runners-local-cache">Ephemeral runners with a local cache →</a>
+    </div>
+    <p class="footnote">MIT licensed. Built by <a href="https://falcondev.io">falconDev</a>.</p>
+  </section>
+</div>
+
+<style>
+  :global(main:has(.landing)) {
+    overflow-x: clip;
+  }
+  :global(main:has(.landing) .sl-container) {
+    max-width: none;
+  }
+  :global(main:has(.landing) .content-panel) {
+    padding-top: 0;
+    border: 0;
+  }
+
+  .landing {
+    --gap: clamp(4rem, 9vw, 7.5rem);
+    --hairline: var(--sl-color-hairline);
+    max-width: 76rem;
+    margin-inline: auto;
+    padding-bottom: 4rem;
+  }
+
+  section {
+    margin-top: var(--gap);
+  }
+
+  h1,
+  h2,
+  h3 {
+    color: var(--sl-color-white);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.05;
+  }
+
+  h1 {
+    font-size: clamp(2.6rem, 6.2vw, 5.25rem);
+    line-height: 1.04;
+    text-wrap: balance;
+  }
+  h1 em {
+    font-style: normal;
+    background: linear-gradient(100deg, var(--sl-color-accent-high), var(--sl-color-accent) 60%);
+    background-clip: text;
+    color: transparent;
+  }
+
+  h2 {
+    font-size: clamp(1.75rem, 3.4vw, 2.6rem);
+    max-width: 22ch;
+  }
+
+  code {
+    font-family: var(--sl-font-mono);
+    font-size: 0.88em;
+    color: var(--sl-color-gray-1);
+  }
+  /* code in running text reads as code: accent tint and a dotted underline, no chip */
+  :is(.lede, .section-lede) code {
+    font-size: 0.9em;
+    color: var(--sl-color-accent-high);
+    white-space: nowrap;
+    text-decoration: underline dotted color-mix(in oklch, var(--sl-color-accent) 50%, transparent);
+    text-underline-offset: 0.3em;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  .hero {
+    position: relative;
+    display: grid;
+    gap: clamp(3rem, 6vw, 4.5rem);
+    margin-top: clamp(2.5rem, 7vw, 5.5rem);
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: -12rem -50vw -6rem;
+    z-index: -1;
+    background: radial-gradient(40rem 22rem at 72% 18%, color-mix(in oklch, var(--sl-color-accent) 16%, transparent), transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-copy {
+    display: grid;
+    gap: 2.25rem;
+  }
+  .hero-side {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2rem 4rem;
+    align-items: end;
+  }
+
+  .lede {
+    font-size: clamp(1.05rem, 1.6vw, 1.25rem);
+    line-height: 1.6;
+    color: var(--sl-color-gray-2);
+    max-width: 38rem;
+    text-wrap: pretty;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem 1.25rem;
+  }
+
+  .button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.7rem 1.15rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.4rem;
+    font-weight: 500;
+    text-decoration: none;
+    color: var(--sl-color-white);
+    transition:
+      border-color 0.15s,
+      background-color 0.15s;
+  }
+  .button:hover {
+    border-color: var(--sl-color-gray-3);
+  }
+  .button.primary {
+    background: var(--sl-color-accent);
+    border-color: var(--sl-color-accent);
+    color: oklch(99% 0 0);
+  }
+  .button.primary:hover {
+    background: color-mix(in oklch, var(--sl-color-accent) 85%, white);
+  }
+  .stars {
+    font-family: var(--sl-font-mono);
+    font-size: 0.85em;
+    color: var(--sl-color-gray-3);
+  }
+
+  .text-link {
+    color: var(--sl-color-accent-high);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .text-link:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  .footnote {
+    margin-top: 0.75rem;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .footnote a {
+    text-underline-offset: 0.2em;
+  }
+
+  .section-lede {
+    margin-top: 1rem;
+    max-width: 40rem;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-lg);
+    line-height: 1.55;
+  }
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.5rem;
+    margin: 2.5rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .steps li {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+  }
+  .steps h3 {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    font-size: var(--sl-text-xl);
+    letter-spacing: -0.02em;
+  }
+  .steps h3 span {
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-accent-high);
+  }
+  .steps p {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+  .steps :global(.expressive-code) {
+    flex: 1;
+  }
+  .steps :global(.expressive-code .frame) {
+    height: 100%;
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    gap: clamp(2rem, 5vw, 5rem);
+    align-items: start;
+  }
+  .split > div:first-child {
+    display: grid;
+    gap: 1.25rem;
+    justify-items: start;
+  }
+  .split .section-lede {
+    margin: 0;
+  }
+
+  .compare {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--sl-text-sm);
+  }
+  .compare :is(th, td) {
+    padding: 0.8rem 0.75rem 0.8rem 0;
+    border-bottom: 1px solid var(--hairline);
+    text-align: left;
+    vertical-align: top;
+  }
+  .compare thead th {
+    color: var(--sl-color-gray-3);
+    font-weight: 500;
+    font-size: var(--sl-text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .compare tbody th {
+    font-weight: 500;
+    color: var(--sl-color-gray-1);
+  }
+  .compare td {
+    color: var(--sl-color-gray-3);
+  }
+  .compare :is(td, th):last-child {
+    color: var(--sl-color-white);
+    font-weight: 500;
+  }
+  .compare thead th:last-child {
+    color: var(--sl-color-accent-high);
+  }
+
+  .matrix dl {
+    display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr);
+    margin: 0;
+    font-size: var(--sl-text-sm);
+  }
+  .matrix :is(dt, dd) {
+    margin: 0;
+    padding: 0.8rem 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .matrix dt {
+    color: var(--sl-color-gray-3);
+  }
+  .matrix dd {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.25rem;
+    color: var(--sl-color-gray-1);
+  }
+  .matrix dd a {
+    text-decoration: none;
+  }
+  .matrix dd a:hover {
+    color: var(--sl-color-accent-high);
+  }
+
+  .agent-links {
+    display: flex;
+    gap: 1.25rem;
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-sm);
+  }
+  .agent-links a {
+    color: var(--sl-color-accent-high);
+    text-decoration: none;
+  }
+  .agent-links a:hover {
+    text-decoration: underline;
+  }
+
+  .closing {
+    display: grid;
+    justify-items: center;
+    gap: 1.5rem;
+    padding-top: var(--gap);
+    border-top: 1px solid var(--hairline);
+    text-align: center;
+  }
+  .closing h2 {
+    max-width: none;
+  }
+
+  @media (max-width: 64rem) {
+    .hero-side,
+    .split {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .steps {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 34rem) {
+    .matrix dl {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .matrix dt {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+  }
+</style>

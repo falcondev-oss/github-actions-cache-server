@@ -1,0 +1,18 @@
+---
+title: Self-hosted GitHub Actions cache server
+description: 'Self-hosted GitHub Actions cache server written in Rust. Drop-in replacement for actions/cache, setup-* caches and BuildKit type=gha on self-hosted and ephemeral runners, no workflow changes. 29 MB image, 3 MiB idle memory, 7.9 GiB/s downloads.'
+template: splash
+editUrl: false
+lastUpdated: false
+head:
+  - tag: title
+    content: Self-hosted GitHub Actions cache server, no workflow changes
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: '{"@context":"https://schema.org","@type":"SoftwareApplication","name":"GitHub Actions Cache Server","description":"Self-hosted GitHub Actions cache server written in Rust. Drop-in replacement for the GitHub cache backend: actions/cache, setup-* caches and BuildKit type=gha work unchanged on self-hosted and ephemeral runners.","url":"https://gha-cache-server.falcondev.io","applicationCategory":"DeveloperApplication","operatingSystem":"Linux, Docker, Kubernetes","programmingLanguage":"Rust","license":"https://opensource.org/licenses/MIT","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"featureList":["Drop-in replacement for actions/cache, setup-* caches and BuildKit type=gha","Works with ephemeral runners and Actions Runner Controller (ARC)","29 MB image, 0.5 s startup, 3 MiB idle memory","7.9 GiB/s first download, 34,000 lookups per second","Storage: filesystem, S3 (RustFS, MinIO, R2), Google Cloud Storage, Azure Blob Storage","Database: SQLite, PostgreSQL, MySQL","OIDC-verified, per-repository scoped caches"],"sameAs":["https://github.com/falcondev-oss/github-actions-cache-server"],"author":{"@type":"Organization","name":"falconDev","url":"https://falcondev.io"}}'
+---
+
+import Landing from '../../components/landing/Landing.astro'
+
+<Landing />

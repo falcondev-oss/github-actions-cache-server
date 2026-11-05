@@ -30,6 +30,10 @@ External contributions are disabled. If you are not working for a maintainer, re
 - `cargo clippy --all-targets` lints; `Cargo.toml` denies a strict lint set, and exceptions are `#[expect(lint, reason = "...")]`, never `#[allow]`.
 - `cargo run --release --example benchmark -- label=image ...` compares server images (startup, memory, CPU, transfer speed, lookup latency); it needs Docker with cgroup v2.
 
+## Docs
+
+The docs site in `website/` is Astro Starlight on Cloudflare Workers. Cloudflare's Git integration (Workers Builds) runs `pnpm check && pnpm build` and deploys `dev`; every other branch gets a preview URL. Pages are Markdown in `website/src/content/docs/`; the sidebar and `llms.txt` both read `website/src/sidebar.ts`, so a new page goes there too. A change to configuration, drivers or runner setup updates the matching page in the same PR. Check with `pnpm check && pnpm build` in `website/`, and look at layout changes with `pnpm preview`.
+
 ## Agent skills
 
 ### Issue tracker
