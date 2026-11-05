@@ -1,11 +1,11 @@
 ---
-// Ephemeral runners come and go, every one restores from the same cache server, which streams
-// to your storage. Pure CSS/SVG: connectors are drawn in a stretched 100×100 box and the
-// rows are laid out in equal fractions, so path endpoints land on row centers at any width.
+// One cache request at a time, end to end: a packet leaves a runner, enters the cache server,
+// runs down its request path and goes on to storage. Restores come back to the runner, saves end
+// in storage, and requests without a valid token are rejected at the first stage. The tracks
+// and packets are placed from the live layout by the script below, so they line up at any width.
 const runners = ['runner-7f3k', 'runner-2c9x', 'runner-k41m'] as const
 const storage = ['local NVMe', 'S3, RustFS, MinIO, R2', 'Google Cloud Storage', 'Azure Blob'] as const
 
-// What one request passes through, in order, with what that stage costs or delivers.
 const stages = [
   { step: 'verify runner token', value: 'OIDC' },
   { step: 'scope to repo and branch', value: 'isolated' },
@@ -13,44 +13,27 @@ const stages = [
   { step: 'save via signed URL', value: '2.3 GiB/s' },
   { step: 'stream restore', value: '7.9 GiB/s' },
 ] as const
-
-const center = (index: number, count: number) => ((index + 0.5) / count) * 100
-const curve = (fromY: number, toY: number) => `M0 ${fromY} C 55 ${fromY}, 45 ${toY}, 100 ${toY}`
-const runnerPaths = runners.map((_, index) => curve(center(index, runners.length), 50))
-const storagePaths = storage.map((_, index) => curve(50, center(index, storage.length)))
 ---
 
-<figure class="flow" aria-label="Ephemeral runners restore from one cache server, which streams to your storage">
+<figure class="flow" aria-label="Runners send cache requests to the cache server, which checks each one and reads or writes your storage">
   <p class="label">Ephemeral runners</p>
   <p class="label server-label">Cache server</p>
   <p class="label storage-label">Your storage</p>
 
   <ul class="runners">
     {
-      runners.map((name, index) => (
-        <li style={`--delay: ${index * -4}s`}>
+      runners.map((name) => (
+        <li data-state="running">
           <code>{name}</code>
-          <span class="state">
-            <span class="starting">starting</span>
-            <span class="running">restoring cache</span>
-            <span class="destroyed">destroyed after 1 job</span>
-          </span>
+          <span class="state">running job</span>
         </li>
       ))
     }
+    <li class="attacker" data-state="attacker">
+      <code>unknown client</code>
+      <span class="state">no valid token</span>
+    </li>
   </ul>
-
-  <svg class="wires to-runners" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-    {
-      runnerPaths.map((d, index) => (
-        <g style={`--delay: ${index * -0.6}s`}>
-          <path class="track" d={d} />
-          <path class="restore" d={d} />
-          <path class="save" d={d} />
-        </g>
-      ))
-    }
-  </svg>
 
   <div class="server">
     <div class="server-head">
@@ -59,8 +42,8 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     </div>
     <ol class="pipeline">
       {
-        stages.map(({ step, value }, index) => (
-          <li style={`--i: ${index}`}>
+        stages.map(({ step, value }) => (
+          <li>
             <span>{step}</span>
             <b>{value}</b>
           </li>
@@ -70,33 +53,272 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     <p class="footprint"><span>29 MB image</span><span>0.5 s start</span><span>3 MiB idle</span></p>
   </div>
 
-  <svg class="wires to-storage" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-    {
-      storagePaths.map((d, index) => (
-        <g style={`--delay: ${index * -0.45}s`} class:list={{ idle: index > 0 }}>
-          <path class="track" d={d} />
-          <path class="restore" d={d} />
-        </g>
-      ))
-    }
-  </svg>
+  <ul class="storage">{storage.map((name, index) => <li class:list={{ active: index === 0 }}>{name}</li>)}</ul>
 
-  <ul class="storage">{storage.map((name) => <li>{name}</li>)}</ul>
-
-  <p class="note">ARC, Docker or VMs. One job each.</p>
+  <p class="note legend">
+    <span class="key">↓</span>restore <span class="key">↑</span>save <span class="key attack">✕</span>rejected
+  </p>
   <p class="note server-note">One static binary. Docker, Helm or ARC.</p>
-  <p class="note storage-note">Metadata in SQLite, Postgres or MySQL.</p>
+  <p class="note storage-note">One driver at a time. Metadata in SQLite, Postgres or MySQL.</p>
+
+  <svg class="tracks" aria-hidden="true"></svg>
 </figure>
+
+<script>
+  type Point = { x: number; y: number }
+  type Kind = 'restore' | 'save' | 'attack'
+  /** A route is drawn piece by piece; `at` fires when the packet reaches the end of that piece. */
+  type Piece = { to: Point; curve?: boolean; at?: () => void }
+
+  const SPEED = 280 // px per second
+  const SYMBOL: Record<Kind, string> = { restore: '↓', save: '↑', attack: '✕' }
+  const svgNs = 'http://www.w3.org/2000/svg'
+
+  const figure = document.querySelector<HTMLElement>('.flow')!
+  const tracks = figure.querySelector<SVGSVGElement>('.tracks')!
+  const runnerRows = [...figure.querySelectorAll<HTMLLIElement>('.runners li:not(.attacker)')]
+  const attackerRow = figure.querySelector<HTMLLIElement>('.runners .attacker')!
+  const stageRows = [...figure.querySelectorAll<HTMLLIElement>('.pipeline li')]
+  const storageRows = [...figure.querySelectorAll<HTMLLIElement>('.storage li')]
+  const server = figure.querySelector<HTMLElement>('.server')!
+  const pipeline = figure.querySelector<HTMLElement>('.pipeline')!
+  const footprint = figure.querySelector<HTMLElement>('.footprint')!
+  const measure = document.createElementNS(svgNs, 'path')
+
+  let activeStorage = 0
+  let geometry = layout()
+
+  function layout() {
+    const origin = figure.getBoundingClientRect()
+    const box = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        left: rect.left - origin.left,
+        right: rect.right - origin.left,
+        top: rect.top - origin.top,
+        middle: rect.top - origin.top + rect.height / 2,
+      }
+    }
+    const runnersRight = box(figure.querySelector('.runners')!).right + 8
+    const storageLeft = box(figure.querySelector('.storage')!).left - 8
+    const serverBox = box(server)
+    return {
+      width: origin.width,
+      height: origin.height,
+      runner: (row: Element): Point => ({ x: runnersRight, y: box(row).middle }),
+      storage: (row: Element): Point => ({ x: storageLeft, y: box(row).middle }),
+      stages: stageRows.map((row) => box(row).middle),
+      railX: box(pipeline).left + 3.2,
+      bottom: box(footprint).top,
+      left: serverBox.left,
+      right: serverBox.right,
+    }
+  }
+
+  function toPath(start: Point, pieces: Piece[]) {
+    let from = start
+    return pieces.map(({ to, curve }) => {
+      const mid = (from.x + to.x) / 2
+      const segment = curve ? `C ${mid} ${from.y}, ${mid} ${to.y}, ${to.x} ${to.y}` : `L ${to.x} ${to.y}`
+      from = to
+      return segment
+    })
+  }
+
+  /** Entry from a row into the top of the rail, the rail itself, and the bottom line. */
+  const entry = (): Piece[] => {
+    const { left, railX, stages } = geometry
+    return [{ to: { x: left, y: stages[0]! }, curve: true }, { to: { x: railX, y: stages[0]! } }]
+  }
+
+  function drawTracks() {
+    geometry = layout()
+    const { width, height, railX, stages, bottom, left, right } = geometry
+    tracks.setAttribute('viewBox', `0 0 ${width} ${height}`)
+    const lines: { d: string; kind: string | undefined }[] = []
+    const draw = (start: Point, pieces: Piece[], kind?: string) =>
+      lines.push({ d: `M ${start.x} ${start.y} ${toPath(start, pieces).join(' ')}`, kind })
+
+    for (const row of runnerRows) {
+      const at = geometry.runner(row)
+      draw(at, entry())
+      draw({ x: left, y: bottom }, [{ to: at, curve: true }])
+    }
+    const attacker = geometry.runner(attackerRow)
+    draw(attacker, entry(), 'attack')
+    draw({ x: railX, y: stages[0]! }, [{ to: { x: railX, y: bottom } }])
+    draw({ x: left, y: bottom }, [{ to: { x: right, y: bottom } }])
+    draw({ x: right, y: bottom }, [{ to: geometry.storage(storageRows[activeStorage]!), curve: true }])
+
+    tracks.replaceChildren(
+      ...lines.map(({ d, kind }) => {
+        const path = document.createElementNS(svgNs, 'path')
+        path.setAttribute('d', d)
+        if (kind) path.classList.add(kind)
+        return path
+      }),
+    )
+  }
+
+  /** Lights `element` in the packet's color for a moment. */
+  function flash(element: HTMLElement, color: string) {
+    element.style.setProperty('--kind', color)
+    element.classList.remove('hit')
+    void element.offsetWidth
+    element.classList.add('hit')
+    setTimeout(() => element.classList.remove('hit'), 650)
+  }
+
+  function send(kind: Kind, row: HTMLLIElement) {
+    // each packet carries its runner's color, so packets in flight can be told apart
+    const color = row.style.getPropertyValue('--runner')
+    const { railX, stages, bottom, left, right } = geometry
+    const start = geometry.runner(row)
+    const store = storageRows[activeStorage]!
+    const stage = (index: number): Piece => ({
+      to: { x: railX, y: stages[index]! },
+      at: () => flash(stageRows[index]!, color),
+    })
+
+    const pieces: Piece[] = [...entry()]
+    pieces[pieces.length - 1]!.at = () => flash(stageRows[0]!, color)
+    if (kind !== 'attack') {
+      const path = kind === 'save' ? [1, 2, 3] : [1, 2, 4]
+      pieces.push(...path.map(stage), { to: { x: railX, y: bottom } }, { to: { x: right, y: bottom } })
+      const atStorage = geometry.storage(store)
+      pieces.push({ to: atStorage, curve: true, at: () => flash(store, color) })
+      if (kind === 'restore') {
+        pieces.push(
+          { to: { x: right, y: bottom }, curve: true },
+          { to: { x: left, y: bottom } },
+          { to: start, curve: true, at: () => flash(row, color) },
+        )
+      }
+    }
+
+    const segments = toPath(start, pieces)
+    const d = `M ${start.x} ${start.y} ${segments.join(' ')}`
+    const marks = segments.map((_, index) => {
+      measure.setAttribute('d', `M ${start.x} ${start.y} ${segments.slice(0, index + 1).join(' ')}`)
+      return measure.getTotalLength()
+    })
+    const total = marks.at(-1)!
+    const duration = (total / SPEED) * 1000
+
+    const packet = document.createElement('span')
+    packet.className = 'packet'
+    packet.textContent = SYMBOL[kind]
+    packet.style.setProperty('--kind', color)
+    packet.style.offsetPath = `path("${d}")`
+    figure.append(packet)
+    flash(row, color)
+
+    pieces.forEach((piece, index) => piece.at && setTimeout(piece.at, (marks[index]! / total) * duration))
+    const animation = packet.animate([{ offsetDistance: '0%' }, { offsetDistance: '100%' }], {
+      duration,
+      easing: 'linear',
+      fill: 'forwards',
+    })
+    animation.onfinish = () => {
+      packet.remove()
+      if (kind !== 'attack') return
+      // a burst where the packet stopped, at the token check
+      const burst = document.createElement('span')
+      burst.className = 'packet rejected'
+      burst.style.setProperty('--kind', color)
+      burst.textContent = SYMBOL.attack
+      burst.style.left = `${railX}px`
+      burst.style.top = `${stages[0]}px`
+      figure.append(burst)
+      const label = document.createElement('span')
+      label.className = 'reject-label'
+      label.textContent = '401'
+      // outside the box, just left of where the packet stopped
+      label.style.left = `${geometry.left - 42}px`
+      label.style.top = `${stages[0]! - 16}px`
+      figure.append(label)
+      setTimeout(() => (burst.remove(), label.remove()), 900)
+    }
+  }
+
+  // runner lifecycle: start, run a few jobs' worth of requests, get destroyed, get replaced
+  const lifetime = new Map<HTMLLIElement, number>()
+  const rename = () => `runner-${Math.random().toString(36).slice(2, 6)}`
+  const palette = ['oklch(70% 0.2 0)', 'oklch(76% 0.13 230)', 'oklch(80% 0.17 130)', 'oklch(72% 0.17 300)', 'oklch(82% 0.14 80)', 'oklch(78% 0.12 185)']
+  let nextColor = 0
+  const paint = (row: HTMLLIElement) => row.style.setProperty('--runner', palette[nextColor++ % palette.length]!)
+  runnerRows.forEach(paint)
+  attackerRow.style.setProperty('--runner', 'var(--attack)')
+  function setState(row: HTMLLIElement, state: 'starting' | 'running' | 'destroyed') {
+    row.dataset.state = state
+    row.querySelector('.state')!.textContent =
+      state === 'running' ? 'running job' : state === 'starting' ? 'starting' : 'destroyed after 1 job'
+  }
+  function cycle(row: HTMLLIElement) {
+    setState(row, 'running')
+    lifetime.set(row, 3 + Math.floor(Math.random() * 3))
+  }
+  runnerRows.forEach((row, index) => (index === 1 ? (setState(row, 'starting'), setTimeout(() => cycle(row), 1500)) : cycle(row)))
+
+  let timer: number | undefined
+  function tick() {
+    const live = runnerRows.filter((row) => row.dataset.state === 'running')
+    const roll = Math.random()
+    if (roll < 0.18 || live.length === 0) send('attack', attackerRow)
+    else {
+      const row = live[Math.floor(Math.random() * live.length)]!
+      send(roll < 0.62 ? 'restore' : 'save', row)
+      const left = lifetime.get(row)! - 1
+      lifetime.set(row, left)
+      if (left === 0) {
+        // let its last packet come home before the runner goes away
+        setTimeout(() => setState(row, 'destroyed'), 6500)
+        setTimeout(() => {
+          row.querySelector('code')!.textContent = rename()
+          paint(row)
+          setState(row, 'starting')
+        }, 8500)
+        setTimeout(() => cycle(row), 9700)
+      }
+    }
+    timer = window.setTimeout(tick, 1100 + Math.random() * 700)
+  }
+
+  let storageTimer: number | undefined
+  function rotateStorage() {
+    storageRows[activeStorage]!.classList.remove('active')
+    activeStorage = (activeStorage + 1) % storageRows.length
+    storageRows[activeStorage]!.classList.add('active')
+    drawTracks()
+  }
+
+  const wide = matchMedia('(min-width: 64.01rem)')
+  const calm = matchMedia('(prefers-reduced-motion: reduce)')
+  function start() {
+    window.clearTimeout(timer)
+    window.clearInterval(storageTimer)
+    if (!wide.matches) return
+    drawTracks()
+    if (calm.matches) return
+    tick()
+    storageTimer = window.setInterval(rotateStorage, 14000)
+  }
+  wide.addEventListener('change', start)
+  calm.addEventListener('change', start)
+  new ResizeObserver(() => wide.matches && drawTracks()).observe(figure)
+  document.fonts.ready.then(start)
+</script>
 
 <style>
   .flow {
     --row: 2.9rem;
     --green: oklch(78% 0.15 150);
     --amber: oklch(80% 0.14 75);
+    --attack: oklch(68% 0.2 30);
+    position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(4rem, 9rem) minmax(0, 1.2fr) minmax(4rem, 9rem) minmax(0, 1fr);
     grid-template-rows: auto minmax(calc(var(--row) * 4), auto) auto;
-    column-gap: 0;
     row-gap: 0.85rem;
     margin: 0;
     font-size: var(--sl-text-sm);
@@ -108,10 +330,12 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     font-weight: 600;
     color: var(--sl-color-white);
   }
-  .server-label {
+  .server-label,
+  .server-note {
     grid-column: 3;
   }
-  .storage-label {
+  .storage-label,
+  .storage-note {
     grid-column: 5;
   }
   .note {
@@ -120,11 +344,25 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     font-size: var(--sl-text-xs);
     color: var(--sl-color-gray-3);
   }
-  .server-note {
-    grid-column: 3;
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
   }
-  .storage-note {
-    grid-column: 5;
+  .key {
+    display: inline-grid;
+    place-items: center;
+    width: 1rem;
+    height: 1rem;
+    margin-left: 0.4rem;
+    border-radius: 0.25rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.65rem;
+    color: oklch(99% 0 0);
+  }
+  .key:first-child {
+    margin-left: 0;
   }
 
   ul {
@@ -134,7 +372,7 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     padding: 0;
     list-style: none;
   }
-  li {
+  ul li {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -142,17 +380,17 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     min-width: 0;
     border-bottom: 1px solid var(--sl-color-hairline);
     color: var(--sl-color-gray-2);
+    transition:
+      color 0.3s,
+      opacity 0.4s;
   }
-  li:first-child {
+  ul li:first-child {
     border-top: 1px solid var(--sl-color-hairline);
   }
 
   .runners {
     grid-column: 1;
-    grid-template-rows: repeat(3, 1fr);
-  }
-  .runners li {
-    animation: life 12s var(--delay) infinite;
+    grid-template-rows: repeat(4, 1fr);
   }
   .runners code {
     display: flex;
@@ -166,80 +404,43 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     width: 0.45rem;
     height: 0.45rem;
     border-radius: 50%;
-    animation: dot 12s var(--delay) infinite;
+    background: var(--runner, var(--green));
+    transition: background 0.3s;
   }
   .state {
-    display: grid;
-    justify-items: end;
     font-size: var(--sl-text-xs);
     color: var(--sl-color-gray-3);
     white-space: nowrap;
   }
-  .state > span {
-    grid-area: 1 / 1;
-    opacity: 0;
+  [data-state='starting'] code::before {
+    background: var(--amber);
   }
-  .starting {
-    animation: show-starting 12s var(--delay) infinite;
+  [data-state='destroyed'] {
+    opacity: 0.4;
   }
-  .running {
-    color: var(--sl-color-accent-high);
-    animation: show-running 12s var(--delay) infinite;
-  }
-  .destroyed {
+  [data-state='destroyed'] :is(code, .state) {
     text-decoration: line-through;
-    animation: show-destroyed 12s var(--delay) infinite;
+  }
+  [data-state='destroyed'] code::before {
+    background: var(--sl-color-gray-5);
+  }
+  .attacker code {
+    color: var(--attack);
+  }
+  .attacker code::before {
+    background: var(--attack);
   }
 
   .storage {
     grid-column: 5;
     grid-template-rows: repeat(4, 1fr);
   }
-
-  .wires {
-    grid-row: 2;
-    width: 100%;
-    height: 100%;
-    overflow: visible;
+  .storage li {
+    opacity: 0.45;
   }
-  .to-runners {
-    grid-column: 2;
-    padding-left: 0.75rem;
-  }
-  .to-storage {
-    grid-column: 4;
-    padding-right: 0.75rem;
-  }
-  path {
-    fill: none;
-    vector-effect: non-scaling-stroke;
-    stroke-linecap: round;
-  }
-  .track {
-    stroke: var(--sl-color-gray-5);
-    stroke-width: 1;
-  }
-  .restore {
-    stroke: var(--sl-color-accent);
-    stroke-width: 2;
-    stroke-dasharray: 3 37;
-    filter: drop-shadow(0 0 3px var(--sl-color-accent));
-    animation: to-start 1.1s var(--delay) linear infinite;
-  }
-  .save {
-    stroke: var(--sl-color-gray-2);
-    stroke-width: 1.5;
-    stroke-dasharray: 2 58;
-    opacity: 0.6;
-    animation: to-end 2.4s var(--delay) linear infinite;
-  }
-  .to-storage .restore {
-    stroke-dasharray: 3 29;
-    animation-name: to-end;
-    animation-duration: 0.9s;
-  }
-  .to-storage .idle .restore {
-    opacity: 0.35;
+  .storage li.active {
+    opacity: 1;
+    color: var(--sl-color-white);
   }
 
   .server {
@@ -273,37 +474,13 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     height: 0.5rem;
     border-radius: 50%;
     background: var(--green);
-    box-shadow: 0 0 0 0 var(--green);
-    animation: beacon 2s infinite;
   }
 
-  /* the request path: a rail with one pulse running down it, each stage lights as it passes */
   .pipeline {
-    position: relative;
     display: grid;
     margin: 0;
     padding: 0 0 0 1.1rem;
     list-style: none;
-  }
-  .pipeline::before {
-    content: '';
-    position: absolute;
-    left: 0.2rem;
-    top: 0.75rem;
-    bottom: 0.75rem;
-    width: 1px;
-    background: var(--sl-color-gray-5);
-  }
-  .pipeline::after {
-    content: '';
-    position: absolute;
-    left: calc(0.2rem - 1px);
-    top: 0.75rem;
-    width: 3px;
-    height: 1.4rem;
-    border-radius: 2px;
-    background: linear-gradient(transparent, var(--sl-color-accent));
-    animation: rail 3s linear infinite;
   }
   .pipeline li {
     position: relative;
@@ -322,14 +499,16 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
   .pipeline li::before {
     content: '';
     position: absolute;
-    left: calc(-1.1rem + 0.2rem - 0.2rem);
+    left: -1.1rem;
     top: 50%;
     width: 0.4rem;
     height: 0.4rem;
     border-radius: 50%;
     translate: 0 -50%;
     background: var(--sl-color-gray-5);
-    animation: stage 3s calc(var(--i) * 0.6s) linear infinite;
+    transition:
+      background 0.4s,
+      box-shadow 0.4s;
   }
   .pipeline b {
     font-family: var(--sl-font-mono);
@@ -349,117 +528,108 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     color: var(--sl-color-gray-3);
   }
 
-  @keyframes rail {
-    from {
-      top: 0.5rem;
-      opacity: 1;
-    }
-    95% {
-      opacity: 1;
-    }
-    to {
-      top: calc(100% - 1.6rem);
-      opacity: 0;
-    }
+  /* tracks and packets, placed by the script */
+  .tracks {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
   }
-  @keyframes stage {
-    0%,
-    100% {
-      background: var(--sl-color-gray-5);
-      box-shadow: none;
-    }
-    6% {
-      background: var(--sl-color-accent);
-      box-shadow: 0 0 8px var(--sl-color-accent);
-    }
-    25% {
-      background: var(--sl-color-gray-5);
-      box-shadow: none;
-    }
+  .tracks :global(path) {
+    fill: none;
+    stroke: var(--sl-color-gray-5);
+    stroke-width: 1;
   }
-  @keyframes to-start {
-    to {
-      stroke-dashoffset: 40;
-    }
-  }
-  @keyframes to-end {
-    to {
-      stroke-dashoffset: -60;
-    }
-  }
-  @keyframes beacon {
-    70% {
-      box-shadow: 0 0 0 0.45rem transparent;
-    }
-    100% {
-      box-shadow: 0 0 0 0 transparent;
-    }
+  .tracks :global(path.attack) {
+    stroke: color-mix(in oklch, var(--attack) 45%, transparent);
+    stroke-dasharray: 3 4;
   }
 
-  /* one runner life in 12 s: starting, restoring, destroyed, replaced */
-  @keyframes life {
-    0%,
-    88% {
-      opacity: 1;
+  .flow :global(.packet),
+  .key {
+    background: var(--kind);
+    box-shadow: 0 0 14px var(--kind);
+  }
+  .flow :global(.packet) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 1.15rem;
+    height: 1.15rem;
+    border-radius: 0.3rem;
+    offset-rotate: 0deg;
+    font-family: var(--sl-font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: oklch(99% 0 0);
+    pointer-events: none;
+  }
+  .key {
+    --kind: var(--sl-color-gray-4);
+    box-shadow: none;
+  }
+  .key.attack {
+    --kind: var(--attack);
+  }
+  .flow :global(.packet.rejected) {
+    translate: -50% -50%;
+    animation: reject 0.9s ease-out forwards;
+  }
+  .flow :global(.reject-label) {
+    position: absolute;
+    z-index: 2;
+    translate: 0 -50%;
+    padding: 0 0.3rem;
+    border-radius: 0.2rem;
+    background: var(--attack);
+    font-family: var(--sl-font-mono);
+    font-size: 0.65rem;
+    color: oklch(99% 0 0);
+    animation: label 0.9s ease-out forwards;
+    pointer-events: none;
+  }
+
+  /* what a packet lights up as it passes */
+  .pipeline :global(li.hit)::before {
+    background: var(--kind);
+    box-shadow: 0 0 10px var(--kind);
+  }
+  .pipeline :global(li.hit) b {
+    color: var(--kind);
+  }
+  ul :global(li.hit) {
+    color: var(--kind) !important;
+  }
+
+  @keyframes reject {
+    20% {
+      scale: 1.5;
     }
-    68%,
-    84% {
-      opacity: 0.45;
-    }
-    94% {
+    100% {
+      scale: 0.6;
       opacity: 0;
     }
   }
-  @keyframes dot {
-    0%,
-    12% {
-      background: var(--amber);
+  @keyframes label {
+    from {
+      opacity: 0;
+      translate: 0 -30%;
     }
-    14%,
-    66% {
-      background: var(--green);
+    25% {
+      opacity: 1;
+      translate: 0 -50%;
     }
-    68%,
-    100% {
-      background: var(--sl-color-gray-5);
-    }
-  }
-  @keyframes show-starting {
-    0%,
-    12% {
+    80% {
       opacity: 1;
     }
-    14%,
-    100% {
+    to {
       opacity: 0;
-    }
-  }
-  @keyframes show-running {
-    0%,
-    12% {
-      opacity: 0;
-    }
-    14%,
-    66% {
-      opacity: 1;
-    }
-    68%,
-    100% {
-      opacity: 0;
-    }
-  }
-  @keyframes show-destroyed {
-    0%,
-    66% {
-      opacity: 0;
-    }
-    68%,
-    92% {
-      opacity: 1;
-    }
-    94%,
-    100% {
-      opacity: 0;
+      translate: 0 -90%;
     }
   }
 
@@ -473,22 +643,19 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
       grid-column: 1 !important;
       grid-row: auto !important;
     }
-    .runners {
-      grid-template-rows: repeat(3, var(--row));
-    }
+    .runners,
     .storage {
       grid-template-rows: repeat(4, var(--row));
     }
-    .wires {
+    .tracks,
+    .flow :global(.packet),
+    .flow :global(.reject-label) {
       display: none;
-    }
-    .label {
-      order: 0;
     }
     /* reading order on one column: runners, server, storage */
     .label:nth-of-type(1),
     .runners,
-    .note:nth-of-type(4) {
+    .legend {
       order: 1;
     }
     .server-label,
@@ -505,15 +672,8 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     .storage-label {
       margin-top: 1.75rem;
     }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .flow *,
-    .flow *::before {
-      animation: none !important;
-    }
-    .state > .running {
-      opacity: 1;
+    .legend {
+      display: none;
     }
   }
 </style>
