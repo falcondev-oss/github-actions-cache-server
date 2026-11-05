@@ -66,7 +66,7 @@ const agentPrompt =
 <div class="landing not-content">
   <section class="hero">
     <div class="hero-copy">
-      <h1 id="_top">Your GitHub Actions cache, <em>on your own hardware.</em></h1>
+      <h1 id="_top">Your GitHub Actions cache,<br /><em>on your own hardware.</em></h1>
       <div class="hero-side">
         <p class="lede">
           A drop-in replacement for GitHub's cache service, written in Rust. <code>actions/cache</code>, <code
@@ -236,7 +236,9 @@ const agentPrompt =
   }
 
   h1 {
-    font-size: clamp(2.6rem, 6.2vw, 4.75rem);
+    font-size: clamp(2.6rem, 6.2vw, 5.25rem);
+    line-height: 1.04;
+    text-wrap: balance;
   }
   h1 em {
     font-style: normal;
@@ -254,6 +256,14 @@ const agentPrompt =
     font-family: var(--sl-font-mono);
     font-size: 0.88em;
     color: var(--sl-color-gray-1);
+  }
+  /* code in running text reads as code: accent tint and a dotted underline, no chip */
+  :is(.lede, .section-lede) code {
+    font-size: 0.9em;
+    color: var(--sl-color-accent-high);
+    white-space: nowrap;
+    text-decoration: underline dotted color-mix(in oklch, var(--sl-color-accent) 50%, transparent);
+    text-underline-offset: 0.3em;
   }
 
   a {
@@ -277,20 +287,21 @@ const agentPrompt =
 
   .hero-copy {
     display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-    gap: 1.75rem clamp(2rem, 5vw, 4rem);
-    align-items: end;
+    gap: 2.25rem;
   }
   .hero-side {
     display: grid;
-    gap: 1.75rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2rem 4rem;
+    align-items: end;
   }
 
   .lede {
     font-size: clamp(1.05rem, 1.6vw, 1.25rem);
-    line-height: 1.55;
+    line-height: 1.6;
     color: var(--sl-color-gray-2);
     max-width: 38rem;
+    text-wrap: pretty;
   }
 
   .actions {
@@ -497,7 +508,7 @@ const agentPrompt =
   }
 
   @media (max-width: 64rem) {
-    .hero-copy,
+    .hero-side,
     .split {
       grid-template-columns: minmax(0, 1fr);
     }
