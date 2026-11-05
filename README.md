@@ -59,3 +59,10 @@ env:
 ## Documentation
 
 👉 <https://gha-cache-server.falcondev.io/getting-started> 👈
+
+- [Ephemeral runners with a local cache](https://gha-cache-server.falcondev.io/guides/ephemeral-runners-local-cache)
+- [Actions Runner Controller (ARC)](https://gha-cache-server.falcondev.io/guides/actions-runner-controller)
+- [GitHub cloud cache vs hostPath vs a local cache server](https://gha-cache-server.falcondev.io/guides/github-actions-cache-options)
+- For agents: [`llms.txt`](https://gha-cache-server.falcondev.io/llms.txt). Every page is also Markdown at `<url>.md`.
+
+The docs live in [`website/`](website).

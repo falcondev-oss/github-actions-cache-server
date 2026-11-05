@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "docs-gha-cache-server",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "preview_urls": false,
+  "routes": [{ "pattern": "gha-cache-server.falcondev.io", "custom_domain": true }],
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "drop-trailing-slash",
+    "not_found_handling": "404-page"
+  }
+}

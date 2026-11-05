@@ -1,0 +1,211 @@
+---
+const runners = [
+  { name: 'runner-7f3k', state: 'running job', live: true },
+  { name: 'runner-2c9x', state: 'starting', live: true },
+  { name: 'runner-k41m', state: 'destroyed after 1 job', live: false },
+] as const
+
+const storage = ['local NVMe', 'S3 / RustFS / MinIO / R2', 'Google Cloud Storage', 'Azure Blob']
+---
+
+<figure class="architecture" aria-label="Ephemeral runners use one shared cache server, which writes to your storage">
+  <div class="column">
+    <p class="label">Ephemeral runners</p>
+    <ul class="runners">
+      {
+        runners.map(({ name, state, live }) => (
+          <li class:list={{ live }}>
+            <code>{name}</code>
+            <span>{state}</span>
+          </li>
+        ))
+      }
+    </ul>
+    <p class="note">ARC, Docker or VMs. One job each.</p>
+  </div>
+
+  <div class="link" aria-hidden="true"><span></span><em>actions/cache API</em></div>
+
+  <div class="column">
+    <p class="label">Cache server</p>
+    <div class="server">
+      <code>ghcr.io/falcondev-oss/github-actions-cache-server</code>
+      <dl>
+        <div><dt>lookups</dt><dd>34k/s</dd></div>
+        <div><dt>download</dt><dd>7.9 GiB/s</dd></div>
+        <div><dt>memory</dt><dd>3 MiB idle</dd></div>
+      </dl>
+    </div>
+    <p class="note">Verifies tokens, scopes per repository.</p>
+  </div>
+
+  <div class="link" aria-hidden="true"><span></span><em>stream</em></div>
+
+  <div class="column">
+    <p class="label">Your storage</p>
+    <ul class="storage">{storage.map((name) => <li>{name}</li>)}</ul>
+    <p class="note">Plus SQLite, Postgres or MySQL for metadata.</p>
+  </div>
+</figure>
+
+<style>
+  .architecture {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 6rem minmax(0, 1.15fr) 6rem minmax(0, 1fr);
+    align-items: center;
+    margin: 3rem 0 0;
+    font-size: var(--sl-text-sm);
+  }
+  .column {
+    display: grid;
+    gap: 0.75rem;
+  }
+  .label {
+    margin: 0;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .note {
+    margin: 0;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+  li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--sl-color-hairline);
+    color: var(--sl-color-gray-2);
+  }
+  .runners code {
+    font-family: var(--sl-font-mono);
+    color: var(--sl-color-gray-1);
+  }
+  .runners li:not(.live) {
+    opacity: 0.45;
+    text-decoration: line-through;
+    text-decoration-color: var(--sl-color-gray-4);
+  }
+  .runners li span {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-xs);
+  }
+  .runners li.live code::before {
+    content: '';
+    display: inline-block;
+    width: 0.45rem;
+    height: 0.45rem;
+    margin-right: 0.5rem;
+    border-radius: 50%;
+    background: oklch(78% 0.15 150);
+    animation: pulse 2s infinite;
+  }
+
+  .server {
+    padding: 1.1rem;
+    border: 1px solid color-mix(in oklch, var(--sl-color-accent) 55%, transparent);
+    border-radius: 0.5rem;
+    background: color-mix(in oklch, var(--sl-color-accent) 7%, transparent);
+    box-shadow: 0 0 60px -10px color-mix(in oklch, var(--sl-color-accent) 35%, transparent);
+  }
+  .server code {
+    display: block;
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-accent-high);
+    overflow-wrap: anywhere;
+  }
+  .server dl {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin: 1rem 0 0;
+  }
+  .server dl div {
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  .server dt {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .server dd {
+    margin: 0;
+    font-family: var(--sl-font-mono);
+    color: var(--sl-color-white);
+  }
+
+  .link {
+    position: relative;
+    height: 2rem;
+  }
+  .link span {
+    position: absolute;
+    inset: 50% 0.5rem auto;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--sl-color-accent) 50%, transparent) 0 0 / 50% 100% repeat-x,
+      var(--sl-color-gray-5);
+    animation: flow 1.4s linear infinite;
+  }
+  .link em {
+    position: absolute;
+    inset: auto 0 calc(50% + 0.4rem);
+    text-align: center;
+    font-style: normal;
+    font-family: var(--sl-font-mono);
+    font-size: 0.65rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  @keyframes flow {
+    to {
+      background-position: 100% 0, 0 0;
+    }
+  }
+  @keyframes pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @media (max-width: 64rem) {
+    .architecture {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+    }
+    .link {
+      height: 3.5rem;
+    }
+    .link span {
+      inset: 0.5rem auto 0.5rem 1.5rem;
+      width: 1px;
+      height: auto;
+      background: linear-gradient(transparent, var(--sl-color-accent) 50%, transparent) 0 0 / 100% 50% repeat-y,
+        var(--sl-color-gray-5);
+      animation-name: flow-down;
+    }
+    .link em {
+      inset: 50% auto auto 2.25rem;
+      translate: 0 -50%;
+      text-align: left;
+    }
+    @keyframes flow-down {
+      to {
+        background-position: 0 100%, 0 0;
+      }
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .link span,
+    .runners li.live code::before {
+      animation: none;
+    }
+  }
+</style>

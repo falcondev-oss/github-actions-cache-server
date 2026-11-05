@@ -1,0 +1,52 @@
+---
+import Default from '@astrojs/starlight/components/PageTitle.astro'
+
+const { id, entry } = Astro.locals.starlightRoute
+// the landing page renders its own heading
+if (entry.data.template === 'splash') return
+---
+
+<div class="page-title">
+  <Default />
+  <div class="page-actions">
+    <button type="button" data-copy-markdown={`/${id}.md`}>Copy as Markdown</button>
+    <a href={`/${id}.md`}>View .md</a>
+  </div>
+</div>
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy-markdown]')) {
+    button.addEventListener('click', async () => {
+      const markdown = await fetch(button.dataset.copyMarkdown!).then((response) => response.text())
+      await navigator.clipboard.writeText(markdown)
+      const label = button.textContent
+      button.textContent = 'Copied'
+      setTimeout(() => (button.textContent = label), 1500)
+    })
+  }
+</script>
+
+<style>
+  .page-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    justify-content: space-between;
+    gap: 0.5rem 1.5rem;
+  }
+  .page-actions {
+    display: flex;
+    gap: 1rem;
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xs);
+  }
+  .page-actions :is(a, button) {
+    all: unset;
+    cursor: pointer;
+    color: var(--sl-color-gray-3);
+    text-decoration: none;
+  }
+  .page-actions :is(a, button):hover {
+    color: var(--sl-color-accent-high);
+  }
+</style>
