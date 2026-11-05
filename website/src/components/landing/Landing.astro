@@ -15,14 +15,6 @@ const stars = await fetch('https://api.github.com/repos/falcondev-oss/github-act
   .then((repository) => repository?.stargazers_count)
   .catch(() => undefined)
 
-const stats = [
-  ['29 MB', 'image'],
-  ['0.5 s', 'to healthy'],
-  ['3 MiB', 'idle memory'],
-  ['2.3 GiB/s', 'upload'],
-  ['7.9 GiB/s', 'first download'],
-  ['34k/s', 'lookups, p99 7 ms'],
-] as const
 
 const serverYaml = `services:
   cache-server:
@@ -93,20 +85,6 @@ const agentPrompt =
     <Flow />
     <Speed />
   </section>
-
-  <dl class="stats">
-    {
-      stats.map(([value, label]) => (
-        <div>
-          <dt>{label}</dt>
-          <dd>{value}</dd>
-        </div>
-      ))
-    }
-  </dl>
-  <p class="footnote">
-    SQLite and filesystem on one NVMe host. <a href="/benchmarks">Method and how to reproduce</a>.
-  </p>
 
   <section>
     <h2>Two steps. Your workflows stay as they are.</h2>
@@ -185,10 +163,6 @@ const agentPrompt =
           <a href="/getting-started#docker-compose">Docker</a><a href="/getting-started#kubernetes-with-helm">Helm</a><a
             href="/guides/actions-runner-controller">ARC</a
           ><span>amd64, arm64</span><a href="/guides/github-enterprise-server">GHES</a>
-        </dd>
-        <dt>Security</dt>
-        <dd>
-          <span>OIDC-verified tokens</span><span>per-repository scopes</span><span>signed upload URLs</span>
         </dd>
         <dt>Operations</dt>
         <dd>
@@ -371,36 +345,6 @@ const agentPrompt =
     text-underline-offset: 0.2em;
   }
 
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    margin-top: var(--gap);
-    border-block: 1px solid var(--hairline);
-  }
-  .stats > div {
-    display: flex;
-    flex-direction: column-reverse;
-    gap: 0.35rem;
-    padding: 1.5rem 1rem 1.5rem 0;
-  }
-  .stats > div + div {
-    padding-left: 1rem;
-    border-left: 1px solid var(--hairline);
-  }
-  .stats dd {
-    margin: 0;
-    font-family: var(--sl-font-mono);
-    font-size: clamp(1.35rem, 2.4vw, 1.9rem);
-    font-weight: 500;
-    letter-spacing: -0.03em;
-    color: var(--sl-color-white);
-    font-variant-numeric: tabular-nums;
-  }
-  .stats dt {
-    font-size: var(--sl-text-sm);
-    color: var(--sl-color-gray-3);
-  }
-
   .footnote {
     margin-top: 0.75rem;
     font-size: var(--sl-text-xs);
@@ -564,33 +508,9 @@ const agentPrompt =
     .steps {
       grid-template-columns: minmax(0, 1fr);
     }
-    .stats {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-    .stats > div:nth-child(4) {
-      border-left: 0;
-      padding-left: 0;
-    }
-    .stats > div:nth-child(n + 4) {
-      border-top: 1px solid var(--hairline);
-    }
   }
 
   @media (max-width: 34rem) {
-    .stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .stats > div:nth-child(n) {
-      border-left: 0;
-      padding-left: 0;
-    }
-    .stats > div:nth-child(even) {
-      border-left: 1px solid var(--hairline);
-      padding-left: 1rem;
-    }
-    .stats > div:nth-child(n + 3) {
-      border-top: 1px solid var(--hairline);
-    }
     .matrix dl {
       grid-template-columns: minmax(0, 1fr);
     }

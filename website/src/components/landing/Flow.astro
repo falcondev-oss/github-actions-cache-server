@@ -5,6 +5,15 @@
 const runners = ['runner-7f3k', 'runner-2c9x', 'runner-k41m'] as const
 const storage = ['local NVMe', 'S3, RustFS, MinIO, R2', 'Google Cloud Storage', 'Azure Blob'] as const
 
+// What one request passes through, in order, with what that stage costs or delivers.
+const stages = [
+  { step: 'verify runner token', value: 'OIDC' },
+  { step: 'scope to repo and branch', value: 'isolated' },
+  { step: 'look up key', value: '34k/s, p99 7 ms' },
+  { step: 'save via signed URL', value: '2.3 GiB/s' },
+  { step: 'stream restore', value: '7.9 GiB/s' },
+] as const
+
 const center = (index: number, count: number) => ((index + 0.5) / count) * 100
 const curve = (fromY: number, toY: number) => `M0 ${fromY} C 55 ${fromY}, 45 ${toY}, 100 ${toY}`
 const runnerPaths = runners.map((_, index) => curve(center(index, runners.length), 50))
@@ -48,12 +57,17 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
       <span class="beacon"></span>
       <code>github-actions-cache-server</code>
     </div>
-    <dl>
-      <div><dt>lookups</dt><dd>34k/s</dd></div>
-      <div><dt>download</dt><dd>7.9 GiB/s</dd></div>
-      <div><dt>idle</dt><dd>3 MiB</dd></div>
-    </dl>
-    <p>Verifies runner tokens, scopes every cache to its repository.</p>
+    <ol class="pipeline">
+      {
+        stages.map(({ step, value }, index) => (
+          <li style={`--i: ${index}`}>
+            <span>{step}</span>
+            <b>{value}</b>
+          </li>
+        ))
+      }
+    </ol>
+    <p class="footprint"><span>29 MB image</span><span>0.5 s start</span><span>3 MiB idle</span></p>
   </div>
 
   <svg class="wires to-storage" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -70,7 +84,7 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
   <ul class="storage">{storage.map((name) => <li>{name}</li>)}</ul>
 
   <p class="note">ARC, Docker or VMs. One job each.</p>
-  <p class="note server-note">One binary, Docker or Helm.</p>
+  <p class="note server-note">One static binary. Docker, Helm or ARC.</p>
   <p class="note storage-note">Metadata in SQLite, Postgres or MySQL.</p>
 </figure>
 
@@ -81,7 +95,7 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     --amber: oklch(80% 0.14 75);
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(4rem, 9rem) minmax(0, 1.2fr) minmax(4rem, 9rem) minmax(0, 1fr);
-    grid-template-rows: auto calc(var(--row) * 4) auto;
+    grid-template-rows: auto minmax(calc(var(--row) * 4), auto) auto;
     column-gap: 0;
     row-gap: 0.85rem;
     margin: 0;
@@ -232,19 +246,13 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     grid-column: 3;
     grid-row: 2;
     align-self: center;
-    position: relative;
     display: grid;
     gap: 1rem;
-    padding: 1.25rem 1.35rem;
-    border: 1px solid color-mix(in oklch, var(--sl-color-accent) 55%, transparent);
+    padding: 1.15rem 1.25rem;
+    border: 1px solid color-mix(in oklch, var(--sl-color-accent) 50%, transparent);
     border-radius: 0.6rem;
-    background:
-      linear-gradient(115deg, transparent 40%, color-mix(in oklch, var(--sl-color-accent) 16%, transparent) 50%, transparent 60%) 0 0 / 250% 100%,
-      color-mix(in oklch, var(--sl-color-black) 75%, var(--sl-color-accent) 6%);
-    box-shadow:
-      0 0 0 4px color-mix(in oklch, var(--sl-color-accent) 8%, transparent),
-      0 20px 70px -15px color-mix(in oklch, var(--sl-color-accent) 45%, transparent);
-    animation: sweep 4s ease-in-out infinite;
+    background: color-mix(in oklch, var(--sl-color-black) 80%, var(--sl-color-accent) 5%);
+    box-shadow: 0 20px 60px -20px color-mix(in oklch, var(--sl-color-accent) 40%, transparent);
   }
   .server-head {
     display: flex;
@@ -268,34 +276,107 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
     box-shadow: 0 0 0 0 var(--green);
     animation: beacon 2s infinite;
   }
-  .server dl {
+
+  /* the request path: a rail with one pulse running down it, each stage lights as it passes */
+  .pipeline {
+    position: relative;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.5rem;
     margin: 0;
+    padding: 0 0 0 1.1rem;
+    list-style: none;
   }
-  .server dl div {
+  .pipeline::before {
+    content: '';
+    position: absolute;
+    left: 0.2rem;
+    top: 0.75rem;
+    bottom: 0.75rem;
+    width: 1px;
+    background: var(--sl-color-gray-5);
+  }
+  .pipeline::after {
+    content: '';
+    position: absolute;
+    left: calc(0.2rem - 1px);
+    top: 0.75rem;
+    width: 3px;
+    height: 1.4rem;
+    border-radius: 2px;
+    background: linear-gradient(transparent, var(--sl-color-accent));
+    animation: rail 3s linear infinite;
+  }
+  .pipeline li {
+    position: relative;
     display: flex;
-    flex-direction: column-reverse;
-    gap: 0.15rem;
-  }
-  .server dt {
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--sl-color-hairline);
     font-size: var(--sl-text-xs);
-    color: var(--sl-color-gray-3);
+    color: var(--sl-color-gray-2);
   }
-  .server dd {
-    margin: 0;
+  .pipeline li:last-child {
+    border-bottom: 0;
+  }
+  .pipeline li::before {
+    content: '';
+    position: absolute;
+    left: calc(-1.1rem + 0.2rem - 0.2rem);
+    top: 50%;
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    translate: 0 -50%;
+    background: var(--sl-color-gray-5);
+    animation: stage 3s calc(var(--i) * 0.6s) linear infinite;
+  }
+  .pipeline b {
     font-family: var(--sl-font-mono);
-    font-size: var(--sl-text-base);
+    font-weight: 400;
     color: var(--sl-color-white);
     white-space: nowrap;
   }
-  .server p {
+  .footprint {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
     margin: 0;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-family: var(--sl-font-mono);
     font-size: var(--sl-text-xs);
     color: var(--sl-color-gray-3);
   }
 
+  @keyframes rail {
+    from {
+      top: 0.5rem;
+      opacity: 1;
+    }
+    95% {
+      opacity: 1;
+    }
+    to {
+      top: calc(100% - 1.6rem);
+      opacity: 0;
+    }
+  }
+  @keyframes stage {
+    0%,
+    100% {
+      background: var(--sl-color-gray-5);
+      box-shadow: none;
+    }
+    6% {
+      background: var(--sl-color-accent);
+      box-shadow: 0 0 8px var(--sl-color-accent);
+    }
+    25% {
+      background: var(--sl-color-gray-5);
+      box-shadow: none;
+    }
+  }
   @keyframes to-start {
     to {
       stroke-dashoffset: 40;
@@ -304,14 +385,6 @@ const storagePaths = storage.map((_, index) => curve(50, center(index, storage.l
   @keyframes to-end {
     to {
       stroke-dashoffset: -60;
-    }
-  }
-  @keyframes sweep {
-    from {
-      background-position: 100% 0, 0 0;
-    }
-    to {
-      background-position: -150% 0, 0 0;
     }
   }
   @keyframes beacon {
