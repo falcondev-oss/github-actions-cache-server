@@ -5,6 +5,8 @@
   "compatibility_date": "2026-11-01",
   "preview_urls": true,
   "routes": [{ "pattern": "gha-cache-server.falcondev.io", "custom_domain": true }],
+  // branch builds deploy a preview with `wrangler preview` (Workers Builds)
+  "previews": {},
   "assets": {
     "directory": "dist",
     "binding": "ASSETS",
