@@ -1,0 +1,165 @@
+---
+// Time to restore a 1 GiB cache. GitHub's numbers are reported by users (see sources), ours
+// are the benchmark on one host and the line rate of a 10 GbE link.
+const GIB_IN_MB = 1073.74
+
+const rows = [
+  {
+    label: 'GitHub cache, self-hosted runner',
+    detail: '~20 MB/s reported',
+    seconds: GIB_IN_MB / 20,
+  },
+  {
+    label: 'GitHub cache, GitHub-hosted runner',
+    detail: '~231 MB/s reported',
+    seconds: GIB_IN_MB / 231,
+  },
+  {
+    label: 'This server, over 10 GbE',
+    detail: 'line rate of the link',
+    seconds: 1 / 1.164,
+    ours: true,
+  },
+  {
+    label: 'This server, same host',
+    detail: '7.9 GiB/s measured',
+    seconds: 1 / 7.9,
+    ours: true,
+  },
+]
+const slowest = Math.max(...rows.map((row) => row.seconds))
+const format = (seconds: number) => (seconds >= 10 ? `${Math.round(seconds)} s` : `${seconds.toFixed(seconds < 1 ? 2 : 1)} s`)
+---
+
+<figure class="speed" aria-label="Time to restore a 1 GiB cache">
+  <figcaption>
+    <span>Restoring a 1 GiB cache</span>
+    <span class="faster">{Math.round(rows[0]!.seconds / rows[2]!.seconds)}× faster than GitHub's cache from a self-hosted runner, on a 10 GbE network</span>
+  </figcaption>
+  <ol>
+    {
+      rows.map(({ label, detail, seconds, ours }, index) => (
+        <li class:list={{ ours }} style={`--share: ${Math.max(seconds / slowest, 0.006)}; --i: ${index}`}>
+          <span class="name">
+            {label}
+            <small>{detail}</small>
+          </span>
+          <span class="bar" />
+          <span class="time">{format(seconds)}</span>
+        </li>
+      ))
+    }
+  </ol>
+  <p class="sources">
+    GitHub figures as reported by <a href="https://actuated.com/blog/faster-self-hosted-cache">actuated (2023)</a> and in <a
+      href="https://github.com/google/wireit/issues/239">google/wireit#239</a
+    > (2022), your link and region decide the real number. <a href="/benchmarks">Our method</a>.
+  </p>
+</figure>
+
+<style>
+  .speed {
+    display: grid;
+    gap: 1.1rem;
+    margin: 0;
+  }
+  figcaption {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.25rem 1.5rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .faster {
+    font-weight: 500;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-accent-high);
+  }
+  ol {
+    display: grid;
+    gap: 0.55rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  li {
+    display: grid;
+    grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) 4.5rem;
+    align-items: center;
+    gap: 1rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .name {
+    display: flex;
+    flex-direction: column;
+  }
+  small {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .bar {
+    height: 0.55rem;
+    border-radius: 999px;
+    background: var(--sl-color-gray-6);
+    overflow: hidden;
+  }
+  .bar::before {
+    content: '';
+    display: block;
+    height: 100%;
+    width: calc(var(--share) * 100%);
+    min-width: 0.4rem;
+    border-radius: inherit;
+    background: var(--sl-color-gray-4);
+    transform-origin: left;
+    animation: grow 1.4s calc(0.3s + var(--i) * 0.12s) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .ours {
+    color: var(--sl-color-white);
+  }
+  .ours .bar::before {
+    background: var(--sl-color-accent);
+    box-shadow: 0 0 12px var(--sl-color-accent);
+  }
+  .time {
+    font-family: var(--sl-font-mono);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .ours .time {
+    color: var(--sl-color-accent-high);
+  }
+  .sources {
+    margin: 0;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .sources a {
+    color: inherit;
+    text-underline-offset: 0.2em;
+  }
+
+  @keyframes grow {
+    from {
+      transform: scaleX(0);
+    }
+  }
+
+  @media (max-width: 40rem) {
+    li {
+      grid-template-columns: minmax(0, 1fr) 4rem;
+      row-gap: 0.35rem;
+    }
+    .bar {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bar::before {
+      animation: none;
+    }
+  }
+</style>

@@ -1,8 +1,9 @@
 ---
 import { Code } from '@astrojs/starlight/components'
-import Architecture from './Architecture.astro'
 import CopyLine from './CopyLine.astro'
-import Terminal from './Terminal.astro'
+import Flow from './Flow.astro'
+import PromptButton from './PromptButton.astro'
+import Speed from './Speed.astro'
 
 const repo = 'https://github.com/falcondev-oss/github-actions-cache-server'
 
@@ -51,7 +52,7 @@ const comparison = [
   ['Workflow changes', 'none', 'every workflow', 'none'],
   ['actions/cache, setup-*', 'yes', 'no', 'yes'],
   ['Ephemeral runners', 'yes', 'same node only', 'yes'],
-  ['Restore speed', 'internet', 'disk', 'LAN, 7.9 GiB/s'],
+  ['Restore speed', '~20 MB/s', 'disk', 'LAN line rate'],
   ['Per-repo isolation', 'yes', 'no', 'yes'],
 ] as const
 
@@ -74,23 +75,23 @@ const agentPrompt =
   <section class="hero">
     <div class="hero-copy">
       <h1 id="_top">Your GitHub Actions cache, <em>on your own hardware.</em></h1>
-      <p class="lede">
-        A drop-in replacement for GitHub's cache service, written in Rust. <code>actions/cache</code>, <code
-          >setup-*</code
-        > caches and BuildKit <code>type=gha</code> work unchanged on self-hosted and ephemeral runners.
-      </p>
-      <div class="actions">
-        <a class="button primary" href="/getting-started">Get started</a>
-        <a class="button" href={repo}>
-          GitHub{stars !== undefined && <span class="stars">★ {stars.toLocaleString('en-US')}</span>}
-        </a>
-        <a class="text-link" href="/guides/ephemeral-runners-local-cache">Ephemeral runners →</a>
+      <div class="hero-side">
+        <p class="lede">
+          A drop-in replacement for GitHub's cache service, written in Rust. <code>actions/cache</code>, <code
+            >setup-*</code
+          > caches and BuildKit <code>type=gha</code> work unchanged on self-hosted and ephemeral runners.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="/getting-started">Get started</a>
+          <PromptButton prompt={agentPrompt} />
+          <a class="button" href={repo}>
+            GitHub{stars !== undefined && <span class="stars">★ {stars.toLocaleString('en-US')}</span>}
+          </a>
+        </div>
       </div>
-      <CopyLine
-        text="docker run -p 3000:3000 -e API_BASE_URL=http://localhost:3000 ghcr.io/falcondev-oss/github-actions-cache-server"
-      />
     </div>
-    <Terminal />
+    <Flow />
+    <Speed />
   </section>
 
   <dl class="stats">
@@ -128,14 +129,6 @@ const agentPrompt =
         <Code code={workflowYaml} lang="yaml" wrap title=".github/workflows/ci.yml (unchanged)" />
       </li>
     </ol>
-  </section>
-
-  <section>
-    <h2>Destroy the runner, not the cache.</h2>
-    <p class="section-lede">
-      Every job gets a fresh runner. Every runner restores from the same cache, on your network, at disk speed.
-    </p>
-    <Architecture />
   </section>
 
   <section class="split">
@@ -229,6 +222,7 @@ const agentPrompt =
     <div class="actions">
       <a class="button primary" href="/getting-started">Get started</a>
       <a class="button" href="/guides/actions-runner-controller">ARC guide</a>
+      <a class="text-link" href="/guides/ephemeral-runners-local-cache">Ephemeral runners with a local cache →</a>
     </div>
     <p class="footnote">MIT licensed. Built by <a href="https://falcondev.io">falconDev</a>.</p>
   </section>
@@ -295,10 +289,8 @@ const agentPrompt =
   .hero {
     position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-    gap: clamp(2rem, 5vw, 4rem);
-    align-items: center;
-    margin-top: clamp(2.5rem, 7vw, 6rem);
+    gap: clamp(3rem, 6vw, 4.5rem);
+    margin-top: clamp(2.5rem, 7vw, 5.5rem);
   }
   .hero::before {
     content: '';
@@ -314,6 +306,12 @@ const agentPrompt =
   }
 
   .hero-copy {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: 1.75rem clamp(2rem, 5vw, 4rem);
+    align-items: end;
+  }
+  .hero-side {
     display: grid;
     gap: 1.75rem;
   }
@@ -559,7 +557,7 @@ const agentPrompt =
   }
 
   @media (max-width: 64rem) {
-    .hero,
+    .hero-copy,
     .split {
       grid-template-columns: minmax(0, 1fr);
     }

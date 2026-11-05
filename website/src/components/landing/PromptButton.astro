@@ -1,0 +1,54 @@
+---
+interface Props {
+  prompt: string
+}
+
+const { prompt } = Astro.props
+---
+
+<button type="button" class="prompt-button" data-prompt={prompt} title={prompt}>
+  <svg viewBox="0 0 16 16" aria-hidden="true"
+    ><path d="M8 1.5l1.6 4.9 4.9 1.6-4.9 1.6L8 14.5l-1.6-4.9L1.5 8l4.9-1.6z" fill="currentColor"></path></svg
+  >
+  <span>Copy agent prompt</span>
+</button>
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>('.prompt-button')) {
+    const label = button.querySelector('span')!
+    button.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(button.dataset.prompt!)
+      label.textContent = 'Copied, paste it into your agent'
+      setTimeout(() => (label.textContent = 'Copy agent prompt'), 2000)
+    })
+  }
+</script>
+
+<style>
+  .prompt-button {
+    all: unset;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.7rem 1.15rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.4rem;
+    font-weight: 500;
+    color: var(--sl-color-white);
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .prompt-button:hover {
+    border-color: var(--sl-color-accent);
+  }
+  .prompt-button:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+  svg {
+    width: 0.95rem;
+    height: 0.95rem;
+    color: var(--sl-color-accent);
+  }
+</style>

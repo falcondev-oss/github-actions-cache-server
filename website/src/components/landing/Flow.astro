@@ -1,0 +1,446 @@
+---
+// Ephemeral runners come and go, every one restores from the same cache server, which streams
+// to your storage. Pure CSS/SVG: connectors are drawn in a stretched 100×100 box and the
+// rows are laid out in equal fractions, so path endpoints land on row centers at any width.
+const runners = ['runner-7f3k', 'runner-2c9x', 'runner-k41m'] as const
+const storage = ['local NVMe', 'S3, RustFS, MinIO, R2', 'Google Cloud Storage', 'Azure Blob'] as const
+
+const center = (index: number, count: number) => ((index + 0.5) / count) * 100
+const curve = (fromY: number, toY: number) => `M0 ${fromY} C 55 ${fromY}, 45 ${toY}, 100 ${toY}`
+const runnerPaths = runners.map((_, index) => curve(center(index, runners.length), 50))
+const storagePaths = storage.map((_, index) => curve(50, center(index, storage.length)))
+---
+
+<figure class="flow" aria-label="Ephemeral runners restore from one cache server, which streams to your storage">
+  <p class="label">Ephemeral runners</p>
+  <p class="label server-label">Cache server</p>
+  <p class="label storage-label">Your storage</p>
+
+  <ul class="runners">
+    {
+      runners.map((name, index) => (
+        <li style={`--delay: ${index * -4}s`}>
+          <code>{name}</code>
+          <span class="state">
+            <span class="starting">starting</span>
+            <span class="running">restoring cache</span>
+            <span class="destroyed">destroyed after 1 job</span>
+          </span>
+        </li>
+      ))
+    }
+  </ul>
+
+  <svg class="wires to-runners" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+    {
+      runnerPaths.map((d, index) => (
+        <g style={`--delay: ${index * -0.6}s`}>
+          <path class="track" d={d} />
+          <path class="restore" d={d} />
+          <path class="save" d={d} />
+        </g>
+      ))
+    }
+  </svg>
+
+  <div class="server">
+    <div class="server-head">
+      <span class="beacon"></span>
+      <code>github-actions-cache-server</code>
+    </div>
+    <dl>
+      <div><dt>lookups</dt><dd>34k/s</dd></div>
+      <div><dt>download</dt><dd>7.9 GiB/s</dd></div>
+      <div><dt>idle</dt><dd>3 MiB</dd></div>
+    </dl>
+    <p>Verifies runner tokens, scopes every cache to its repository.</p>
+  </div>
+
+  <svg class="wires to-storage" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+    {
+      storagePaths.map((d, index) => (
+        <g style={`--delay: ${index * -0.45}s`} class:list={{ idle: index > 0 }}>
+          <path class="track" d={d} />
+          <path class="restore" d={d} />
+        </g>
+      ))
+    }
+  </svg>
+
+  <ul class="storage">{storage.map((name) => <li>{name}</li>)}</ul>
+
+  <p class="note">ARC, Docker or VMs. One job each.</p>
+  <p class="note server-note">One binary, Docker or Helm.</p>
+  <p class="note storage-note">Metadata in SQLite, Postgres or MySQL.</p>
+</figure>
+
+<style>
+  .flow {
+    --row: 2.9rem;
+    --green: oklch(78% 0.15 150);
+    --amber: oklch(80% 0.14 75);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(4rem, 9rem) minmax(0, 1.2fr) minmax(4rem, 9rem) minmax(0, 1fr);
+    grid-template-rows: auto calc(var(--row) * 4) auto;
+    column-gap: 0;
+    row-gap: 0.85rem;
+    margin: 0;
+    font-size: var(--sl-text-sm);
+  }
+
+  .label {
+    grid-row: 1;
+    margin: 0;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .server-label {
+    grid-column: 3;
+  }
+  .storage-label {
+    grid-column: 5;
+  }
+  .note {
+    grid-row: 3;
+    margin: 0;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .server-note {
+    grid-column: 3;
+  }
+  .storage-note {
+    grid-column: 5;
+  }
+
+  ul {
+    grid-row: 2;
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-width: 0;
+    border-bottom: 1px solid var(--sl-color-hairline);
+    color: var(--sl-color-gray-2);
+  }
+  li:first-child {
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+
+  .runners {
+    grid-column: 1;
+    grid-template-rows: repeat(3, 1fr);
+  }
+  .runners li {
+    animation: life 12s var(--delay) infinite;
+  }
+  .runners code {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-family: var(--sl-font-mono);
+    color: var(--sl-color-gray-1);
+  }
+  .runners code::before {
+    content: '';
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    animation: dot 12s var(--delay) infinite;
+  }
+  .state {
+    display: grid;
+    justify-items: end;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+    white-space: nowrap;
+  }
+  .state > span {
+    grid-area: 1 / 1;
+    opacity: 0;
+  }
+  .starting {
+    animation: show-starting 12s var(--delay) infinite;
+  }
+  .running {
+    color: var(--sl-color-accent-high);
+    animation: show-running 12s var(--delay) infinite;
+  }
+  .destroyed {
+    text-decoration: line-through;
+    animation: show-destroyed 12s var(--delay) infinite;
+  }
+
+  .storage {
+    grid-column: 5;
+    grid-template-rows: repeat(4, 1fr);
+  }
+
+  .wires {
+    grid-row: 2;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .to-runners {
+    grid-column: 2;
+    padding-left: 0.75rem;
+  }
+  .to-storage {
+    grid-column: 4;
+    padding-right: 0.75rem;
+  }
+  path {
+    fill: none;
+    vector-effect: non-scaling-stroke;
+    stroke-linecap: round;
+  }
+  .track {
+    stroke: var(--sl-color-gray-5);
+    stroke-width: 1;
+  }
+  .restore {
+    stroke: var(--sl-color-accent);
+    stroke-width: 2;
+    stroke-dasharray: 3 37;
+    filter: drop-shadow(0 0 3px var(--sl-color-accent));
+    animation: to-start 1.1s var(--delay) linear infinite;
+  }
+  .save {
+    stroke: var(--sl-color-gray-2);
+    stroke-width: 1.5;
+    stroke-dasharray: 2 58;
+    opacity: 0.6;
+    animation: to-end 2.4s var(--delay) linear infinite;
+  }
+  .to-storage .restore {
+    stroke-dasharray: 3 29;
+    animation-name: to-end;
+    animation-duration: 0.9s;
+  }
+  .to-storage .idle .restore {
+    opacity: 0.35;
+  }
+
+  .server {
+    grid-column: 3;
+    grid-row: 2;
+    align-self: center;
+    position: relative;
+    display: grid;
+    gap: 1rem;
+    padding: 1.25rem 1.35rem;
+    border: 1px solid color-mix(in oklch, var(--sl-color-accent) 55%, transparent);
+    border-radius: 0.6rem;
+    background:
+      linear-gradient(115deg, transparent 40%, color-mix(in oklch, var(--sl-color-accent) 16%, transparent) 50%, transparent 60%) 0 0 / 250% 100%,
+      color-mix(in oklch, var(--sl-color-black) 75%, var(--sl-color-accent) 6%);
+    box-shadow:
+      0 0 0 4px color-mix(in oklch, var(--sl-color-accent) 8%, transparent),
+      0 20px 70px -15px color-mix(in oklch, var(--sl-color-accent) 45%, transparent);
+    animation: sweep 4s ease-in-out infinite;
+  }
+  .server-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+  .server-head code {
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-accent-high);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .beacon {
+    flex-shrink: 0;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 0 var(--green);
+    animation: beacon 2s infinite;
+  }
+  .server dl {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin: 0;
+  }
+  .server dl div {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 0.15rem;
+  }
+  .server dt {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .server dd {
+    margin: 0;
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-base);
+    color: var(--sl-color-white);
+    white-space: nowrap;
+  }
+  .server p {
+    margin: 0;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  @keyframes to-start {
+    to {
+      stroke-dashoffset: 40;
+    }
+  }
+  @keyframes to-end {
+    to {
+      stroke-dashoffset: -60;
+    }
+  }
+  @keyframes sweep {
+    from {
+      background-position: 100% 0, 0 0;
+    }
+    to {
+      background-position: -150% 0, 0 0;
+    }
+  }
+  @keyframes beacon {
+    70% {
+      box-shadow: 0 0 0 0.45rem transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+
+  /* one runner life in 12 s: starting, restoring, destroyed, replaced */
+  @keyframes life {
+    0%,
+    88% {
+      opacity: 1;
+    }
+    68%,
+    84% {
+      opacity: 0.45;
+    }
+    94% {
+      opacity: 0;
+    }
+  }
+  @keyframes dot {
+    0%,
+    12% {
+      background: var(--amber);
+    }
+    14%,
+    66% {
+      background: var(--green);
+    }
+    68%,
+    100% {
+      background: var(--sl-color-gray-5);
+    }
+  }
+  @keyframes show-starting {
+    0%,
+    12% {
+      opacity: 1;
+    }
+    14%,
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes show-running {
+    0%,
+    12% {
+      opacity: 0;
+    }
+    14%,
+    66% {
+      opacity: 1;
+    }
+    68%,
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes show-destroyed {
+    0%,
+    66% {
+      opacity: 0;
+    }
+    68%,
+    92% {
+      opacity: 1;
+    }
+    94%,
+    100% {
+      opacity: 0;
+    }
+  }
+
+  @media (max-width: 64rem) {
+    .flow {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
+      row-gap: 0.75rem;
+    }
+    .flow > * {
+      grid-column: 1 !important;
+      grid-row: auto !important;
+    }
+    .runners {
+      grid-template-rows: repeat(3, var(--row));
+    }
+    .storage {
+      grid-template-rows: repeat(4, var(--row));
+    }
+    .wires {
+      display: none;
+    }
+    .label {
+      order: 0;
+    }
+    /* reading order on one column: runners, server, storage */
+    .label:nth-of-type(1),
+    .runners,
+    .note:nth-of-type(4) {
+      order: 1;
+    }
+    .server-label,
+    .server,
+    .server-note {
+      order: 2;
+    }
+    .storage-label,
+    .storage,
+    .storage-note {
+      order: 3;
+    }
+    .server-label,
+    .storage-label {
+      margin-top: 1.75rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .flow *,
+    .flow *::before {
+      animation: none !important;
+    }
+    .state > .running {
+      opacity: 1;
+    }
+  }
+</style>

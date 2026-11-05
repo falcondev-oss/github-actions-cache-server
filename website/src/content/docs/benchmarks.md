@@ -54,4 +54,13 @@ Pass any number of `label=image` pairs. Each image is measured in turn and the r
 
 ## Compared to GitHub's hosted cache
 
-GitHub's hosted cache is a remote service, so its speed on a self-hosted runner is bounded by your internet link, plus a round trip to GitHub for every lookup. A cache server on the same network restores at local disk and network speed. Measure your own case by timing the same `actions/cache` restore on both: the step log prints the size and duration.
+GitHub's hosted cache is a remote service. From a self-hosted runner, every restore crosses the internet to GitHub's storage, so it is bounded by your link and your distance to GitHub. Reported numbers:
+
+| Setup | Reported speed | 1 GiB restore |
+| --- | --- | --- |
+| GitHub cache, self-hosted runner | ~20 MB/s ([actuated, 2023](https://actuated.com/blog/faster-self-hosted-cache)), 5.4 MB/s from Tokyo ([google/wireit#239](https://github.com/google/wireit/issues/239), 2022) | ~54 s |
+| GitHub cache, GitHub-hosted runner | 231 MB/s ([google/wireit#239](https://github.com/google/wireit/issues/239), 2022) | ~4.6 s |
+| This server, over 10 GbE | the link's line rate, 1.16 GiB/s | ~0.86 s |
+| This server, same host | 7.9 GiB/s (measured above) | ~0.13 s |
+
+The GitHub figures are user reports, not a controlled benchmark, and the 10 GbE row is the link's limit, not a measurement. To measure your own case, time the same `actions/cache` restore against both backends: the step log prints the size and the speed.
