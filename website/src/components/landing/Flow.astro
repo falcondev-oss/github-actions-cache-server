@@ -58,8 +58,6 @@ const stages = [
   <p class="note legend">
     <span class="key">↓</span>restore <span class="key">↑</span>save <span class="key attack">✕</span>rejected
   </p>
-  <p class="note server-note">One static binary. Docker, Helm or ARC.</p>
-  <p class="note storage-note">One driver at a time. Metadata in SQLite, Postgres or MySQL.</p>
 
   <svg class="tracks" aria-hidden="true"></svg>
 </figure>
@@ -330,12 +328,10 @@ const stages = [
     font-weight: 600;
     color: var(--sl-color-white);
   }
-  .server-label,
-  .server-note {
+  .server-label {
     grid-column: 3;
   }
-  .storage-label,
-  .storage-note {
+  .storage-label {
     grid-column: 5;
   }
   .note {
@@ -659,13 +655,11 @@ const stages = [
       order: 1;
     }
     .server-label,
-    .server,
-    .server-note {
+    .server {
       order: 2;
     }
     .storage-label,
-    .storage,
-    .storage-note {
+    .storage {
       order: 3;
     }
     .server-label,
