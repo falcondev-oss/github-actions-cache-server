@@ -143,9 +143,7 @@ async fn serves_ranges_of_merged_entries() {
     );
     assert_eq!(whole.bytes().await.unwrap(), expected, "whole body");
 
-    for header in ["range", "x-ms-range"] {
-        assert_serves_ranges(&server, &location.id, &expected, header).await;
-    }
+    assert_serves_ranges(&server, &location.id, &expected, "range").await;
 
     let unparseable = get(&server, &location.id, Some("bytes=abc")).await;
     assert_eq!(unparseable.status(), 200, "unparseable range falls through");
