@@ -94,6 +94,10 @@ The actions runner needs to be able to reach the storage provider directly to us
 
 A signed URL is a storage credential, so the server refuses to start with both `ENABLE_DIRECT_DOWNLOADS=true` and [`SKIP_TOKEN_VALIDATION=true`](#skip_token_validation), unless [`UNSAFE_ALLOW_DIRECT_DOWNLOADS_WITHOUT_TOKEN_VALIDATION`](#unsafe_allow_direct_downloads_without_token_validation) is set. The filesystem storage driver has no direct downloads.
 
+:::caution[BuildKit on S3 or GCS]
+BuildKit's `type=gha` cache resumes a dropped download with an `x-ms-range` header. Azure Blob Storage honors it, but S3 and GCS ignore it and send the whole object, which BuildKit writes at the wrong offset. The build then fails on a corrupted layer. With BuildKit on S3 or GCS, leave direct downloads off. The server itself honors `x-ms-range`.
+:::
+
 ### `DIRECT_DOWNLOAD_URL_TTL_SECONDS`
 
 - Default: `600`
