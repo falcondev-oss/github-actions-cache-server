@@ -94,8 +94,8 @@ impl std::fmt::Debug for DownloadStream {
 pub(crate) enum ReadError {
     #[error("object not found in storage: {0}")]
     NotFound(String),
-    #[error("range not satisfiable for {0}")]
-    RangeNotSatisfiable(String),
+    #[error("range not satisfiable for {object} of {size} bytes")]
+    RangeNotSatisfiable { object: String, size: u64 },
     #[error(transparent)]
     Failed(#[from] Failure),
 }

@@ -320,8 +320,10 @@ impl ObjectAdapter {
                 extent: Extent::Whole { size: 0 },
             });
         }
-        let served = clamp_range(range, size)
-            .ok_or_else(|| ReadError::RangeNotSatisfiable(name.to_owned()))?;
+        let served = clamp_range(range, size).ok_or_else(|| ReadError::RangeNotSatisfiable {
+            object: name.to_owned(),
+            size,
+        })?;
         let options = GetOptions {
             range: Some(GetRange::Bounded(
                 served.start..served.end.saturating_add(1),

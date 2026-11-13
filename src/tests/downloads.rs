@@ -43,18 +43,84 @@ async fn merged_entry(server: &TestServer) -> (StorageLocation, Vec<u8>) {
 }
 
 async fn get(server: &TestServer, id: &str, range: Option<&str>) -> reqwest::Response {
+    get_with(server, id, "range", range).await
+}
+
+async fn get_with(
+    server: &TestServer,
+    id: &str,
+    header: &str,
+    range: Option<&str>,
+) -> reqwest::Response {
     let mut request = reqwest::Client::new().get(format!("{}/download/{id}", server.url));
     if let Some(range) = range {
-        request = request.header("range", range);
+        request = request.header(header, range);
     }
     request.send().await.unwrap()
 }
 
-fn header(response: &reqwest::Response, name: &str) -> Option<String> {
+fn response_header(response: &reqwest::Response, name: &str) -> Option<String> {
     response
         .headers()
         .get(name)
         .map(|value| value.to_str().unwrap().to_owned())
+}
+
+/// Every range shape, including ones crossing and starting on Part boundaries, answered 206 with
+/// exactly the requested bytes, and a range past the end answered 416.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "offsets into a fixture of a few hundred KiB"
+)]
+async fn assert_serves_ranges(server: &TestServer, id: &str, expected: &[u8], header: &str) {
+    let total = expected.len();
+    let cases = [
+        ("bytes=4096-8191".to_owned(), 4096, 8191),
+        (
+            format!("bytes={}-{}", PART - 6, PART + 9),
+            PART - 6,
+            PART + 9,
+        ),
+        (format!("bytes={PART}-"), PART, total - 1),
+        (format!("bytes={}-", total - 100), total - 100, total - 1),
+        (
+            format!("bytes={}-{}", total - 10, total + 5000),
+            total - 10,
+            total - 1,
+        ),
+        ("bytes=-100".to_owned(), total - 100, total - 1),
+    ];
+    for (range, start, end) in cases {
+        let response = get_with(server, id, header, Some(&range)).await;
+        assert_eq!(response.status(), 206, "{header}: {range}");
+        assert_eq!(
+            response_header(&response, "content-range"),
+            Some(format!("bytes {start}-{end}/{total}")),
+            "{header}: {range}"
+        );
+        assert_eq!(
+            response_header(&response, "content-length"),
+            Some((end - start + 1).to_string()),
+            "{header}: {range}"
+        );
+        assert_eq!(
+            response.bytes().await.unwrap(),
+            expected[start..=end],
+            "{header}: {range}"
+        );
+    }
+
+    let past_end = get_with(server, id, header, Some(&format!("bytes={total}-"))).await;
+    assert_eq!(
+        past_end.status(),
+        416,
+        "{header}: range starting at the end"
+    );
+    assert_eq!(
+        response_header(&past_end, "content-range"),
+        Some(format!("bytes */{total}")),
+        "{header}: size reported"
+    );
 }
 
 #[tokio::test]
@@ -66,54 +132,20 @@ async fn serves_ranges_of_merged_entries() {
     let whole = get(&server, &location.id, None).await;
     assert_eq!(whole.status(), 200, "no range");
     assert_eq!(
-        header(&whole, "accept-ranges").as_deref(),
+        response_header(&whole, "accept-ranges").as_deref(),
         Some("bytes"),
         "ranges advertised"
     );
     assert_eq!(
-        header(&whole, "content-length"),
+        response_header(&whole, "content-length"),
         Some(total.to_string()),
         "length"
     );
     assert_eq!(whole.bytes().await.unwrap(), expected, "whole body");
 
-    let cases = [
-        ("bytes=4096-8191".to_owned(), 4096, 8191),
-        (format!("bytes={}-", total - 100), total - 100, total - 1),
-        (
-            format!("bytes={}-{}", total - 10, total + 5000),
-            total - 10,
-            total - 1,
-        ),
-        ("bytes=-100".to_owned(), total - 100, total - 1),
-    ];
-    for (range, start, end) in cases {
-        let response = get(&server, &location.id, Some(&range)).await;
-        assert_eq!(response.status(), 206, "{range}");
-        assert_eq!(
-            header(&response, "content-range"),
-            Some(format!("bytes {start}-{end}/{total}")),
-            "{range}"
-        );
-        assert_eq!(
-            header(&response, "content-length"),
-            Some((end - start + 1).to_string()),
-            "{range}"
-        );
-        assert_eq!(
-            response.bytes().await.unwrap(),
-            expected[start..=end],
-            "{range}"
-        );
+    for header in ["range", "x-ms-range"] {
+        assert_serves_ranges(&server, &location.id, &expected, header).await;
     }
-
-    let past_end = get(&server, &location.id, Some(&format!("bytes={total}-"))).await;
-    assert_eq!(past_end.status(), 416, "range starting at the end");
-    assert_eq!(
-        header(&past_end, "content-range"),
-        Some(format!("bytes */{total}")),
-        "size reported"
-    );
 
     let unparseable = get(&server, &location.id, Some("bytes=abc")).await;
     assert_eq!(unparseable.status(), 200, "unparseable range falls through");
@@ -121,7 +153,7 @@ async fn serves_ranges_of_merged_entries() {
 }
 
 #[tokio::test]
-async fn ignores_ranges_of_unmerged_entries_and_pins_bytes_to_a_location() {
+async fn serves_ranges_of_unmerged_entries_and_pins_bytes_to_a_location() {
     let server = TestServer::start().await;
     let key = uuid::Uuid::new_v4().to_string();
     let first = save_parts(server.storage(), &key, &parts()).await;
@@ -134,13 +166,32 @@ async fn ignores_ranges_of_unmerged_entries_and_pins_bytes_to_a_location() {
         404,
         "the replaced location is no longer served"
     );
-    let response = get(&server, &resaved.id, Some("bytes=0-1")).await;
-    assert_eq!(response.status(), 200, "range is ignored while unmerged");
-    assert_eq!(header(&response, "content-range"), None, "no content-range");
+    let response = get(&server, &resaved.id, Some("bytes=1-3")).await;
+    assert_eq!(response.status(), 206, "a range across two Parts");
+    assert_eq!(
+        response_header(&response, "content-range").as_deref(),
+        Some("bytes 1-3/7"),
+        "content-range"
+    );
     assert_eq!(
         response.bytes().await.unwrap().as_ref(),
-        b"resaved",
-        "whole body from parts"
+        b"esa",
+        "ranged body"
+    );
+
+    // The Azure SDK (BuildKit's `type=gha`) resumes with `x-ms-range` and takes any 200 body as the
+    // bytes from its offset, so an unmerged entry must never fall back to serving itself whole.
+    let unmerged = save_parts(server.storage(), "unmerged", &parts()).await;
+    for header in ["range", "x-ms-range"] {
+        assert_serves_ranges(&server, &unmerged.id, &parts().concat(), header).await;
+    }
+    assert_eq!(
+        find_location(server.db(), &unmerged.id)
+            .await
+            .unwrap()
+            .merged_at,
+        None,
+        "ranges were served from the Parts"
     );
 
     let single = save_parts(server.storage(), "single", &[b"one part".to_vec()]).await;
@@ -151,7 +202,7 @@ async fn ignores_ranges_of_unmerged_entries_and_pins_bytes_to_a_location() {
         "a single Part needs no Merge to serve ranges"
     );
     assert_eq!(
-        header(&ranged, "content-range"),
+        response_header(&ranged, "content-range"),
         Some("bytes 4-7/8".to_owned()),
         "content-range"
     );
@@ -169,9 +220,9 @@ async fn an_empty_entry_ignores_ranges_on_every_backend() {
     for range in ["bytes=0-", "bytes=5-"] {
         let response = get(&server, &location.id, Some(range)).await;
         assert_eq!(response.status(), 200, "{range}");
-        assert_eq!(header(&response, "content-range"), None, "{range}");
+        assert_eq!(response_header(&response, "content-range"), None, "{range}");
         assert_eq!(
-            header(&response, "content-length").as_deref(),
+            response_header(&response, "content-length").as_deref(),
             Some("0"),
             "{range}"
         );

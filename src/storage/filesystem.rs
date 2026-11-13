@@ -124,8 +124,10 @@ impl FilesystemAdapter {
                 extent: Extent::Whole { size },
             });
         };
-        let served = clamp_range(range, size)
-            .ok_or_else(|| ReadError::RangeNotSatisfiable(name.to_owned()))?;
+        let served = clamp_range(range, size).ok_or_else(|| ReadError::RangeNotSatisfiable {
+            object: name.to_owned(),
+            size,
+        })?;
         file.seek(SeekFrom::Start(served.start))
             .await
             .map_err(Failure::from)?;

@@ -15,7 +15,7 @@ use axum::body::Bytes;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::future::BoxFuture;
-use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
+use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, future, stream};
 use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::{CaseStatement, Expr, ExprTrait as _, Func};
 use sea_orm::{
@@ -30,11 +30,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use utoipa::ToSchema;
 
-use self::adapter::ReadError;
 pub(crate) use self::adapter::{
     Adapter, ByteStream, DownloadStream, EndPosition, Extent, RangeRequest, StartPosition,
     UploadKind,
 };
+use self::adapter::{ReadError, clamp_range};
 use self::leases::{
     DIRECT_DOWNLOAD_LEASE_MARGIN, LEASE_DURATION, LEASE_RENEWAL, acquire_merge_lease,
     create_reader_lease, deadline, release_merge_lease, release_reader_lease, renew_merge_lease,
@@ -117,7 +117,7 @@ pub(crate) enum UploadAccess {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DownloadError {
     #[error("range not satisfiable")]
-    RangeNotSatisfiable { size: Option<u64> },
+    RangeNotSatisfiable { size: u64 },
     #[error(transparent)]
     Failed(#[from] Failure),
 }
@@ -171,8 +171,9 @@ fn entry_identity(identity: &EntryIdentity) -> Condition {
         .add(cache_entries::COLUMN.repo_id.eq(identity.repo_id.as_str()))
 }
 
-/// Concatenates a location's Parts as they are read.
-fn stream_parts(adapter: Arc<Adapter>, location: &StorageLocation) -> ByteStream {
+/// A location's Parts as one stream, starting `skip` bytes in. A Part wholly before that offset
+/// costs one ranged read answered 416, never its bytes.
+fn stream_parts(adapter: Arc<Adapter>, location: &StorageLocation, skip: u64) -> ByteStream {
     if location.parts_deleted_at.is_some() {
         return stream::once(async {
             Err(io::Error::other(
@@ -181,20 +182,58 @@ fn stream_parts(adapter: Arc<Adapter>, location: &StorageLocation) -> ByteStream
         })
         .boxed();
     }
-    let folder = location.folder_name.clone();
-    stream::iter(0..location.part_count)
-        .then(move |index| {
-            let adapter = Arc::clone(&adapter);
-            let name = part_object(&folder, index);
-            async move {
-                adapter
-                    .download_stream(&name, None)
-                    .await
-                    .map(|download| download.stream)
-                    .map_err(io::Error::other)
+    let (folder, part_count) = (location.folder_name.clone(), location.part_count);
+    stream::try_unfold((0, skip), move |(first, mut skip)| {
+        let adapter = Arc::clone(&adapter);
+        let folder = folder.clone();
+        async move {
+            for index in first..part_count {
+                let name = part_object(&folder, index);
+                let range = (skip > 0).then_some(RangeRequest {
+                    start: StartPosition::Index(skip),
+                    end: EndPosition::LastByte,
+                });
+                match adapter.download_stream(&name, range).await {
+                    // An empty Part is served whole whatever the range.
+                    Ok(DownloadStream {
+                        extent: Extent::Whole { size: 0 },
+                        ..
+                    }) if skip > 0 => {}
+                    Ok(download) => {
+                        return Ok(Some((download.stream, (index.saturating_add(1), 0))));
+                    }
+                    Err(ReadError::RangeNotSatisfiable { size, .. }) => {
+                        skip = skip.saturating_sub(size);
+                    }
+                    Err(error) => return Err(io::Error::other(error)),
+                }
             }
+            Ok(None)
+        }
+    })
+    .try_flatten()
+    .boxed()
+}
+
+/// The first `len` bytes of a stream.
+fn take_bytes(stream: ByteStream, len: u64) -> ByteStream {
+    stream
+        .scan(len, |left, chunk| {
+            let chunk = match chunk {
+                Ok(_) if *left == 0 => None,
+                Ok(mut bytes) => {
+                    if let Ok(keep) = usize::try_from(*left)
+                        && keep < bytes.len()
+                    {
+                        bytes.truncate(keep);
+                    }
+                    *left = left.saturating_sub(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                    Some(Ok(bytes))
+                }
+                Err(error) => Some(Err(error)),
+            };
+            future::ready(chunk)
         })
-        .try_flatten()
         .boxed()
 }
 
@@ -379,11 +418,30 @@ impl Storage {
             return self.adapter.download_stream(&object, range).await;
         }
         self.ensure_parts_exist(location).await?;
-        // No range: an unmerged entry is concatenated from its parts as it is read, so there is
-        // nothing to seek into. Served whole under a 200, which Range allows.
+        let adapter = Arc::clone(&self.adapter);
+        let size = location
+            .size_bytes
+            .and_then(|size| u64::try_from(size).ok());
+        let Some((range, size)) = range.zip(size.filter(|&size| size > 0)) else {
+            // An unmerged entry is concatenated from its Parts as it is read. Only an empty entry
+            // ignores a range, like an empty object does.
+            return Ok(DownloadStream {
+                stream: stream_parts(adapter, location, 0),
+                extent: Extent::Unsized,
+            });
+        };
+        // Never the whole entry under a 200: the Azure SDK takes any 200 body as the bytes from
+        // the offset it asked for.
+        let served = clamp_range(range, size).ok_or_else(|| ReadError::RangeNotSatisfiable {
+            object: parts_folder(&location.folder_name),
+            size,
+        })?;
         Ok(DownloadStream {
-            stream: stream_parts(Arc::clone(&self.adapter), location),
-            extent: Extent::Unsized,
+            stream: take_bytes(stream_parts(adapter, location, served.start), served.len()),
+            extent: Extent::Partial {
+                range: served,
+                size,
+            },
         })
     }
 
@@ -509,7 +567,7 @@ impl Storage {
     fn merge_parts(&self, location: &StorageLocation) -> BoxFuture<'static, Result<()>> {
         let adapter = Arc::clone(&self.adapter);
         let merged = merged_object(&location.folder_name);
-        let part_stream = stream_parts(Arc::clone(&adapter), location);
+        let part_stream = stream_parts(Arc::clone(&adapter), location, 0);
         let kind = UploadKind::Merged {
             length: location
                 .size_bytes
@@ -852,11 +910,9 @@ impl Storage {
                 tracing::warn!(location_id, object, "stale storage location");
                 Ok(None)
             }
-            Err(ReadError::RangeNotSatisfiable(_)) => Err(DownloadError::RangeNotSatisfiable {
-                size: location
-                    .size_bytes
-                    .and_then(|size| u64::try_from(size).ok()),
-            }),
+            Err(ReadError::RangeNotSatisfiable { size, .. }) => {
+                Err(DownloadError::RangeNotSatisfiable { size })
+            }
             Err(ReadError::Failed(failure)) => Err(failure.into()),
         };
         if let Err(error) = release_reader_lease(&self.db, &lease_id).await {
@@ -871,7 +927,8 @@ impl Storage {
         location: &StorageLocation,
         range: Option<RangeRequest>,
     ) -> Result<DownloadStream, ReadError> {
-        if whole_object(location).is_some() {
+        // A ranged read serves its slice from the Parts and leaves the Merge to a whole read.
+        if whole_object(location).is_some() || range.is_some() {
             return self.download_location(location, range).await;
         }
         self.ensure_parts_exist(location).await?;
@@ -880,7 +937,7 @@ impl Storage {
         // the Merge copies them in the background.
         if let Adapter::Filesystem(_) = self.adapter.as_ref() {
             self.start_merge_detached(location, self.merge_parts(location));
-            return self.download_location(location, range).await;
+            return self.download_location(location, None).await;
         }
         // Object storage is read once and teed into the response and the Merge.
         let (merger_sender, merger_receiver) = mpsc::channel(1);
@@ -900,11 +957,11 @@ impl Storage {
             .boxed()
         };
         if !self.start_merge(location, write).await? {
-            return self.download_location(location, range).await;
+            return self.download_location(location, None).await;
         }
         let (response_sender, response_receiver) = mpsc::channel(1);
         drop(tokio::spawn(pump_parts(
-            stream_parts(Arc::clone(&self.adapter), location),
+            stream_parts(Arc::clone(&self.adapter), location, 0),
             response_sender,
             merger_sender,
         )));
