@@ -172,7 +172,9 @@ pub(super) async fn download(
         }
         Err(DownloadError::RangeNotSatisfiable { size }) => {
             let mut response = (StatusCode::RANGE_NOT_SATISFIABLE, [accept_ranges]).into_response();
-            if let Ok(content_range) = HeaderValue::from_str(&format!("bytes */{size}")) {
+            if let Some(content_range) =
+                size.and_then(|size| HeaderValue::from_str(&format!("bytes */{size}")).ok())
+            {
                 response.headers_mut().insert(CONTENT_RANGE, content_range);
             }
             return Ok(response);

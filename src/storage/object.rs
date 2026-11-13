@@ -320,10 +320,8 @@ impl ObjectAdapter {
                 extent: Extent::Whole { size: 0 },
             });
         }
-        let served = clamp_range(range, size).ok_or_else(|| ReadError::RangeNotSatisfiable {
-            object: name.to_owned(),
-            size,
-        })?;
+        let served = clamp_range(range, size)
+            .ok_or_else(|| ReadError::RangeNotSatisfiable(name.to_owned()))?;
         let options = GetOptions {
             range: Some(GetRange::Bounded(
                 served.start..served.end.saturating_add(1),
@@ -478,11 +476,16 @@ impl ObjectAdapter {
         self.delete_prefix(&self.path(folder)).await
     }
 
-    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<u64>> {
+    pub(crate) async fn list_folder(&self, folder: &str) -> Result<HashMap<String, u64>> {
+        let folder = self.path(folder);
         self.store
-            .list(Some(&self.path(folder)))
+            .list(Some(&folder))
             .map_err(Failure::from)
-            .map_ok(|object| object.size)
+            .map_ok(|object| {
+                let name = object.location.as_ref().strip_prefix(folder.as_ref());
+                let name = name.unwrap_or_default().trim_start_matches('/');
+                (name.to_owned(), object.size)
+            })
             .try_collect()
             .await
     }

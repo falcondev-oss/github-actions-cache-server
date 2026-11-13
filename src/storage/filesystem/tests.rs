@@ -62,7 +62,7 @@ async fn uploads_atomically_and_serves_ranges() {
     assert!(
         matches!(
             adapter.download_stream("f/parts/0", Some(past)).await,
-            Err(ReadError::RangeNotSatisfiable { .. })
+            Err(ReadError::RangeNotSatisfiable(_))
         ),
         "range past the end"
     );

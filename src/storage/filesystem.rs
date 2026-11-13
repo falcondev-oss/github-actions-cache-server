@@ -1,5 +1,6 @@
 //! Storage on a local (or mounted) filesystem.
 
+use std::collections::HashMap;
 use std::io::{self, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -124,10 +125,8 @@ impl FilesystemAdapter {
                 extent: Extent::Whole { size },
             });
         };
-        let served = clamp_range(range, size).ok_or_else(|| ReadError::RangeNotSatisfiable {
-            object: name.to_owned(),
-            size,
-        })?;
+        let served = clamp_range(range, size)
+            .ok_or_else(|| ReadError::RangeNotSatisfiable(name.to_owned()))?;
         file.seek(SeekFrom::Start(served.start))
             .await
             .map_err(Failure::from)?;
@@ -223,18 +222,19 @@ impl FilesystemAdapter {
         })
     }
 
-    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<u64>> {
+    pub(crate) async fn list_folder(&self, folder: &str) -> Result<HashMap<String, u64>> {
         let mut entries = match fs::read_dir(self.safe_path(folder)?).await {
             Ok(entries) => entries,
-            Err(error) if is_not_found(&error) => return Ok(Vec::new()),
+            Err(error) if is_not_found(&error) => return Ok(HashMap::new()),
             Err(error) => return Err(error.into()),
         };
-        let mut objects = Vec::new();
+        let mut objects = HashMap::new();
         while let Some(entry) = entries.next_entry().await? {
             if entry.file_type().await?.is_dir() {
                 continue;
             }
-            objects.push(fs::metadata(entry.path()).await?.len());
+            let size = fs::metadata(entry.path()).await?.len();
+            objects.insert(entry.file_name().to_string_lossy().into_owned(), size);
         }
         Ok(objects)
     }
