@@ -23,6 +23,8 @@ use crate::storage::{
 
 /// Clients without a request id intermittently fail with EOF (tonistiigi/go-actions-cache).
 const REQUEST_ID: HeaderName = HeaderName::from_static("x-ms-request-id");
+/// Azure's Range header; Get Blob prefers it over `Range`.
+const X_MS_RANGE: HeaderName = HeaderName::from_static("x-ms-range");
 
 /// Lenient like Node's `Buffer.from(value, 'base64')`.
 const BASE64: GeneralPurpose = GeneralPurpose::new(
@@ -128,9 +130,15 @@ fn upload_not_found(upload_id: i64) -> HttpError {
 }
 
 /// A single range; multi-range requests and invalid headers, which includes inverted ranges, are
-/// served whole.
+/// served whole. `x-ms-range` wins over `Range`, like Azure Get Blob: the Azure SDK, and with it
+/// `BuildKit`'s `type=gha` cache, sends only `x-ms-range` when it resumes a download.
 fn parse_range(headers: &HeaderMap) -> Option<RangeRequest> {
-    let value = headers.get(RANGE)?.to_str().ok()?.trim();
+    let value = headers
+        .get(X_MS_RANGE)
+        .or_else(|| headers.get(RANGE))?
+        .to_str()
+        .ok()?
+        .trim();
     // The unit is case-insensitive (RFC 9110 §14.1); the parser only knows `bytes=`.
     let ranges = value
         .get(..6)?
@@ -153,7 +161,6 @@ pub(super) async fn download(
     headers: HeaderMap,
 ) -> Result<Response, HttpError> {
     let range = parse_range(&headers);
-    // Unmerged entries ignore Range, so clients must key off the status, not this header.
     let accept_ranges = (ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     let download = match state.storage.download(&location_id, range).await {
         Ok(Some(download)) => download,

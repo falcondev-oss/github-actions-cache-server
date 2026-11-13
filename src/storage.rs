@@ -15,7 +15,7 @@ use axum::body::Bytes;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::future::BoxFuture;
-use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
+use futures_util::{FutureExt as _, StreamExt as _, TryStreamExt as _, future, stream};
 use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::{CaseStatement, Expr, ExprTrait as _, Func};
 use sea_orm::{
@@ -30,11 +30,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use utoipa::ToSchema;
 
-use self::adapter::ReadError;
 pub(crate) use self::adapter::{
     Adapter, ByteStream, DownloadStream, EndPosition, Extent, RangeRequest, StartPosition,
     UploadKind,
 };
+use self::adapter::{ReadError, clamp_range};
 use self::leases::{
     DIRECT_DOWNLOAD_LEASE_MARGIN, LEASE_DURATION, LEASE_RENEWAL, acquire_merge_lease,
     create_reader_lease, deadline, release_merge_lease, release_reader_lease, renew_merge_lease,
@@ -171,8 +171,13 @@ fn entry_identity(identity: &EntryIdentity) -> Condition {
         .add(cache_entries::COLUMN.repo_id.eq(identity.repo_id.as_str()))
 }
 
-/// Concatenates a location's Parts as they are read.
-fn stream_parts(adapter: Arc<Adapter>, location: &StorageLocation) -> ByteStream {
+/// Concatenates a location's Parts as they are read, from `skip` bytes into Part `first`.
+fn stream_parts(
+    adapter: Arc<Adapter>,
+    location: &StorageLocation,
+    first: i32,
+    skip: u64,
+) -> ByteStream {
     if location.parts_deleted_at.is_some() {
         return stream::once(async {
             Err(io::Error::other(
@@ -182,19 +187,41 @@ fn stream_parts(adapter: Arc<Adapter>, location: &StorageLocation) -> ByteStream
         .boxed();
     }
     let folder = location.folder_name.clone();
-    stream::iter(0..location.part_count)
+    stream::iter(first..location.part_count)
         .then(move |index| {
             let adapter = Arc::clone(&adapter);
             let name = part_object(&folder, index);
+            let range = (index == first && skip > 0).then_some(RangeRequest {
+                start: StartPosition::Index(skip),
+                end: EndPosition::LastByte,
+            });
             async move {
                 adapter
-                    .download_stream(&name, None)
+                    .download_stream(&name, range)
                     .await
                     .map(|download| download.stream)
                     .map_err(io::Error::other)
             }
         })
         .try_flatten()
+        .boxed()
+}
+
+/// The first `len` bytes of a stream.
+fn take_bytes(stream: ByteStream, len: u64) -> ByteStream {
+    stream
+        .scan(len, |left, chunk| {
+            let chunk = match chunk {
+                Ok(_) if *left == 0 => None,
+                Ok(mut bytes) => {
+                    bytes.truncate(usize::try_from(*left).unwrap_or(usize::MAX));
+                    *left = left.saturating_sub(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                    Some(Ok(bytes))
+                }
+                Err(error) => Some(Err(error)),
+            };
+            future::ready(chunk)
+        })
         .boxed()
 }
 
@@ -361,13 +388,18 @@ impl Storage {
         .boxed()
     }
 
-    async fn ensure_parts_exist(&self, location: &StorageLocation) -> Result<(), ReadError> {
+    /// The sizes of a location's Parts in order, from one listing; `NotFound` when one is gone.
+    async fn part_sizes(&self, location: &StorageLocation) -> Result<Vec<u64>, ReadError> {
         let folder = parts_folder(&location.folder_name);
         let parts = self.adapter.list_folder(&folder).await?;
-        if parts.len() < usize::try_from(location.part_count).unwrap_or(0) {
-            return Err(ReadError::NotFound(folder));
-        }
-        Ok(())
+        (0..location.part_count)
+            .map(|index| {
+                parts
+                    .get(&index.to_string())
+                    .copied()
+                    .ok_or_else(|| ReadError::NotFound(folder.clone()))
+            })
+            .collect()
     }
 
     async fn download_location(
@@ -378,12 +410,38 @@ impl Storage {
         if let Some((object, _)) = whole_object(location) {
             return self.adapter.download_stream(&object, range).await;
         }
-        self.ensure_parts_exist(location).await?;
-        // No range: an unmerged entry is concatenated from its parts as it is read, so there is
-        // nothing to seek into. Served whole under a 200, which Range allows.
+        let part_sizes = self.part_sizes(location).await?;
+        let adapter = Arc::clone(&self.adapter);
+        let size = part_sizes
+            .iter()
+            .fold(0_u64, |total, &part| total.saturating_add(part));
+        let Some(range) = range.filter(|_| size > 0) else {
+            // An unmerged entry is concatenated from its Parts as it is read. Only an empty entry
+            // ignores a range, like an empty object does.
+            return Ok(DownloadStream {
+                stream: stream_parts(adapter, location, 0, 0),
+                extent: Extent::Unsized,
+            });
+        };
+        // Never the whole entry under a 200: the Azure SDK takes any 200 body as the bytes from
+        // the offset it asked for.
+        let served = clamp_range(range, size)
+            .ok_or_else(|| ReadError::RangeNotSatisfiable(parts_folder(&location.folder_name)))?;
+        // The Part the range starts in, and the offset into it.
+        let (mut first, mut skip) = (0_i32, served.start);
+        for &part in &part_sizes {
+            if skip < part {
+                break;
+            }
+            skip = skip.saturating_sub(part);
+            first = first.saturating_add(1);
+        }
         Ok(DownloadStream {
-            stream: stream_parts(Arc::clone(&self.adapter), location),
-            extent: Extent::Unsized,
+            stream: take_bytes(stream_parts(adapter, location, first, skip), served.len()),
+            extent: Extent::Partial {
+                range: served,
+                size,
+            },
         })
     }
 
@@ -509,7 +567,7 @@ impl Storage {
     fn merge_parts(&self, location: &StorageLocation) -> BoxFuture<'static, Result<()>> {
         let adapter = Arc::clone(&self.adapter);
         let merged = merged_object(&location.folder_name);
-        let part_stream = stream_parts(Arc::clone(&adapter), location);
+        let part_stream = stream_parts(Arc::clone(&adapter), location, 0, 0);
         let kind = UploadKind::Merged {
             length: location
                 .size_bytes
@@ -668,7 +726,7 @@ impl Storage {
             return Err(self.abandon_upload(&upload, reason).await);
         }
         let size_bytes = parts
-            .iter()
+            .values()
             .fold(0_u64, |total, bytes| total.saturating_add(*bytes));
         let location = StorageLocation {
             id: uuid::Uuid::new_v4().to_string(),
@@ -871,16 +929,17 @@ impl Storage {
         location: &StorageLocation,
         range: Option<RangeRequest>,
     ) -> Result<DownloadStream, ReadError> {
-        if whole_object(location).is_some() {
+        // A ranged read serves its slice from the Parts and leaves the Merge to a whole read.
+        if whole_object(location).is_some() || range.is_some() {
             return self.download_location(location, range).await;
         }
-        self.ensure_parts_exist(location).await?;
+        self.part_sizes(location).await?;
 
         // Local Parts are cheap to read twice, so the client reads them at its own pace while
         // the Merge copies them in the background.
         if let Adapter::Filesystem(_) = self.adapter.as_ref() {
             self.start_merge_detached(location, self.merge_parts(location));
-            return self.download_location(location, range).await;
+            return self.download_location(location, None).await;
         }
         // Object storage is read once and teed into the response and the Merge.
         let (merger_sender, merger_receiver) = mpsc::channel(1);
@@ -900,11 +959,11 @@ impl Storage {
             .boxed()
         };
         if !self.start_merge(location, write).await? {
-            return self.download_location(location, range).await;
+            return self.download_location(location, None).await;
         }
         let (response_sender, response_receiver) = mpsc::channel(1);
         drop(tokio::spawn(pump_parts(
-            stream_parts(Arc::clone(&self.adapter), location),
+            stream_parts(Arc::clone(&self.adapter), location, 0, 0),
             response_sender,
             merger_sender,
         )));

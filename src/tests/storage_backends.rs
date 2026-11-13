@@ -1,5 +1,6 @@
 //! Adapter behaviour every backend must share, plus backend-specific edges.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use super::harness::{TestServer, put, storage_driver};
@@ -13,7 +14,11 @@ async fn folder_operations_do_not_match_sibling_prefixes() {
     put(adapter, "abc123/merged", b"bb").await;
 
     let objects = adapter.list_folder("abc").await.unwrap();
-    assert_eq!(objects, [1], "only the folder's own object");
+    assert_eq!(
+        objects,
+        HashMap::from([("merged".to_owned(), 1)]),
+        "only the folder's own object"
+    );
     let deleted = adapter.delete_folder("abc").await.unwrap();
     assert_eq!(
         (deleted.objects, deleted.bytes),

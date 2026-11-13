@@ -22,8 +22,8 @@ The server implements the same cache API that GitHub's hosted cache service expo
 1. **Lookup.** The runner asks for a key and a list of restore keys. The server answers with a download URL for the best match in the job's scope, or a miss.
 2. **Upload.** On a miss, the step reserves an entry and uploads the archive in blocks to the signed upload URL the server hands out. On object storage the blocks go straight to the bucket through presigned URLs.
 3. **Finalize.** The runner commits the upload. The entry becomes visible to the next lookup.
-4. **Merge.** Blocks are merged into one object on the first download, or right after upload with [`EAGER_MERGE`](/configuration#eager_merge).
-5. **Download.** The server streams the object, or hands out a signed storage URL with [`ENABLE_DIRECT_DOWNLOADS`](/configuration#enable_direct_downloads).
+4. **Merge.** Blocks are merged into one object on the first full download, or right after upload with [`EAGER_MERGE`](/configuration#eager_merge).
+5. **Download.** The server streams the object, or hands out a signed storage URL with [`ENABLE_DIRECT_DOWNLOADS`](/configuration#enable_direct_downloads). It serves byte ranges from `Range` or, as the Azure SDK in BuildKit's `type=gha` cache sends them, `x-ms-range`. Before the merge, a range is read from the blocks it covers.
 
 Requests the server does not handle, such as artifact uploads, are forwarded to GitHub's results service, so they keep working.
 
