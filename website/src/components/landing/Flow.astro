@@ -1,0 +1,604 @@
+---
+// One cache request at a time, end to end: a packet leaves a runner, enters the cache server,
+// runs down its request path and goes on to storage. Restores come back to the runner, saves end
+// in storage, and requests without a valid token are rejected at the first stage. The tracks
+// and packets are placed from the live layout by the script below, so they line up at any width.
+const runners = ['runner-7f3k', 'runner-2c9x', 'runner-k41m'] as const
+const storage = ['local NVMe', 'S3, RustFS, MinIO, R2', 'Google Cloud Storage', 'Azure Blob'] as const
+
+const stages = [
+  { step: 'verify runner token', value: 'OIDC' },
+  { step: 'scope to repo and branch', value: 'isolated' },
+  { step: 'look up key', value: '34k/s, p99 7 ms' },
+  { step: 'save', value: '2.3 GiB/s' },
+  { step: 'restore', value: '7.9 GiB/s' },
+] as const
+---
+
+<figure class="flow" aria-label="Runners send cache requests to the cache server, which checks each one and reads or writes your storage">
+  <p class="label">Ephemeral runners</p>
+  <p class="label server-label">Cache server</p>
+  <p class="label storage-label">Your storage</p>
+
+  <ul class="runners">
+    {
+      runners.map((name) => (
+        <li data-state="running">
+          <code>{name}</code>
+          <span class="state">running job</span>
+        </li>
+      ))
+    }
+    <li class="attacker" data-state="attacker">
+      <code>unknown client</code>
+      <span class="state">no valid token</span>
+    </li>
+  </ul>
+
+  <div class="server">
+    <div class="server-head">
+      <span class="beacon"></span>
+      <code>github-actions-cache-server</code>
+    </div>
+    <ol class="pipeline">
+      {
+        stages.map(({ step, value }) => (
+          <li>
+            <span>{step}</span>
+            <b>{value}</b>
+          </li>
+        ))
+      }
+    </ol>
+    <p class="footprint"><span>29 MB image</span><span>0.5 s start</span><span>3 MiB idle</span></p>
+  </div>
+
+  <div class="storage">
+    <ul>{storage.map((name) => <li>{name}</li>)}</ul>
+  </div>
+
+  <svg class="tracks" aria-hidden="true"></svg>
+</figure>
+
+<script>
+  type Point = { x: number; y: number }
+  type Kind = 'restore' | 'save' | 'attack'
+  /** A route is drawn piece by piece; `at` fires when the packet reaches the end of that piece. */
+  type Piece = { to: Point; curve?: boolean; at?: () => void }
+
+  const SPEED = 280 // px per second
+  const TRAIL = 7 // dots behind each packet
+  const svgNs = 'http://www.w3.org/2000/svg'
+
+  const figure = document.querySelector<HTMLElement>('.flow')!
+  const tracks = figure.querySelector<SVGSVGElement>('.tracks')!
+  const runnerRows = [...figure.querySelectorAll<HTMLLIElement>('.runners li:not(.attacker)')]
+  const attackerRow = figure.querySelector<HTMLLIElement>('.runners .attacker')!
+  const stageRows = [...figure.querySelectorAll<HTMLLIElement>('.pipeline li')]
+  const storage = figure.querySelector<HTMLElement>('.storage')!
+  const server = figure.querySelector<HTMLElement>('.server')!
+  const pipeline = figure.querySelector<HTMLElement>('.pipeline')!
+  const footprint = figure.querySelector<HTMLElement>('.footprint')!
+  const measure = document.createElementNS(svgNs, 'path')
+
+  let geometry = layout()
+
+  function layout() {
+    const origin = figure.getBoundingClientRect()
+    const box = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        left: rect.left - origin.left,
+        right: rect.right - origin.left,
+        top: rect.top - origin.top,
+        middle: rect.top - origin.top + rect.height / 2,
+      }
+    }
+    const runnersRight = box(figure.querySelector('.runners')!).right + 8
+    const storageBox = box(storage)
+    const serverBox = box(server)
+    // measured in one go: positions relative to the figure stay valid while the page scrolls
+    const rows = new Map(
+      [...runnerRows, attackerRow].map((row) => [row, { x: runnersRight, y: box(row).middle } satisfies Point]),
+    )
+    return {
+      width: origin.width,
+      height: origin.height,
+      runner: (row: HTMLLIElement) => rows.get(row)!,
+      storage: { x: storageBox.left, y: storageBox.middle },
+      stages: stageRows.map((row) => box(row).middle),
+      railX: box(pipeline).left + 3.2,
+      bottom: box(footprint).top,
+      left: serverBox.left,
+      right: serverBox.right,
+    }
+  }
+
+  function toPath(start: Point, pieces: Piece[]) {
+    let from = start
+    return pieces.map(({ to, curve }) => {
+      const mid = (from.x + to.x) / 2
+      const segment = curve ? `C ${mid} ${from.y}, ${mid} ${to.y}, ${to.x} ${to.y}` : `L ${to.x} ${to.y}`
+      from = to
+      return segment
+    })
+  }
+
+  /** Entry from a row into the top of the rail, the rail itself, and the bottom line. */
+  const entry = (): Piece[] => {
+    const { left, railX, stages } = geometry
+    return [{ to: { x: left, y: stages[0]! }, curve: true }, { to: { x: railX, y: stages[0]! } }]
+  }
+
+  function drawTracks() {
+    geometry = layout()
+    const { width, height, railX, stages, bottom, left, right } = geometry
+    tracks.setAttribute('viewBox', `0 0 ${width} ${height}`)
+    const lines: { d: string; kind: string | undefined }[] = []
+    const draw = (start: Point, pieces: Piece[], kind?: string) =>
+      lines.push({ d: `M ${start.x} ${start.y} ${toPath(start, pieces).join(' ')}`, kind })
+
+    for (const row of runnerRows) {
+      const at = geometry.runner(row)
+      draw(at, entry())
+      draw({ x: left, y: bottom }, [{ to: at, curve: true }])
+    }
+    const attacker = geometry.runner(attackerRow)
+    draw(attacker, entry(), 'attack')
+    draw({ x: railX, y: stages[0]! }, [{ to: { x: railX, y: bottom } }])
+    draw({ x: left, y: bottom }, [{ to: { x: right, y: bottom } }])
+    draw({ x: right, y: bottom }, [{ to: geometry.storage, curve: true }])
+
+    tracks.replaceChildren(
+      ...lines.map(({ d, kind }) => {
+        const path = document.createElementNS(svgNs, 'path')
+        path.setAttribute('d', d)
+        if (kind) path.classList.add(kind)
+        return path
+      }),
+    )
+  }
+
+  /** Lights `element` in the packet's color for a moment. */
+  function flash(element: HTMLElement, color: string) {
+    element.style.setProperty('--kind', color)
+    element.classList.remove('hit')
+    void element.offsetWidth
+    element.classList.add('hit')
+    setTimeout(() => element.classList.remove('hit'), 650)
+  }
+
+  function send(kind: Kind, row: HTMLLIElement) {
+    // each packet carries its runner's color, so packets in flight can be told apart
+    const color = row.style.getPropertyValue('--runner')
+    const { railX, stages, bottom, left, right } = geometry
+    const start = geometry.runner(row)
+    const stage = (index: number): Piece => ({
+      to: { x: railX, y: stages[index]! },
+      at: () => flash(stageRows[index]!, color),
+    })
+
+    const pieces: Piece[] = [...entry()]
+    pieces[pieces.length - 1]!.at = () => flash(stageRows[0]!, color)
+    if (kind !== 'attack') {
+      const path = kind === 'save' ? [1, 2, 3] : [1, 2, 4]
+      pieces.push(...path.map(stage), { to: { x: railX, y: bottom } }, { to: { x: right, y: bottom } })
+      pieces.push({ to: geometry.storage, curve: true, at: () => flash(storage, color) })
+      if (kind === 'restore') {
+        pieces.push(
+          { to: { x: right, y: bottom }, curve: true },
+          { to: { x: left, y: bottom } },
+          { to: start, curve: true, at: () => flash(row, color) },
+        )
+      }
+    }
+
+    const segments = toPath(start, pieces)
+    const d = `M ${start.x} ${start.y} ${segments.join(' ')}`
+    const marks = segments.map((_, index) => {
+      measure.setAttribute('d', `M ${start.x} ${start.y} ${segments.slice(0, index + 1).join(' ')}`)
+      return measure.getTotalLength()
+    })
+    const total = marks.at(-1)!
+    const duration = (total / SPEED) * 1000
+
+    // a head dot and a fading trail, all following the same path a few ms apart
+    const dots = Array.from({ length: TRAIL + 1 }, (_, index) => {
+      const dot = document.createElement('span')
+      dot.className = index === 0 ? 'packet' : 'packet trail'
+      dot.style.setProperty('--kind', color)
+      dot.style.offsetPath = `path("${d}")`
+      figure.append(dot)
+      const opacity = 1 - index / (TRAIL + 1)
+      const animation = dot.animate(
+        [
+          { offsetDistance: '0%', opacity },
+          { offsetDistance: '100%', opacity },
+        ],
+        { duration, delay: index * 22, easing: 'linear', fill: index === 0 ? 'forwards' : 'none' },
+      )
+      animation.onfinish = () => index > 0 && dot.remove()
+      return { dot, animation }
+    })
+    flash(row, color)
+    pieces.forEach((piece, index) => piece.at && setTimeout(piece.at, (marks[index]! / total) * duration))
+
+    const head = dots[0]!
+    head.animation.onfinish = () => {
+      if (kind !== 'attack') return head.dot.remove()
+      // rejected at the token check: the packet stops and fades, a 401 shows outside the box
+      head.dot.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 700, easing: 'ease-out', fill: 'forwards' })
+      const label = document.createElement('span')
+      label.className = 'reject-label'
+      label.textContent = '401'
+      label.style.left = `${geometry.left - 40}px`
+      label.style.top = `${stages[0]! - 22}px`
+      figure.append(label)
+      label.animate([{ opacity: 0 }, { opacity: 1, offset: 0.15 }, { opacity: 1, offset: 0.7 }, { opacity: 0 }], {
+        duration: 1100,
+        fill: 'forwards',
+      })
+      setTimeout(() => (head.dot.remove(), label.remove()), 1150)
+    }
+  }
+
+  // runner lifecycle: start, run a few jobs' worth of requests, get destroyed, get replaced
+  const lifetime = new Map<HTMLLIElement, number>()
+  const rename = () => `runner-${Math.random().toString(36).slice(2, 6)}`
+  const palette = ['oklch(70% 0.2 0)', 'oklch(76% 0.13 230)', 'oklch(80% 0.17 130)', 'oklch(72% 0.17 300)', 'oklch(82% 0.14 80)', 'oklch(78% 0.12 185)']
+  let nextColor = 0
+  const paint = (row: HTMLLIElement) => row.style.setProperty('--runner', palette[nextColor++ % palette.length]!)
+  runnerRows.forEach(paint)
+  attackerRow.style.setProperty('--runner', 'var(--attack)')
+  function setState(row: HTMLLIElement, state: 'starting' | 'running' | 'destroyed') {
+    row.dataset.state = state
+    row.querySelector('.state')!.textContent =
+      state === 'running' ? 'running job' : state === 'starting' ? 'starting' : 'destroyed after 1 job'
+  }
+  function cycle(row: HTMLLIElement) {
+    setState(row, 'running')
+    lifetime.set(row, 3 + Math.floor(Math.random() * 3))
+  }
+  runnerRows.forEach((row, index) => (index === 1 ? (setState(row, 'starting'), setTimeout(() => cycle(row), 1500)) : cycle(row)))
+
+  let timer: number | undefined
+  function tick() {
+    const live = runnerRows.filter((row) => row.dataset.state === 'running' && lifetime.get(row)! > 0)
+    const roll = Math.random()
+    if (roll < 0.18 || live.length === 0) send('attack', attackerRow)
+    else {
+      const row = live[Math.floor(Math.random() * live.length)]!
+      send(roll < 0.62 ? 'restore' : 'save', row)
+      const left = lifetime.get(row)! - 1
+      lifetime.set(row, left)
+      if (left === 0) {
+        // let its last packet come home before the runner goes away
+        setTimeout(() => setState(row, 'destroyed'), 6500)
+        setTimeout(() => {
+          row.querySelector('code')!.textContent = rename()
+          paint(row)
+          setState(row, 'starting')
+        }, 8500)
+        setTimeout(() => cycle(row), 9700)
+      }
+    }
+    timer = window.setTimeout(tick, 1100 + Math.random() * 700)
+  }
+
+  const wide = matchMedia('(min-width: 64.01rem)')
+  const calm = matchMedia('(prefers-reduced-motion: reduce)')
+  function start() {
+    window.clearTimeout(timer)
+    if (!wide.matches) return
+    drawTracks()
+    if (calm.matches) return
+    tick()
+  }
+  wide.addEventListener('change', start)
+  calm.addEventListener('change', start)
+  new ResizeObserver(() => wide.matches && drawTracks()).observe(figure)
+  document.fonts.ready.then(start)
+</script>
+
+<style>
+  .flow {
+    --row: 2.9rem;
+    --green: oklch(78% 0.15 150);
+    --amber: oklch(80% 0.14 75);
+    --attack: oklch(68% 0.2 30);
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(4rem, 9rem) minmax(0, 1.2fr) minmax(4rem, 9rem) minmax(0, 1fr);
+    grid-template-rows: auto minmax(calc(var(--row) * 4), auto);
+    row-gap: 0.85rem;
+    margin: 0;
+    font-size: var(--sl-text-sm);
+  }
+
+  .label {
+    grid-row: 1;
+    margin: 0;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .server-label {
+    grid-column: 3;
+  }
+  .storage-label {
+    grid-column: 5;
+  }
+
+  ul {
+    grid-row: 2;
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  ul li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-width: 0;
+    border-bottom: 1px solid var(--sl-color-hairline);
+    color: var(--sl-color-gray-2);
+    transition:
+      color 0.3s,
+      opacity 0.4s;
+  }
+  ul li:first-child {
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+
+  .runners {
+    grid-column: 1;
+    grid-template-rows: repeat(4, 1fr);
+  }
+  .runners code {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-family: var(--sl-font-mono);
+    color: var(--sl-color-gray-1);
+  }
+  .runners code::before {
+    content: '';
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--runner, var(--green));
+    transition: background 0.3s;
+  }
+  .state {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+    white-space: nowrap;
+  }
+  [data-state='starting'] code::before {
+    background: var(--amber);
+  }
+  [data-state='destroyed'] {
+    opacity: 0.4;
+  }
+  [data-state='destroyed'] :is(code, .state) {
+    text-decoration: line-through;
+  }
+  [data-state='destroyed'] code::before {
+    background: var(--sl-color-gray-5);
+  }
+  .attacker code {
+    color: var(--attack);
+  }
+  .attacker code::before {
+    background: var(--attack);
+  }
+
+  .storage {
+    grid-column: 5;
+    grid-row: 2;
+    align-self: center;
+    padding: 0.35rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    transition: border-color 0.4s;
+  }
+  .storage ul {
+    display: grid;
+  }
+  .storage li {
+    padding: 0.55rem 0;
+  }
+  .storage li:first-child {
+    border-top: 0;
+  }
+  .storage li:last-child {
+    border-bottom: 0;
+  }
+  .storage:global(.hit) {
+    border-color: var(--kind);
+  }
+
+  .server {
+    grid-column: 3;
+    grid-row: 2;
+    align-self: center;
+    display: grid;
+    gap: 1rem;
+    padding: 1.15rem 1.25rem;
+    border: 1px solid color-mix(in oklch, var(--sl-color-accent) 50%, transparent);
+    border-radius: 0.6rem;
+    background: color-mix(in oklch, var(--sl-color-black) 80%, var(--sl-color-accent) 5%);
+    box-shadow: 0 20px 60px -20px color-mix(in oklch, var(--sl-color-accent) 40%, transparent);
+  }
+  .server-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+  .server-head code {
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-accent-high);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .beacon {
+    flex-shrink: 0;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--green);
+  }
+
+  .pipeline {
+    display: grid;
+    margin: 0;
+    padding: 0 0 0 1.1rem;
+    list-style: none;
+  }
+  .pipeline li {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--sl-color-hairline);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-2);
+  }
+  .pipeline li:last-child {
+    border-bottom: 0;
+  }
+  .pipeline li::before {
+    content: '';
+    position: absolute;
+    left: -1.1rem;
+    top: 50%;
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    translate: 0 -50%;
+    background: var(--sl-color-gray-5);
+    transition:
+      background 0.4s,
+      box-shadow 0.4s;
+  }
+  .pipeline b {
+    font-family: var(--sl-font-mono);
+    font-weight: 400;
+    color: var(--sl-color-white);
+    white-space: nowrap;
+  }
+  .footprint {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    margin: 0;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+
+  /* tracks and packets, placed by the script */
+  .tracks {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .tracks :global(path) {
+    fill: none;
+    stroke: var(--sl-color-gray-5);
+    stroke-width: 1;
+  }
+  .tracks :global(path.attack) {
+    stroke: color-mix(in oklch, var(--attack) 45%, transparent);
+    stroke-dasharray: 3 4;
+  }
+
+  .flow :global(.packet) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    offset-rotate: 0deg;
+    background: var(--kind);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .flow :global(.packet.trail) {
+    width: 0.3rem;
+    height: 0.3rem;
+  }
+  .flow :global(.reject-label) {
+    position: absolute;
+    z-index: 2;
+    padding: 0 0.3rem;
+    border-radius: 0.2rem;
+    background: var(--attack);
+    font-family: var(--sl-font-mono);
+    font-size: 0.65rem;
+    line-height: 1.4;
+    color: oklch(99% 0 0);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* what a packet lights up as it passes */
+  .pipeline :global(li.hit)::before {
+    background: var(--kind);
+  }
+  .pipeline :global(li.hit) b {
+    color: var(--kind);
+  }
+  ul :global(li.hit) {
+    color: var(--kind) !important;
+  }
+
+  @media (max-width: 64rem) {
+    .flow {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
+      row-gap: 0.75rem;
+    }
+    .flow > * {
+      grid-column: 1 !important;
+      grid-row: auto !important;
+    }
+    .runners {
+      grid-template-rows: repeat(4, var(--row));
+    }
+    .tracks,
+    .flow :global(.packet),
+    .flow :global(.reject-label) {
+      display: none;
+    }
+    /* reading order on one column: runners, server, storage */
+    .label:nth-of-type(1),
+    .runners {
+      order: 1;
+    }
+    .server-label,
+    .server {
+      order: 2;
+    }
+    .storage-label,
+    .storage {
+      order: 3;
+    }
+    .server-label,
+    .storage-label {
+      margin-top: 1.75rem;
+    }
+  }
+</style>

@@ -1,5 +1,6 @@
 //! Storage backends behind one interface.
 
+use std::collections::HashMap;
 use std::io;
 
 use axum::body::Bytes;
@@ -215,8 +216,8 @@ impl Adapter {
         }
     }
 
-    /// Sizes of the objects under a folder.
-    pub(crate) async fn list_folder(&self, folder: &str) -> Result<Vec<u64>> {
+    /// Sizes of the objects under a folder, by name relative to it.
+    pub(crate) async fn list_folder(&self, folder: &str) -> Result<HashMap<String, u64>> {
         match self {
             Self::Filesystem(adapter) => adapter.list_folder(folder).await,
             Self::Object(adapter) => adapter.list_folder(folder).await,

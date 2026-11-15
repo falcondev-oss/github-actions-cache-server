@@ -1,0 +1,10 @@
+---
+import Default from '@astrojs/starlight/components/Head.astro'
+
+const { id } = Astro.locals.starlightRoute
+const markdown = new URL(id === '' ? '/llms.txt' : `/${id}.md`, Astro.site)
+---
+
+<Default />
+<link rel="alternate" type="text/markdown" href={markdown} title="Markdown" />
+<link rel="help" type="text/plain" href={new URL('/llms.txt', Astro.site)} title="llms.txt" />

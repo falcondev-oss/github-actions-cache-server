@@ -52,3 +52,28 @@ fn parses_single_ranges() {
     assert_eq!(range("bytes=9-5"), None, "inverted");
     assert_eq!(range("items=0-5"), None, "unknown unit");
 }
+
+#[test]
+fn x_ms_range_wins_over_range() {
+    let from = |pairs: &[(&'static str, &'static str)]| {
+        let mut headers = HeaderMap::new();
+        for &(name, value) in pairs {
+            headers.insert(name, HeaderValue::from_static(value));
+        }
+        parse_range(&headers)
+    };
+    let from_100 = Some(RangeRequest {
+        start: StartPosition::Index(100),
+        end: EndPosition::LastByte,
+    });
+    assert_eq!(
+        from(&[("x-ms-range", "bytes=100-")]),
+        from_100,
+        "x-ms-range alone, as the Azure SDK sends it"
+    );
+    assert_eq!(
+        from(&[("x-ms-range", "bytes=100-"), ("range", "bytes=0-9")]),
+        from_100,
+        "x-ms-range wins, like Azure Get Blob"
+    );
+}
