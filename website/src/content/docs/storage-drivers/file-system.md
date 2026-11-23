@@ -17,10 +17,6 @@ The path to the filesystem storage location. The folder will be created if it do
 
 The cache server process needs read and write access to this path (and permission to create it). No other permissions are required for this driver.
 
-## Slow disks
-
-The server syncs each uploaded part to disk before it confirms the part. Uploads therefore run at the speed of the disk, and unwritten data can't pile up in memory and stall the SQLite database behind it.
-
 ## Eager merge
 
 The filesystem driver has no direct downloads, so [`EAGER_MERGE`](/configuration#eager_merge) gains little here. It copies the parts into the merged file at upload time and doubles disk use per entry until the parts cleanup job runs. Leave it off unless you want the first restore to read a single file.

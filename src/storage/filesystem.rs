@@ -152,10 +152,6 @@ impl FilesystemAdapter {
                 file.write_all(&chunk).await?;
             }
             file.flush().await?;
-            // Paces uploads to the disk. Without it, parts pile up in the page cache faster
-            // than a slow disk writes them back, and every SQLite commit waits behind that
-            // backlog until database requests time out.
-            file.sync_data().await?;
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).await?;
             }

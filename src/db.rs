@@ -5,6 +5,7 @@ mod migrations;
 
 use std::future::Future;
 use std::str::FromStr as _;
+use std::time::Duration;
 
 use sea_orm::sea_query::{Alias, Expr, ExprTrait as _, Func, LikeExpr};
 use sea_orm::{
@@ -73,6 +74,8 @@ impl Dialect {
 /// SQLite read connections; WAL readers don't block each other or the writer.
 const READ_CONNECTIONS: u32 = 8;
 const SERVER_CONNECTIONS: u32 = 10;
+/// Longer than clients wait for a response; sqlx adds it to `Instant::now()`, so it must be finite.
+const SQLITE_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(600);
 const IN_MEMORY: &str = ":memory:";
 
 /// Connection pools plus the dialect their queries are rendered for.
@@ -124,7 +127,14 @@ impl Db {
                 // SQLite allows one writer; a single connection serializes access the way the
                 // database expects instead of surfacing `SQLITE_BUSY` under load. A local file
                 // can't go stale, and pinging it on every checkout doubles the queue on it.
-                let pool_options = || SqlitePoolOptions::new().test_before_acquire(false);
+                // On a disk slower than the uploads, every commit waits behind the page cache's
+                // writeback backlog, and the queue for the writer grows past sqlx's 30 s default.
+                // A request then waits for its turn instead of failing.
+                let pool_options = || {
+                    SqlitePoolOptions::new()
+                        .test_before_acquire(false)
+                        .acquire_timeout(SQLITE_ACQUIRE_TIMEOUT)
+                };
                 if path.as_os_str() == IN_MEMORY {
                     // An in-memory database lives in its one connection, so it has no readers
                     // and is gone once that connection closes.
