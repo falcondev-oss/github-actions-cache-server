@@ -660,10 +660,12 @@ impl Storage {
     /// on the unique reservation hash.
     pub(crate) async fn create_upload(&self, identity: &EntryIdentity) -> Result<CreatedUpload> {
         let id = random_upload_id();
+        // A folder of its own: the id's ten digits are too few to never repeat a live folder.
+        let folder_name = uuid::Uuid::new_v4().to_string();
         let capability = random_capability()?;
         let inserted = uploads::Entity::insert(uploads::ActiveModel {
             id: Set(id),
-            folder_name: Set(id.to_string()),
+            folder_name: Set(folder_name.clone()),
             created_at: Set(now_ms()),
             key: Set(identity.key.clone()),
             version: Set(identity.version.clone()),
@@ -677,10 +679,7 @@ impl Storage {
         .await;
         match inserted {
             Ok(_) => Ok(CreatedUpload::Created {
-                upload: AuthorizedUpload {
-                    id,
-                    folder_name: id.to_string(),
-                },
+                upload: AuthorizedUpload { id, folder_name },
                 capability,
             }),
             Err(error) if is_unique_violation(&error) => Ok(CreatedUpload::AlreadyExists),
@@ -1164,8 +1163,7 @@ impl Storage {
     }
 }
 
-/// A random id of at most ten decimal digits, like the original server's upload ids; the folder
-/// of the upload's Parts is named after it.
+/// A random id of at most ten decimal digits, like the original server's upload ids.
 fn random_upload_id() -> i64 {
     let (random, _) = uuid::Uuid::new_v4().as_u64_pair();
     random.cast_signed().rem_euclid(10_000_000_000)

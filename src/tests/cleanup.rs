@@ -9,9 +9,9 @@ use super::harness::{
     merged_location, put, read_all, save_parts, storage_driver, unmerged_location,
 };
 use crate::cleanup::{CleanupSummary, Task, reconcile_orphaned_storage};
-use crate::db::{StorageLocation, now_ms};
+use crate::db::{StorageLocation, now_ms, uploads};
 use crate::error::{Failure, Result};
-use crate::storage::{AuthorizedUpload, CreatedUpload};
+use crate::storage::{AuthorizedUpload, CreatedUpload, EndPosition, RangeRequest, StartPosition};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -216,8 +216,19 @@ async fn part_cleanup_waits_for_an_active_parts_download() {
     )
     .await;
     let storage = server.storage();
+    // Ranged, and opened before the Merge can finish, so it reads the Parts on every backend.
+    let reading_parts = storage
+        .download(
+            &location.id,
+            Some(RangeRequest {
+                start: StartPosition::Index(0),
+                end: EndPosition::LastByte,
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     let merging = storage.download(&location.id, None).await.unwrap().unwrap();
-    let reading_parts = storage.download(&location.id, None).await.unwrap().unwrap();
     read_all(merging.stream).await.unwrap();
     storage.wait_for_ongoing_merges().await;
 
@@ -313,6 +324,16 @@ async fn location_cleanup_waits_for_an_active_merged_download() {
     );
 }
 
+/// The folder an upload stores its Parts in.
+async fn upload_folder(server: &TestServer, id: i64) -> String {
+    uploads::Entity::find_by_id(id)
+        .one(&server.db().pool)
+        .await
+        .unwrap()
+        .unwrap()
+        .folder_name
+}
+
 #[tokio::test]
 async fn failed_finalization_removes_the_upload_folder() {
     let server = TestServer::start().await;
@@ -327,7 +348,8 @@ async fn failed_finalization_removes_the_upload_folder() {
     else {
         panic!("fresh key");
     };
-    put(server.adapter(), &format!("{id}/untracked"), b"partial").await;
+    let folder = upload_folder(&server, id).await;
+    put(server.adapter(), &format!("{folder}/untracked"), b"partial").await;
 
     let error = server
         .storage()
@@ -341,7 +363,7 @@ async fn failed_finalization_removes_the_upload_folder() {
     assert!(
         server
             .adapter()
-            .list_folder(&id.to_string())
+            .list_folder(&folder)
             .await
             .unwrap()
             .is_empty(),
@@ -363,7 +385,13 @@ async fn orphan_reconciliation_deletes_only_unauthorized_expired_folders() {
     else {
         panic!("fresh key");
     };
-    put(server.adapter(), &format!("{id}/parts/0"), b"authorized").await;
+    let folder = upload_folder(&server, id).await;
+    put(
+        server.adapter(),
+        &format!("{folder}/parts/0"),
+        b"authorized",
+    )
+    .await;
     put(server.adapter(), "orphaned/parts/0", b"orphaned").await;
     put(server.adapter(), "orphaned/parts/1", b"!").await;
 
@@ -377,7 +405,7 @@ async fn orphan_reconciliation_deletes_only_unauthorized_expired_folders() {
         "reclaimed what was deleted"
     );
     assert_eq!(
-        part_count(&server, &id.to_string()).await,
+        part_count(&server, &folder).await,
         1,
         "authorized by its upload"
     );
