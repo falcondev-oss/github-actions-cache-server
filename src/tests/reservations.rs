@@ -6,8 +6,8 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::EntityTrait as _;
 
 use super::harness::{
-    SCOPE, TestServer, byte_stream, entry, identity, insert_entry, insert_location, query,
-    save_parts, unmerged_location,
+    SCOPE, TestServer, byte_stream, entry, identity, insert_entry, insert_location, put, query,
+    read_all, save_parts, unmerged_location,
 };
 use crate::db::{CacheEntry, uploads};
 use crate::storage::{CreatedUpload, MatchType, Storage};
@@ -47,6 +47,42 @@ async fn concurrent_reservations_create_exactly_one_upload() {
         (1, 9),
         "one reservation wins, the rest already exist"
     );
+}
+
+/// A live entry whose folder is named like a new upload's id, as entries were before uploads got
+/// folders of their own, keeps serving its own bytes after that upload completes.
+#[tokio::test]
+async fn an_upload_never_writes_into_a_live_folder_named_after_its_id() {
+    let server = TestServer::start().await;
+    let storage = server.storage();
+    let key = uuid::Uuid::new_v4().to_string();
+    let CreatedUpload::Created { upload, .. } =
+        storage.create_upload(&identity(&key)).await.unwrap()
+    else {
+        panic!("fresh key");
+    };
+    let live = unmerged_location(&upload.id.to_string());
+    put(
+        server.adapter(),
+        &format!("{}/parts/0", live.folder_name),
+        b"live entry",
+    )
+    .await;
+    insert_location(server.db(), &live).await;
+    insert_entry(server.db(), &entry("live", &live.id, 1)).await;
+
+    storage
+        .upload_part(&upload, 0, byte_stream(&b"new upload"[..]), Some(10))
+        .await
+        .unwrap();
+    storage
+        .complete_upload(&identity(&key))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let download = storage.download(&live.id, None).await.unwrap().unwrap();
+    assert_eq!(read_all(download.stream).await.unwrap(), b"live entry");
 }
 
 #[tokio::test]
